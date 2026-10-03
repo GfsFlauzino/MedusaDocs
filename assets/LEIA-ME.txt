@@ -1,0 +1,2 @@
+Coloque aqui o logo oficial como logo.svg (ou ajuste o <img> no index.html).
+Sem o arquivo, o cabeçalho mostra só o nome da ferramenta.

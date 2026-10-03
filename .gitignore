@@ -1,0 +1,11 @@
+# dados da instalação (ficam em MEDUSA_HOME; no Docker, no volume /data)
+data/
+playbooks/
+templates/
+.backups/
+mappings.json
+teams.json
+__pycache__/
+*.pyc
+.DS_Store
+.env

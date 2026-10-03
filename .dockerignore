@@ -1,0 +1,17 @@
+# dados e artefatos locais não entram na imagem
+data/
+playbooks/
+templates/
+.backups/
+mappings.json
+teams.json
+__pycache__/
+*.pyc
+.DS_Store
+.git/
+.gitignore
+Dockerfile
+docker-compose.yml
+*.md
+.env
+.env.example

@@ -1,0 +1,31 @@
+# Medusa Docs — subir com:  docker compose up -d --build
+# Guia completo: INSTALACAO-DOCKER.md. Ajustes ficam no arquivo .env (modelo em .env.example).
+services:
+  medusa:
+    build: .
+    image: medusa-docs:latest
+    container_name: medusa-docs
+    restart: unless-stopped
+    ports:
+      # padrão: só na própria máquina. Para a rede, publique atrás de um proxy HTTPS (ver o guia).
+      - "${MEDUSA_BIND:-127.0.0.1}:${MEDUSA_PUBLISH_PORT:-8765}:8765"
+    environment:
+      # administrador criado na primeira subida (só se ainda não houver nenhum).
+      # Sem senha definida, uma temporária aparece uma única vez em: docker compose logs medusa
+      MEDUSA_ADMIN_LOGIN: ${MEDUSA_ADMIN_LOGIN:-admin}
+      MEDUSA_ADMIN_NAME: ${MEDUSA_ADMIN_NAME:-Administrador}
+      MEDUSA_ADMIN_PASSWORD: ${MEDUSA_ADMIN_PASSWORD:-}
+      # "1" quando o acesso for por HTTPS (proxy reverso)
+      MEDUSA_SECURE_COOKIES: ${MEDUSA_SECURE_COOKIES:-0}
+    volumes:
+      - medusa-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  medusa-data:

@@ -1,0 +1,24 @@
+{
+  "framework": "MITRE ATT&CK Enterprise",
+  "version": "19.2",
+  "source": "https://attack.mitre.org/tactics/enterprise/",
+  "retrieved": "2026-10-03",
+  "note": "Na v19 a TA0005 passou a se chamar Stealth (antes Defense Evasion) e foi criada a TA0112 Defense Impairment.",
+  "tactics": [
+    {"id": "TA0043", "name": "Reconnaissance", "pt": "Reconhecimento", "description": "The adversary is trying to gather information they can use to plan future operations."},
+    {"id": "TA0042", "name": "Resource Development", "pt": "Desenvolvimento de recursos", "description": "The adversary is trying to establish resources they can use to support operations."},
+    {"id": "TA0001", "name": "Initial Access", "pt": "Acesso inicial", "description": "The adversary is trying to get into your network."},
+    {"id": "TA0002", "name": "Execution", "pt": "Execução", "description": "The adversary is trying to run malicious code."},
+    {"id": "TA0003", "name": "Persistence", "pt": "Persistência", "description": "The adversary is trying to maintain their foothold."},
+    {"id": "TA0004", "name": "Privilege Escalation", "pt": "Escalonamento de privilégios", "description": "The adversary is trying to gain higher-level permissions."},
+    {"id": "TA0005", "name": "Stealth", "pt": "Ocultação", "description": "The adversary is trying to hide and conceal their actions, appearing as normal behavior.", "aliases": ["Defense Evasion"]},
+    {"id": "TA0112", "name": "Defense Impairment", "pt": "Comprometimento das defesas", "description": "The adversary is trying to break security mechanisms, pipelines, and tooling so defenders can't see or trust what's happening."},
+    {"id": "TA0006", "name": "Credential Access", "pt": "Acesso a credenciais", "description": "The adversary is trying to steal account names and passwords."},
+    {"id": "TA0007", "name": "Discovery", "pt": "Descoberta", "description": "The adversary is trying to figure out your environment."},
+    {"id": "TA0008", "name": "Lateral Movement", "pt": "Movimentação lateral", "description": "The adversary is trying to move through your environment."},
+    {"id": "TA0009", "name": "Collection", "pt": "Coleta", "description": "The adversary is trying to gather data of interest to their goal."},
+    {"id": "TA0011", "name": "Command and Control", "pt": "Comando e controle", "description": "The adversary is trying to communicate with compromised systems to control them."},
+    {"id": "TA0010", "name": "Exfiltration", "pt": "Exfiltração", "description": "The adversary is trying to steal data."},
+    {"id": "TA0040", "name": "Impact", "pt": "Impacto", "description": "The adversary is trying to manipulate, interrupt, or destroy your systems and data."}
+  ]
+}
