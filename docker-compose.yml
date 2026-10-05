@@ -17,6 +17,8 @@ services:
       MEDUSA_ADMIN_PASSWORD: ${MEDUSA_ADMIN_PASSWORD:-}
       # "1" quando o acesso for por HTTPS (proxy reverso)
       MEDUSA_SECURE_COOKIES: ${MEDUSA_SECURE_COOKIES:-0}
+      # "1" atrás de proxy reverso: registra o IP real do usuário (X-Forwarded-For)
+      MEDUSA_TRUST_PROXY: ${MEDUSA_TRUST_PROXY:-0}
     volumes:
       - medusa-data:/data
     read_only: true

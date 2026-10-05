@@ -18,7 +18,7 @@ const Editor = (() => {
     return { signal: ac.signal };
   }
   const normTxt = s => (s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
-  const GOV_ROWS = ["status", "aprovador", "ultimo revisor", "data de revisao"];
+  const GOV_ROWS = ["status", "aprovador", "ultimo revisor", "data de revisao", "versao"];
   const prodBanner = pb => pb.gov.status === "Produção"
     ? `<div class="notice prod">Este playbook está em <b>Produção</b>: ao salvar, as alterações ficam visíveis na hora para todos os perfis. Para uma revisão maior, volte-o antes para Homologação.</div>` : "";
 
@@ -110,7 +110,7 @@ const Editor = (() => {
         body = `<div class="ed-tw"><table class="ed-table"><thead>
           <tr class="colctl">${b.head.map((_, c) => `<th><button data-act="col-del" data-c="${c}" title="Remover coluna" ${nc < 2 ? "disabled" : ""}>✕</button></th>`).join("")}<th></th></tr>
           <tr>${b.head.map((h, c) => `<th><textarea class="ta th" data-f="head" data-c="${c}" rows="1">${esc(h)}</textarea></th>`).join("")}<th class="addcol"><button data-act="col-add" title="Adicionar coluna">＋</button></th></tr></thead>
-          <tbody>${b.rows.map((r, ri) => `<tr class="${locked(ri) ? "locked" : ""}">${b.head.map((_, c) => `<td><textarea class="ta" data-f="cell" data-r="${ri}" data-c="${c}" rows="1" ${locked(ri) ? `readonly title="Controlado pelo ciclo de vida: muda com “Alterar status” e ao salvar"` : ""}>${esc(r[c] ?? "")}</textarea></td>`).join("")}
+          <tbody>${b.rows.map((r, ri) => `<tr class="${locked(ri) ? "locked" : ""}">${b.head.map((_, c) => `<td><textarea class="ta" data-f="cell" data-r="${ri}" data-c="${c}" rows="1" ${locked(ri) ? `readonly title="Controlado pelo ciclo de vida: muda com “Alterar status” e ao salvar (a versão é automática)"` : ""}>${esc(r[c] ?? "")}</textarea></td>`).join("")}
             <td class="rowctl">${mitreRow(ri) ? `<button data-act="mitre" data-r="${ri}" title="Escolher táticas do MITRE ATT&CK">🎯</button>` : ""}${locked(ri) ? `<span class="lock" title="Campo controlado pelo ciclo de vida">🔒</span>` : `<button data-act="row-up" data-r="${ri}" title="Subir linha" ${ri === 0 ? "disabled" : ""}>↑</button><button data-act="row-del" data-r="${ri}" title="Remover linha" class="x">✕</button>`}</td></tr>`).join("")}</tbody></table></div>
           <div class="row-btns"><button class="btn ghost xs" data-act="row-add">＋ Linha</button></div>`;
       }

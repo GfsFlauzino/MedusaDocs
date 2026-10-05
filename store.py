@@ -1,4 +1,5 @@
-"""Banco de dados da ferramenta (SQLite, embutido no Python): usuários, sessões, tentativas de login e auditoria.
+"""Banco de dados da ferramenta (SQLite, embutido no Python): usuários, sessões, tentativas de login, auditoria,
+configurações, estados do login SSO e versões dos playbooks.
 
 Arquivo único: data/playbooks.db. Cada operação abre a própria conexão (seguro com o servidor multithread);
 operações que precisam de várias leituras e escritas usam transação BEGIN IMMEDIATE.
@@ -59,6 +60,34 @@ MIGRATIONS = [
         updated_at   TEXT NOT NULL,
         updated_by   TEXT
     );
+    """,
+    # v3: SSO (OpenID Connect) e histórico de versões dos playbooks
+    """
+    ALTER TABLE users ADD COLUMN auth TEXT NOT NULL DEFAULT 'local';      -- 'local' (senha) ou 'sso'
+    ALTER TABLE users ADD COLUMN sso_subject TEXT;                        -- emissor|sub do provedor
+    CREATE UNIQUE INDEX users_sso_subject ON users(sso_subject) WHERE sso_subject IS NOT NULL;
+    CREATE TABLE sso_states (
+        state        TEXT PRIMARY KEY,
+        nonce        TEXT NOT NULL,
+        verifier     TEXT NOT NULL,
+        created      REAL NOT NULL
+    );
+    CREATE TABLE pb_versions (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        pid          TEXT NOT NULL,
+        version      TEXT NOT NULL,
+        status       TEXT NOT NULL,
+        created_at   TEXT NOT NULL,
+        author       TEXT NOT NULL,
+        author_name  TEXT NOT NULL,
+        kind         TEXT NOT NULL,                   -- base, criacao, importacao, documento, fluxograma, ramo, status, restauracao
+        note         TEXT NOT NULL DEFAULT '',
+        md           TEXT NOT NULL,
+        drawio       TEXT NOT NULL DEFAULT '',
+        refs         TEXT NOT NULL DEFAULT '{}',
+        template     TEXT
+    );
+    CREATE INDEX pb_versions_pid ON pb_versions(pid, id);
     """,
 ]
 
@@ -147,13 +176,14 @@ class Store:
         if c: return c.execute(q).fetchone()[0]
         with self._db() as c2: return c2.execute(q).fetchone()[0]
 
-    def create_user(self, login, name, role, pw_hash, must_change=True):
+    def create_user(self, login, name, role, pw_hash, must_change=True, auth="local", sso_subject=None):
         if role not in ROLES: raise StoreError("perfil inválido")
         ts = now_iso()
         try:
             with self._tx() as c:
-                c.execute("INSERT INTO users (login, name, role, hash, active, must_change, created_at, updated_at) VALUES (?,?,?,?,1,?,?,?)",
-                          (login, name, role, pw_hash, int(must_change), ts, ts))
+                c.execute("""INSERT INTO users (login, name, role, hash, active, must_change, created_at, updated_at, auth, sso_subject)
+                             VALUES (?,?,?,?,1,?,?,?,?,?)""",
+                          (login, name, role, pw_hash, int(must_change), ts, ts, auth, sso_subject))
         except sqlite3.IntegrityError:
             raise StoreError("Já existe um usuário com esse login")
         return self.get_user(login)
@@ -167,20 +197,43 @@ class Store:
                          active=1, must_change=0, updated_at=excluded.updated_at""", (login, name, role, pw_hash, ts, ts))
         return self.get_user(login)
 
-    def update_user(self, login, name=None, role=None, active=None):
+    def update_user(self, login, name=None, role=None, active=None, auth=None):
         with self._tx() as c:
             if not c.execute("SELECT 1 FROM users WHERE login = ?", (login,)).fetchone():
                 raise StoreError("usuário não encontrado")
             if role is not None and role not in ROLES: raise StoreError("perfil inválido")
+            if auth is not None and auth not in ("local", "sso"): raise StoreError("tipo de autenticação inválido")
             sets, args = ["updated_at = ?"], [now_iso()]
-            for col, val in (("name", name), ("role", role), ("active", None if active is None else int(bool(active)))):
+            for col, val in (("name", name), ("role", role), ("active", None if active is None else int(bool(active))), ("auth", auth)):
                 if val is not None: sets.append(f"{col} = ?"); args.append(val)
             c.execute(f"UPDATE users SET {', '.join(sets)} WHERE login = ?", (*args, login))
             if self.count_active_admins(c) < 1:
                 raise StoreError("É preciso manter pelo menos um administrador ativo")   # rollback automático
-            if active is False:
+            if active is False or auth is not None:
                 c.execute("DELETE FROM sessions WHERE login = ?", (login,))
+            if auth == "local":
+                c.execute("UPDATE users SET sso_subject = NULL WHERE login = ?", (login,))
         return self.get_user(login)
+
+    def user_by_subject(self, subject):
+        with self._db() as c:
+            return self._user(c.execute("SELECT * FROM users WHERE sso_subject = ?", (subject,)).fetchone())
+
+    def bind_subject(self, login, subject, name=None):
+        with self._db() as c:
+            c.execute("UPDATE users SET sso_subject = ?, name = COALESCE(?, name), updated_at = ? WHERE login = ?", (subject, name, now_iso(), login))
+
+    # ── SSO: estado do fluxo de login (state, nonce, PKCE), válido por 10 minutos
+    def put_sso_state(self, state, nonce, verifier):
+        with self._db() as c:
+            c.execute("DELETE FROM sso_states WHERE created < ?", (time.time() - 600,))
+            c.execute("INSERT INTO sso_states VALUES (?,?,?,?)", (state, nonce, verifier, time.time()))
+
+    def pop_sso_state(self, state):
+        with self._tx() as c:
+            r = c.execute("SELECT * FROM sso_states WHERE state = ? AND created >= ?", (state, time.time() - 600)).fetchone()
+            c.execute("DELETE FROM sso_states WHERE state = ?", (state,))
+            return dict(r) if r else None
 
     def delete_user(self, login):
         with self._tx() as c:
@@ -254,6 +307,52 @@ class Store:
         with self._db() as c:
             c.execute("INSERT INTO audit (ts, user, action, target, detail) VALUES (?,?,?,?,?)",
                       (now_iso(), user, action, target or "", json.dumps(detail, ensure_ascii=False)))
+
+    def purge(self, audit_days):
+        """Retenção: apaga auditoria mais antiga que audit_days, estados de SSO vencidos e bloqueios expirados."""
+        cutoff = datetime.fromtimestamp(time.time() - audit_days * 86400).isoformat(timespec="seconds")
+        with self._db() as c:
+            n = c.execute("DELETE FROM audit WHERE ts < ?", (cutoff,)).rowcount
+            c.execute("DELETE FROM sso_states WHERE created < ?", (time.time() - 600,))
+            c.execute("DELETE FROM login_attempts WHERE locked_until < ? AND fails = 0", (time.time(),))
+            c.execute("DELETE FROM sessions WHERE seen_at < ?", (time.time() - self.ttl,))
+        return n
+
+    def audit_since(self, days):
+        cutoff = datetime.fromtimestamp(time.time() - days * 86400).isoformat(timespec="seconds")
+        with self._db() as c:
+            for r in c.execute("SELECT * FROM audit WHERE ts >= ? ORDER BY id", (cutoff,)):
+                d = dict(r); d["detail"] = json.loads(d["detail"] or "{}")
+                yield d
+
+    # ── versões dos playbooks
+    def add_version(self, pid, version, status, author, author_name, kind, note, md, drawio, refs, template=None):
+        with self._db() as c:
+            return c.execute("""INSERT INTO pb_versions (pid, version, status, created_at, author, author_name, kind, note, md, drawio, refs, template)
+                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                             (pid, version, status, now_iso(), author, author_name, kind, note[:500], md, drawio,
+                              json.dumps(refs, ensure_ascii=False), template)).lastrowid
+
+    def list_versions(self, pid):
+        with self._db() as c:
+            return [dict(r) for r in c.execute("""SELECT id, pid, version, status, created_at, author, author_name, kind, note, template
+                                                  FROM pb_versions WHERE pid = ? ORDER BY id DESC""", (pid,))]
+
+    def get_version(self, pid, vid):
+        with self._db() as c:
+            r = c.execute("SELECT * FROM pb_versions WHERE pid = ? AND id = ?", (pid, vid)).fetchone()
+            if not r: return None
+            d = dict(r); d["refs"] = json.loads(d["refs"] or "{}")
+            return d
+
+    def count_versions(self, pid):
+        with self._db() as c:
+            return c.execute("SELECT COUNT(*) FROM pb_versions WHERE pid = ?", (pid,)).fetchone()[0]
+
+    def archive_versions(self, pid, suffix):
+        """Playbook excluído ou substituído: o histórico fica guardado sob outro identificador (PB-02#lixeira…)."""
+        with self._db() as c:
+            c.execute("UPDATE pb_versions SET pid = ? WHERE pid = ?", (f"{pid}#{suffix}", pid))
 
     def read_audit(self, limit=500, q=""):
         sql, args = "SELECT * FROM audit", []

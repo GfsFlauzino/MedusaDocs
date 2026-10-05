@@ -455,8 +455,10 @@ body.viewer-role .tabs a.edit{display:none}
 .brand-mark{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;flex:none;overflow:hidden}
 .brand-mark.default{background:rgba(255,255,255,.18)}
 .brand-mark.default::before{content:"";width:14px;height:14px;border-radius:50%;border:3px solid var(--on-brand);box-shadow:0 0 0 3px rgba(255,255,255,.25)}
-.brand-mark img{max-width:100%;max-height:100%;object-fit:contain}
-.brand-mark.has-logo{background:#fff;padding:3px;width:auto;min-width:30px;max-width:120px}
+/* logo: a altura do espaço é fixa e a largura acompanha a proporção da imagem, até o limite do espaço.
+   (max-width/max-height em % dentro de uma caixa de largura automática não têm referência e não encolhem a imagem) */
+.brand-mark.has-logo{background:#fff;padding:3px;width:auto;min-width:30px;max-width:132px;display:flex;align-items:center;justify-content:center}
+.brand-mark.has-logo img{display:block;height:24px;width:auto;max-width:126px;object-fit:contain}
 .search{margin-left:auto}
 .theme-tgl{position:relative;width:52px;height:28px;border-radius:999px;border:0;background:rgba(0,0,0,.22);color:var(--on-brand);padding:0;flex:none}
 .theme-tgl span{position:absolute;top:50%;transform:translateY(-50%);font-size:13px;opacity:.75}
@@ -524,7 +526,7 @@ body.auth .top .search,body.auth .top #usermenu{visibility:hidden}
 .logo-drop:hover,.logo-drop.over{border-color:var(--brand);color:var(--brand-ink)}
 .logo-cur{display:flex;align-items:center;gap:12px;margin-bottom:10px}
 .logo-cur .lg{width:64px;height:64px;border-radius:12px;background:#fff;border:1px solid var(--line);display:grid;place-items:center;padding:6px}
-.logo-cur img{max-width:100%;max-height:100%}
+.logo-cur img{display:block;width:100%;height:100%;object-fit:contain}
 .contrast{font-size:12px;margin-top:6px}
 .contrast.bad{color:var(--warn)}
 .teams-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
@@ -606,3 +608,49 @@ body.auth .top .docs-btn{visibility:hidden}
 .docs-page{min-width:0}
 .docs-page code{overflow-wrap:anywhere}
 .docs-page table{display:block;overflow-x:auto}
+
+/* ── v2.0: SSO, logs, versões ── */
+.sso-btn{margin:6px 0 2px;text-decoration:none;justify-content:center}
+.login-or{display:flex;align-items:center;gap:10px;margin:14px 0 6px;color:var(--muted);font-size:12px}
+.login-or::before,.login-or::after{content:"";flex:1;height:1px;background:var(--line)}
+.auth-sel{margin-top:4px;padding:2px 6px;font-size:12px;width:auto}
+.inline-in{display:flex;gap:8px;align-items:center}.inline-in .in{flex:1}
+.logs-grid{grid-template-columns:minmax(280px,1fr) minmax(320px,1.4fr)}
+fieldset.fwd{border:1px solid var(--line);border-radius:12px;padding:10px 14px 12px;margin:0 0 12px}
+fieldset.fwd legend{padding:0 6px}
+.fwd-st{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--muted);margin-top:8px}
+.fwd-st .bad{color:var(--danger,#C0272D)}
+.json-sample{background:var(--surface2);border:1px solid var(--line);border-radius:8px;padding:10px;font-size:11.5px;max-height:260px;overflow:auto}
+.chk-inline{display:flex;align-items:center;gap:6px;font-weight:500;font-size:13px}
+.notice.ok{border-left-color:#2E7D32}
+@media (max-width:900px){.logs-grid{grid-template-columns:1fr}}
+.vpill{display:inline-block;font:700 12.5px/1 var(--font);padding:4px 9px;border-radius:99px;background:var(--brand-soft);color:var(--brand-ink);font-variant-numeric:tabular-nums}
+.ver-head{margin-bottom:14px}.ver-head p{margin:6px 0 0}
+.vtimeline{position:relative;margin-left:8px;border-left:2px solid var(--line);padding-left:4px}
+.vitem{position:relative;display:flex;gap:12px;align-items:center;padding:10px 12px 10px 18px;border-radius:12px}
+.vitem:hover{background:var(--surface)}
+.vdot{position:absolute;left:-11px;top:50%;width:12px;height:12px;margin-top:-6px;border-radius:50%;background:var(--surface);border:2px solid var(--muted)}
+.vitem.latest .vdot{border-color:var(--brand);background:var(--brand)}
+.vbody{flex:1;min-width:0}.vtop{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.vkind{font-weight:600;font-size:13px}.vmeta{color:var(--muted);font-size:12.5px;margin-top:3px}.vnote{color:var(--text)}
+.vact{display:flex;gap:6px;flex:none}
+.ver-banner{display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;align-items:center;background:var(--brand-soft);border:1px solid var(--line);border-left:4px solid var(--brand);border-radius:12px;padding:10px 14px;margin-bottom:16px;font-size:14px}
+.ver-actions{display:flex;gap:6px;flex-wrap:wrap}
+.docview{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:24px 26px;box-shadow:var(--shadow-sm)}
+.docview-head{border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:18px}
+.docview-head h1{margin:4px 0 2px;font-size:28px}.dv-id{font-weight:700;color:var(--brand-ink);font-size:13px;letter-spacing:.03em}
+.dv-gov{margin-top:14px}.dv-flow{max-height:none}
+.cmp-pick{display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:14px}.cmp-pick label{margin:0;min-width:240px}.cmp-pick span{padding-bottom:10px;color:var(--muted)}
+.dstat{margin-left:10px;font-size:13px;color:var(--muted)}.dstat .add{color:#2E7D32}.dstat .del{color:#C0272D}
+.difflines{font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border:1px solid var(--line);border-radius:8px;overflow:auto;max-height:70vh}
+.dl{white-space:pre-wrap;word-break:break-word;padding:0 10px 0 4px}
+.dl .sg{display:inline-block;width:18px;color:var(--muted);user-select:none}
+.dl.add{background:rgba(46,125,50,.12)}.dl.add .sg{color:#2E7D32}
+.dl.del{background:rgba(192,39,45,.10);text-decoration:line-through;text-decoration-color:rgba(192,39,45,.45)}.dl.del .sg{color:#C0272D}
+.dl.gap{color:var(--muted);background:var(--surface2);text-align:center;font-style:italic}
+@media (max-width:760px){.vitem{flex-wrap:wrap}.docview{padding:16px}}
+.docview .docgrid > .doc,.docview .docgrid{min-width:0}
+.docview .flowbox{overflow:auto}
+.docview .flowbox svg{display:block}
+.sso-grid{grid-template-columns:minmax(320px,1.15fr) minmax(320px,1fr)}
+@media (max-width:1000px){.sso-grid{grid-template-columns:1fr}}

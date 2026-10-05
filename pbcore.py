@@ -259,7 +259,8 @@ def lane_from_cell(cid, label, color, used):
     return {"key": key, "label": label, "team": None if support else label, "color": color, "kind": "support" if support else "team"}
 
 def drawio_to_flow(path):
-    root = ET.parse(path).getroot()
+    """path: arquivo .drawio, ou o próprio XML (texto) — usado nas versões guardadas no banco."""
+    root = ET.fromstring(path) if isinstance(path, str) and path.lstrip().startswith("<") else ET.parse(path).getroot()
     diagram = list(root)[0]
     allc = list(diagram.iter("mxCell"))
     verts = {c.get("id"): c for c in allc if not c.get("edge")}
@@ -507,6 +508,42 @@ def set_gov(doc, gov):
     pos = next((i + 1 for i, r in enumerate(t["rows"]) if r and _norm(r[0]) == "versao"), min(3, len(t["rows"])))
     new = [[GOV_KEYS[k], gov.get(k, "") or ""] + [""] * (len(t["head"]) - 2) for k in GOV_KEYS]
     t["rows"][pos:pos] = new
+    return doc
+
+# ───────────────────────── versão ─────────────────────────
+# Desenvolvimento e Homologação: cada gravação soma 1 depois do ponto (0.1 → 0.2; 2.3 → 2.4).
+# Produção: publicar ou alterar um playbook publicado gera a próxima versão cheia (0.4 → 1.0; 1.0 → 2.0).
+# Publicar sem mudança desde a última versão cheia mantém o número (1.0 volta a Produção como 1.0).
+
+VERSION_RE = re.compile(r"^\s*(\d+)\.(\d+)")
+BYLINE_VERSION_RE = re.compile(r"(Vers[ãa]o\s+)\d+\.\d+")
+
+def get_version(doc):
+    rows = {_norm(r[0]): (r[1] if len(r) > 1 else "") for r in props_table(clone_doc(doc))["rows"] if r}
+    m = VERSION_RE.match(rows.get("versao", "")) or VERSION_RE.match(re.sub(r"^.*?Vers[ãa]o\s+", "", doc.get("byline", "")))
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 1)
+
+def fmt_version(v):
+    return f"{v[0]}.{v[1]}"
+
+def next_version(v, status, publish=False):
+    major, minor = v
+    if publish:
+        return v if major > 0 and minor == 0 else (major + 1, 0)
+    if status == "Produção": return (major + 1, 0)
+    return (major, minor + 1)
+
+def set_version(doc, v):
+    t, txt = props_table(doc), fmt_version(v)
+    row = next((r for r in t["rows"] if r and _norm(r[0]) == "versao"), None)
+    if row is None:
+        pos = next((i + 1 for i, r in enumerate(t["rows"]) if r and _norm(r[0]) == "nome"), min(2, len(t["rows"])))
+        t["rows"].insert(pos, ["Versão", txt] + [""] * (len(t["head"]) - 2))
+    else:
+        while len(row) < 2: row.append("")
+        row[1] = txt
+    if BYLINE_VERSION_RE.search(doc.get("byline", "")):
+        doc["byline"] = BYLINE_VERSION_RE.sub(lambda m: m.group(1) + txt, doc["byline"], count=1)
     return doc
 
 def clone_doc(doc):

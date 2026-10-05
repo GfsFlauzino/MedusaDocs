@@ -8,6 +8,8 @@ templates e auditoria.
 - Só Python 3 (biblioteca padrão): nada para instalar além do Python, ou uma imagem Docker pronta.
 - White label: nome, cor, logo e textos da página inicial configuráveis no painel administrativo.
 - Formatos abertos: cada playbook é um `.md` + um `.drawio`; troca entre instalações em `.medusa.md` (Markdown + Mermaid).
+- Versão atual: **2.0.0** (novidades em [CHANGELOG.md](CHANGELOG.md)): versionamento automático com histórico navegável,
+  encaminhamento de logs em JSON com retenção, login único (SSO) por OpenID Connect.
 
 ## Instalação
 
@@ -54,8 +56,8 @@ exibida uma única vez, e precisa trocá-la no primeiro acesso.
 | Perfil | Vê | Pode |
 | --- | --- | --- |
 | Visualizador | Playbooks em **Homologação** e **Produção** | Ler, buscar, exportar e trocar a própria senha |
-| Editor | Todos, inclusive **Desenvolvimento** | Criar, editar e importar playbooks, mudar status, editar templates, times e tags |
-| Administrador | Todos | Tudo do editor + usuários, aparência, auditoria e exclusão de playbooks e templates |
+| Editor | Todos, inclusive **Desenvolvimento** | Criar, editar e importar playbooks, mudar status, restaurar versões, editar templates, times e tags |
+| Administrador | Todos | Tudo do editor + usuários, aparência, auditoria, logs, SSO e exclusão de playbooks e templates |
 
 As permissões são verificadas no servidor. O visualizador nem recebe os playbooks em Desenvolvimento.
 
@@ -67,6 +69,62 @@ As permissões são verificadas no servidor. O visualizador nem recebe os playbo
 - Produção exige um **aprovador** (editor ou administrador ativo).
 - **Último revisor** e **Data de revisão** são preenchidos a cada gravação. Os quatro campos ficam na tabela
   "Propriedades do playbook" do `.md` e aparecem bloqueados 🔒 no editor.
+
+## Versionamento e histórico
+
+| Situação | Versão | Exemplo |
+| --- | --- | --- |
+| Gravação em Desenvolvimento ou Homologação | soma 1 depois do ponto | 0.1 → 0.2 · 2.3 → 2.4 |
+| Publicação em Produção | próxima versão cheia | 0.4 → 1.0 · 2.4 → 3.0 |
+| Alteração em playbook publicado | próxima versão cheia | 1.0 → 2.0 |
+| Republicar sem alteração | mantém | 1.0 → 1.0 |
+
+A versão fica na tabela "Propriedades do playbook" (bloqueada no editor) e na linha de versão do documento. Cada
+gravação guarda o conteúdo completo (`.md`, `.drawio`, vínculos) na tabela `pb_versions` do banco. A aba
+**🕘 Versões** do playbook lista o histórico e permite:
+
+- **Ler** uma versão como documentação completa, com o fluxograma clicável daquele momento (e baixar em HTML ou imprimir);
+- **Comparar** duas versões (ou uma com a atual): linhas do documento e caixas/setas do fluxograma acrescentadas e removidas;
+- **Restaurar** (editores) o conteúdo de uma versão, que vira uma versão nova; status e histórico são mantidos.
+
+Visualizadores veem as versões que estiveram em Homologação ou Produção. Playbooks anteriores à 2.0 ganham um
+registro inicial na primeira alteração. Excluir um playbook guarda o histórico junto (identificador `PB-xx#lixeira…`).
+
+## Logs: encaminhamento em JSON e retenção
+
+**⚙ Administração → Logs e retenção** (só administrador):
+
+- **Retenção:** a auditoria é guardada por **30 dias** (padrão; ajustável de 1 a 3650). O que for mais antigo é apagado automaticamente (a cada 6 h e ao salvar), junto com os arquivos de log do período.
+- **Formato:** um documento JSON por evento, no padrão Elastic Common Schema:
+
+```json
+{"@timestamp": "2026-10-05T21:02:28.526Z",
+ "event": {"kind": "event", "dataset": "medusa.audit", "action": "documento_salvo", "category": ["configuration"], "outcome": "success"},
+ "user": {"name": "maria.souza"}, "source": {"ip": "10.0.0.15"},
+ "medusa": {"target": "PB-01", "detail": {"versao": "0.2"}},
+ "service": {"name": "Medusa Docs", "type": "medusa-docs", "version": "2.0.0"}, "host": {"hostname": "medusa"}}
+```
+
+| Destino | Como funciona |
+| --- | --- |
+| HTTP / HTTPS | POST de um array JSON por lote (até 200), cabeçalho de autenticação opcional, até 3 tentativas |
+| Syslog | RFC 5424 por UDP ou TCP (octet counting), com o JSON na mensagem |
+| Arquivo | JSON Lines diário em `data/logs/audit-AAAA-MM-DD.jsonl` (Filebeat, Fluent Bit, Splunk UF) |
+
+O envio roda em segundo plano (fila de até 10 mil eventos) e não atrasa a aplicação. Cada destino tem teste e
+mostra enviados, falhas e último erro. **Baixar auditoria** exporta o período em JSON Lines (`/api/audit/export`).
+
+## Login único (SSO)
+
+Opcional, por **OpenID Connect** (Microsoft Entra ID, Okta, Keycloak, Google, Auth0, Authentik, ADFS 2016+):
+**⚙ Administração → SSO**. Cadastre no provedor a URL de redirecionamento `https://SEU-ENDERECO/api/sso/callback`,
+informe emissor, client ID, client secret e a URL pública, e ative.
+
+- Fluxo authorization code + **PKCE**; `state` amarrado ao navegador (cookie) e `nonce`.
+- **ID token validado** pela assinatura RS256 com as chaves (JWKS) do provedor, emissor, audiência, validade e nonce — sem bibliotecas externas.
+- **Perfis por grupo:** claim de grupos/papéis (ex.: `groups`, `roles`, `realm_access.roles`) mapeada para Administrador, Editor ou Visualizador, reaplicada a cada login; sem grupo correspondente: Visualizador, Editor ou acesso negado.
+- **Usuários:** criados no primeiro login ou só pré-cadastrados; domínios de e-mail permitidos; contas locais não são vinculadas automaticamente (convertidas pelo administrador em Usuários).
+- **Login por senha** continua para todos ou só para administradores (acesso de emergência).
 
 ## Templates, times e tags
 
@@ -172,7 +230,8 @@ flowchart TB
 | Navegador | CSP sem script inline, `X-Frame-Options`, `nosniff`; logo servida em sandbox |
 | Arquivos | Só o front-end é servido; `.md`, `.drawio`, banco e backups não ficam acessíveis pela web |
 | Docker | Usuário sem privilégios (UID 10001), sistema de arquivos somente leitura, sem capabilities |
-| Auditoria | Login, gravações, status, criação, importação, exportação, exclusão, templates, times, usuários e aparência |
+| Auditoria | Login, gravações (com a versão), status, criação, importação, exportação, exclusão, templates, times, usuários, aparência, logs e SSO; IP de origem; retenção de 30 dias e encaminhamento em JSON |
+| SSO | OpenID Connect com PKCE, state e nonce; ID token validado pela assinatura RS256, emissor, audiência e validade |
 
 Para expor na rede, publique atrás de um proxy reverso com HTTPS e use `--secure-cookies` (ou `MEDUSA_SECURE_COOKIES=1`).
 
@@ -185,7 +244,8 @@ Tudo fica em `MEDUSA_HOME` (padrão: a pasta da aplicação; no Docker, o volume
 | `playbooks/PB-xx-*/` | `.md` e `.drawio` de cada playbook |
 | `mappings.json` | Caixa do fluxograma → passos, ramos ou seções |
 | `templates/` | Templates, com os times e tags de cada um |
-| `data/playbooks.db` | SQLite: usuários, sessões, tentativas de login, auditoria, aparência e template de cada playbook |
+| `data/playbooks.db` | SQLite: usuários, sessões, tentativas de login, auditoria, configurações (aparência, logs, SSO), template e histórico de versões de cada playbook |
+| `data/logs/` | Auditoria em JSON Lines, quando o destino "arquivo" está ligado |
 | `data/lixeira/` | Playbooks e templates excluídos |
 | `.backups/<PB>/<data-hora>/` | Versão anterior de cada arquivo, guardada a cada gravação |
 
@@ -199,6 +259,7 @@ Novas versões do esquema do banco são aplicadas sozinhas ao iniciar (`MIGRATIO
 | `MEDUSA_HOME` | pasta da aplicação | Pasta de dados |
 | `MEDUSA_HOST` / `MEDUSA_PORT` | `127.0.0.1` / `8765` | Endereço e porta |
 | `MEDUSA_SECURE_COOKIES` | `0` | `1` atrás de HTTPS |
+| `MEDUSA_TRUST_PROXY` | `0` | `1` atrás de proxy reverso: IP real do usuário pelo `X-Forwarded-For` (auditoria e bloqueio de login) |
 | `MEDUSA_ADMIN_LOGIN` | — | Cria o administrador inicial se não houver nenhum |
 | `MEDUSA_ADMIN_NAME` | `Administrador` | Nome do administrador inicial |
 | `MEDUSA_ADMIN_PASSWORD` | gerada | Senha inicial (sem ela, uma temporária aparece no log); a troca é obrigatória no primeiro acesso |
@@ -210,7 +271,9 @@ Para testar sem mexer nos dados reais, aponte `MEDUSA_HOME` para uma cópia.
 | Arquivo | Função |
 | --- | --- |
 | `server.py` | Servidor HTTP, API, permissões, CLI `adduser` |
-| `store.py` | Banco SQLite (usuários, sessões, auditoria, configurações) |
+| `store.py` | Banco SQLite (usuários, sessões, auditoria, configurações, versões) |
+| `logfwd.py` | Encaminhamento de logs em JSON (HTTP, syslog, arquivo) e retenção |
+| `sso.py` | Login único por OpenID Connect (PKCE, validação RS256 do ID token) |
 | `pbcore.py` | Leitura e escrita de `.md` e `.drawio`, layout, governança |
 | `templates.py` | Templates, template Padrão, times por template, criação de playbooks |
 | `ramos.py` | Sincronização de ramos entre documento e fluxograma |

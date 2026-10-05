@@ -43,6 +43,7 @@ Edite o `.env`:
 | `MEDUSA_ADMIN_PASSWORD` | Deixe **vazio** para gerar uma senha temporária (recomendado) |
 | `MEDUSA_BIND` / `MEDUSA_PUBLISH_PORT` | Onde a porta é publicada. Mantenha `127.0.0.1` se houver proxy no mesmo host |
 | `MEDUSA_SECURE_COOKIES` | `1` quando o acesso for por HTTPS (passo 6) |
+| `MEDUSA_TRUST_PROXY` | `1` atrás do proxy reverso, para registrar o IP real dos usuários (passo 6) |
 
 O administrador só é criado se ainda não houver nenhum. Em qualquer caso, a troca de senha é obrigatória no primeiro acesso.
 
@@ -85,7 +86,7 @@ arquivos `.medusa.md` em **⤒ Importar**.
 O servidor fala HTTP. Para o time acessar pela rede, coloque um proxy reverso com HTTPS na frente e:
 
 1. mantenha `MEDUSA_BIND=127.0.0.1` (só o proxy acessa a porta);
-2. defina `MEDUSA_SECURE_COOKIES=1` no `.env`;
+2. defina `MEDUSA_SECURE_COOKIES=1` e `MEDUSA_TRUST_PROXY=1` no `.env` (o segundo registra o IP real dos usuários na auditoria);
 3. aplique: `docker compose up -d`.
 
 Com `MEDUSA_SECURE_COOKIES=1`, o login só funciona por `https://`.
@@ -125,6 +126,24 @@ server {
 Se o proxy roda em outro container na mesma rede Docker, aponte para `http://medusa-docs:8765` e remova a seção
 `ports` do `docker-compose.yml`.
 
+### Login único (SSO), opcional
+
+Com o HTTPS funcionando:
+
+1. No provedor (Entra ID, Okta, Keycloak, Google…), crie um aplicativo web OIDC com a URL de redirecionamento
+   `https://playbooks.suaempresa.com.br/api/sso/callback`.
+2. Em **⚙ Administração → SSO**, informe o emissor (issuer), clique em **Testar**, preencha client ID, client secret e
+   a URL pública (`https://playbooks.suaempresa.com.br`), configure os grupos → perfis e ative.
+3. O container precisa alcançar o provedor por HTTPS (saída para a internet ou para o IdP interno).
+
+Detalhes na aba **📖 Docs** da aplicação (tópico "Login único").
+
+### Logs para o SIEM, opcional
+
+Em **⚙ Administração → Logs e retenção**: envio em JSON por HTTP(S) ou syslog (UDP/TCP), ou arquivo JSON Lines em
+`/data/data/logs/` para um agente coletor (monte o volume no container do agente, somente leitura). A auditoria é
+guardada por 30 dias por padrão.
+
 ## 7. Onde ficam os dados
 
 Tudo fica no volume `medusa-data`, montado em `/data` no container:
@@ -134,7 +153,8 @@ Tudo fica no volume `medusa-data`, montado em `/data` no container:
 | `playbooks/` | `.md` e `.drawio` de cada playbook |
 | `templates/` | Templates, com os times e tags de cada um |
 | `mappings.json` | Vínculos das caixas do fluxograma com o documento |
-| `data/playbooks.db` | Banco SQLite: usuários, sessões, auditoria, aparência |
+| `data/playbooks.db` | Banco SQLite: usuários, sessões, auditoria, configurações e histórico de versões dos playbooks |
+| `data/logs/` | Auditoria em JSON Lines (se ligado em Administração → Logs) |
 | `data/lixeira/` | Playbooks e templates excluídos |
 | `.backups/` | Versão anterior de cada arquivo, a cada gravação |
 
@@ -237,6 +257,8 @@ docker logs medusa-docs
 | Login volta para a tela de login | `MEDUSA_SECURE_COOKIES=1` com acesso por `http://`. Use HTTPS ou volte para `0` |
 | Container `unhealthy` | Veja `docker compose logs medusa`; o healthcheck consulta `http://127.0.0.1:8765/api/branding` dentro do container |
 | Log diz "exposto na rede sem --secure-cookies" | Aviso normal dentro do container (ele escuta em `0.0.0.0`). Proteja com `MEDUSA_BIND=127.0.0.1` e proxy HTTPS |
+| Login pelo SSO volta com erro | A mensagem aparece na tela de login; o detalhe fica na auditoria (`sso_falhou`). Confira a URL de redirecionamento cadastrada no provedor, a URL pública e se o container alcança o provedor |
+| Todos os acessos aparecem com o mesmo IP | Defina `MEDUSA_TRUST_PROXY=1` (só com proxy reverso na frente) |
 | Conta bloqueada | 5 senhas erradas bloqueiam por 5 minutos. Aguarde ou peça a um administrador para redefinir a senha |
 
 ## Segurança da imagem

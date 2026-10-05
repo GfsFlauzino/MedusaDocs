@@ -22,6 +22,18 @@ const Docs = (() => {
         <li><b>Ramos:</b> os cenários R1, R2… do playbook. Clique para abrir o detalhamento.</li>
         <li><b>Documento:</b> o documento completo com índice lateral.</li>
         <li>No texto, IDs como <b>T3</b>, <b>R2</b> ou <b>E4</b> e nomes de times são clicáveis.</li></ul>` },
+    { id: "versoes", role: "viewer", title: "Versões e histórico", html: `
+      <p>Cada playbook tem número de versão automático, no cabeçalho e na tabela de propriedades:</p>
+      <table><thead><tr><th>Situação</th><th>Versão</th><th>Exemplo</th></tr></thead><tbody>
+        <tr><td>Gravação em Desenvolvimento ou Homologação</td><td>soma 1 depois do ponto</td><td>0.1 → 0.2 · 2.3 → 2.4</td></tr>
+        <tr><td>Publicação em Produção</td><td>próxima versão cheia</td><td>0.4 → 1.0 · 2.4 → 3.0</td></tr>
+        <tr><td>Alteração em um playbook publicado</td><td>próxima versão cheia</td><td>1.0 → 2.0</td></tr>
+        <tr><td>Republicar sem nenhuma alteração</td><td>mantém</td><td>1.0 → 1.0</td></tr></tbody></table>
+      <p>A aba <b>🕘 Versões</b> lista o histórico (quem, quando, o que mudou). Em cada versão:</p>
+      <ul><li><b>Ler</b>: abre a versão como documentação completa, com o fluxograma clicável, como era naquele momento. Dá para baixar em HTML ou imprimir.</li>
+        <li><b>Comparar</b>: mostra linhas do documento e caixas/setas do fluxograma acrescentadas (+) e removidas (−) entre duas versões, ou contra a atual.</li>
+        <li><b>Restaurar</b> (editores): volta o conteúdo daquela versão. O status atual e o histórico são mantidos; a restauração vira uma versão nova.</li></ul>
+      <p>Visualizadores veem as versões que estiveram em Homologação ou Produção.</p>` },
     { id: "exportar", role: "viewer", title: "Exportar", html: `
       <p>O botão <b>⤓ Exportar</b> do playbook está disponível para todos os perfis:</p>
       <table><thead><tr><th>Formato</th><th>Uso</th></tr></thead><tbody>
@@ -51,7 +63,8 @@ const Docs = (() => {
         <li>Na tabela de propriedades, o botão 🎯 da linha "Tática MITRE" abre a lista de táticas.</li>
         <li><b>＋ Novo ramo</b> (na seção de ramos) ou <b>＋ Seção de ramos</b> (no índice, se ainda não houver) criam ramos; ver <a href="#/docs/ramos">Ramos</a>.</li>
         <li><b>Descartar</b> recarrega a versão salva. Cada gravação guarda backup da versão anterior.</li>
-        <li>Se outra pessoa salvou depois que você abriu, a gravação é recusada e a tela oferece recarregar (suas alterações continuam na tela para copiar).</li></ul>` },
+        <li>Se outra pessoa salvou depois que você abriu, a gravação é recusada e a tela oferece recarregar (suas alterações continuam na tela para copiar).</li>
+        <li>A linha <b>Versão</b> das propriedades é automática (🔒): cada gravação gera uma versão nova, ver <a href="#/docs/versoes">Versões</a>.</li></ul>` },
     { id: "editar-fluxograma", role: "editor", title: "Editar o fluxograma", html: `
       <p>Só as formas, cores e setas do modelo estão disponíveis; cada caixa fica na raia do time responsável.</p>
       <table><thead><tr><th>Ação</th><th>Como</th></tr></thead><tbody>
@@ -112,11 +125,31 @@ const Docs = (() => {
       <p>Sem <code>@pos</code>, as caixas são posicionadas automaticamente ("Reorganizar automaticamente").</p>` },
     { id: "usuarios", role: "admin", title: "Usuários", html: `
       <p><b>⚙ Administração → Usuários</b>:</p>
-      <ul><li><b>Criar:</b> login (3 a 40 caracteres: minúsculas, números, <code>. _ -</code>), nome e perfil. A senha temporária aparece uma única vez; o usuário é obrigado a trocá-la no primeiro acesso (mínimo 10 caracteres).</li>
+      <ul><li><b>Criar:</b> login (3 a 80 caracteres: minúsculas, números, <code>. _ - @</code>), nome e perfil. A senha temporária aparece uma única vez; o usuário é obrigado a trocá-la no primeiro acesso (mínimo 10 caracteres).</li>
+        <li><b>Autenticação:</b> cada usuário entra por <b>senha local</b> ou pelo <b>SSO</b> (coluna de autenticação). Usuário SSO não tem senha na ferramenta; o login pode ser um e-mail (até 80 caracteres, com <code>@</code>).</li>
         <li><b>Redefinir senha</b> gera outra temporária e encerra as sessões. <b>Encerrar</b> derruba as sessões abertas.</li>
         <li><b>Desativar</b> bloqueia o acesso sem perder o histórico; <b>excluir</b> remove o usuário.</li>
         <li>Sempre há pelo menos um administrador ativo: a ferramenta não deixa rebaixar, desativar ou excluir o último.</li>
         <li>5 senhas erradas seguidas bloqueiam o login por 5 minutos. Sessões expiram após 8 h sem uso.</li></ul>` },
+    { id: "logs", role: "admin", title: "Logs, encaminhamento e retenção", html: `
+      <p><b>⚙ Administração → Logs e retenção</b>.</p>
+      <ul><li><b>Retenção:</b> a auditoria é guardada por 30 dias (padrão, ajustável de 1 a 3650). O que for mais antigo é apagado automaticamente, assim como os arquivos de log do mesmo período. O histórico de versões dos playbooks não é afetado.</li>
+        <li><b>Formato:</b> cada evento vira um documento JSON no padrão Elastic Common Schema (<code>@timestamp</code>, <code>event.action</code>, <code>event.outcome</code>, <code>user.name</code>, <code>source.ip</code>, <code>medusa.target</code>, <code>medusa.detail</code>…), aceito por Elastic, OpenSearch, Splunk, Sentinel, Graylog e Wazuh.</li></ul>
+      <table><thead><tr><th>Destino</th><th>Como funciona</th></tr></thead><tbody>
+        <tr><td>HTTP / HTTPS</td><td>POST de um array JSON por lote (até 200 eventos), com cabeçalho de autenticação opcional (ex.: <code>Authorization: Bearer …</code>). Até 3 tentativas</td></tr>
+        <tr><td>Syslog</td><td>RFC 5424 por UDP ou TCP, com o JSON na mensagem</td></tr>
+        <tr><td>Arquivo JSON Lines</td><td><code>data/logs/audit-AAAA-MM-DD.jsonl</code>, para Filebeat, Fluent Bit e outros agentes</td></tr></tbody></table>
+      <p>O envio é em segundo plano e não atrasa a aplicação. Cada destino tem <b>Enviar evento de teste</b> e mostra enviados, falhas e o último erro. <b>Baixar auditoria</b> exporta o período em JSON Lines. Segredos (valor do cabeçalho) nunca voltam para a tela.</p>
+      <p>Atrás de proxy reverso, defina <code>MEDUSA_TRUST_PROXY=1</code> para registrar o IP real do usuário (do cabeçalho <code>X-Forwarded-For</code>).</p>` },
+    { id: "sso", role: "admin", title: "Login único (SSO)", html: `
+      <p><b>⚙ Administração → SSO</b>, opcional, por <b>OpenID Connect</b> (Microsoft Entra ID, Okta, Keycloak, Google, Auth0, Authentik, ADFS…).</p>
+      <ol><li>No provedor, crie um aplicativo web (cliente confidencial) com a <b>URL de redirecionamento</b> mostrada na tela: <code>https://SEU-ENDERECO/api/sso/callback</code>.</li>
+        <li>Na ferramenta, informe o <b>emissor</b> (issuer), clique em <b>Testar</b>, preencha client ID, client secret e a <b>URL pública</b>, e ative.</li>
+        <li>Opcional: indique a claim de grupos (<code>groups</code>, <code>roles</code>, <code>realm_access.roles</code>) e quais grupos viram Administrador, Editor ou Visualizador. O perfil é reaplicado a cada login.</li></ol>
+      <ul><li><b>Usuário novo:</b> criado no primeiro login, ou só pré-cadastrados (Usuários → Autenticação: SSO, com o login igual ao enviado pelo provedor).</li>
+        <li><b>Contas locais</b> não são vinculadas automaticamente a uma identidade do SSO (evita tomada de conta): converta em <b>Usuários</b>.</li>
+        <li><b>Login por senha</b> pode continuar para todos ou ficar só para administradores (acesso de emergência).</li>
+        <li><b>Segurança:</b> authorization code + PKCE, state amarrado ao navegador, nonce, e o ID token validado pela assinatura RS256 (chaves do provedor), emissor, audiência e validade. Falhas ficam na auditoria (<code>sso_falhou</code>).</li></ul>` },
     { id: "aparencia", role: "admin", title: "Aparência", html: `
       <p><b>⚙ Administração → Aparência</b>: nome exibido no topo, cor primária (seletor, código <code>#RRGGBB</code> ou RGB), logo (PNG, JPG, SVG sem script ou WEBP, até 512 KB) e o <b>título e subtítulo da página inicial</b>. Vale para todos os usuários. As cores do fluxograma não mudam: seguem o modelo dos playbooks.</p>` },
     { id: "auditoria", role: "admin", title: "Auditoria", html: `
@@ -132,13 +165,15 @@ python3 server.py --host 0.0.0.0 --port 8765 --secure-cookies      # rede, atrá
         <tr><td><code>MEDUSA_HOME</code></td><td>pasta de dados (padrão: a pasta da aplicação; no Docker, <code>/data</code>)</td></tr>
         <tr><td><code>MEDUSA_HOST</code> · <code>MEDUSA_PORT</code></td><td>endereço e porta</td></tr>
         <tr><td><code>MEDUSA_SECURE_COOKIES</code></td><td><code>1</code> atrás de HTTPS</td></tr>
+        <tr><td><code>MEDUSA_TRUST_PROXY</code></td><td><code>1</code> atrás de proxy reverso: usa o IP real do <code>X-Forwarded-For</code></td></tr>
         <tr><td><code>MEDUSA_ADMIN_LOGIN</code> · <code>MEDUSA_ADMIN_NAME</code> · <code>MEDUSA_ADMIN_PASSWORD</code></td><td>administrador inicial (só quando não há nenhum)</td></tr></tbody></table>
       <p>Dentro de <code>MEDUSA_HOME</code>:</p>
       <table><thead><tr><th>Caminho</th><th>Conteúdo</th></tr></thead><tbody>
         <tr><td><code>playbooks/PB-xx-*/</code></td><td><code>.md</code> e <code>.drawio</code> de cada playbook</td></tr>
         <tr><td><code>mappings.json</code></td><td>caixa do fluxograma → passos, ramos ou seções</td></tr>
         <tr><td><code>templates/*.medusa-template.md</code></td><td>templates, com os times e tags de cada um</td></tr>
-        <tr><td><code>data/playbooks.db</code></td><td>SQLite: usuários, sessões, tentativas, auditoria, aparência e o template de cada playbook</td></tr>
+        <tr><td><code>data/playbooks.db</code></td><td>SQLite: usuários, sessões, auditoria, configurações (aparência, logs, SSO), template e <b>histórico de versões</b> de cada playbook</td></tr>
+        <tr><td><code>data/logs/</code></td><td>auditoria em JSON Lines (se o destino "arquivo" estiver ligado)</td></tr>
         <tr><td><code>data/lixeira/</code></td><td>playbooks e templates excluídos (para restaurar, mova de volta e reinicie)</td></tr>
         <tr><td><code>.backups/&lt;PB&gt;/&lt;data-hora&gt;/</code></td><td>versão anterior de cada arquivo, a cada gravação</td></tr></tbody></table>
       <p><b>Backup do banco:</b> copie <code>data/playbooks.db</code> com o servidor parado ou use <code>sqlite3 data/playbooks.db ".backup copia.db"</code>. Novas versões do esquema são aplicadas sozinhas ao iniciar.</p>
@@ -156,6 +191,8 @@ python3 server.py --host 0.0.0.0 --port 8765 --secure-cookies      # rede, atrá
         <tr><td>"Foi salvo por outra pessoa"</td><td>copie o que precisar, clique em Recarregar e reaplique</td></tr>
         <tr><td>Ramo não aparece na aba Ramos</td><td>salve o fluxograma: a subseção é criada no documento ao salvar. A caixa precisa começar com R# e estar vinculada a R#</td></tr>
         <tr><td>Time não aparece para virar raia</td><td>ele precisa ser <i>central</i> e estar nos times do template do playbook (aba Times e tags do template)</td></tr>
+        <tr><td>Login pelo SSO volta com erro</td><td>a mensagem aparece na tela de login e o detalhe na auditoria (<code>sso_falhou</code>). Confira URL de redirecionamento, URL pública, client secret e a claim de login</td></tr>
+        <tr><td>Destino de log com falhas</td><td>Administração → Logs: veja o último erro e use "Enviar evento de teste"</td></tr>
         <tr><td>Conta bloqueada</td><td>aguarde 5 minutos ou peça ao administrador para redefinir a senha</td></tr>
         <tr><td>Perdeu o acesso de administrador</td><td>no servidor: <code>python3 server.py adduser &lt;login&gt; --role admin</code></td></tr>
         <tr><td>Restaurar uma versão</td><td>copie o arquivo de <code>.backups/&lt;PB&gt;/&lt;data-hora&gt;/</code> para a pasta do playbook</td></tr></tbody></table>` },
@@ -166,7 +203,7 @@ python3 server.py --host 0.0.0.0 --port 8765 --secure-cookies      # rede, atrá
     const secs = SECTIONS.filter(s => can(s.role));
     root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead"><span class="pbid">📖</span><h1>Documentação</h1>
         <div class="pbactions"><input class="in sm" id="docQ" type="search" placeholder="Filtrar tópicos…" style="width:220px"></div></div>
-        <p class="muted" style="margin:6px 0 16px">Como usar e administrar o ${esc(Brand.get().name)}. Você vê os tópicos do seu perfil (${esc(App.user.roleName)}).</p></div></div>
+        <p class="muted" style="margin:6px 0 16px">Como usar e administrar o ${esc(Brand.get().name)}${Brand.get().appVersion ? ` (Medusa Docs ${esc(Brand.get().appVersion)})` : ""}. Você vê os tópicos do seu perfil (${esc(App.user.roleName)}).</p></div></div>
       <div class="wrap"><div class="docgrid"><nav class="toc" id="docToc">${secs.map(s => `<a href="#/docs/${s.id}" data-go="${s.id}">${esc(s.title)}</a>`).join("")}</nav>
         <div class="doc docs-page">${secs.map(s => `<section id="doc-${s.id}" class="md" data-txt="${esc((s.title + " " + s.html.replace(/<[^>]+>/g, " ")).toLowerCase())}">
           <h2>${esc(s.title)} ${s.role !== "viewer" ? `<span class="aud ${s.role}">${ROLE_LBL[s.role]}</span>` : ""}</h2>${s.html}</section>`).join("")}</div></div></div>`;

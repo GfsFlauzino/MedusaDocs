@@ -290,18 +290,25 @@ function showTeam(pb, name, keep) {
 }
 
 /* ───────── sessão e usuário ───────── */
-function showLogin(msg) {
+async function showLogin(msg) {
   App.user = null;
   document.body.className = "auth";
   closeDrawer();
+  // erro devolvido pelo SSO (/?sso_error=…): mostra e limpa da barra de endereço
+  const ssoErr = new URLSearchParams(location.search).get("sso_error");
+  if (ssoErr) { msg = `Login pelo SSO não concluído: ${ssoErr}`; history.replaceState(null, "", location.pathname + location.hash); }
+  let ssoSt = { enabled: false };
+  try { ssoSt = await api("GET", "api/sso/status"); } catch { }
   view.innerHTML = `<div class="login-wrap"><form class="login" id="loginForm" autocomplete="on">
       <div class="login-brand"><span class="mark"></span><span class="bname">${esc(Brand.get().name)}</span></div>
       <h1>Entrar</h1>
       ${msg ? `<div class="notice">${esc(msg)}</div>` : ""}
+      ${ssoSt.enabled ? `<a class="btn primary block sso-btn" href="api/sso/login">🔐 ${esc(ssoSt.label)}</a>
+        <div class="login-or"><span>${ssoSt.localLogin === "admins" ? "acesso de emergência (administradores)" : "ou com usuário e senha"}</span></div>` : ""}
       <label>Usuário<input class="in" name="login" autocomplete="username" required autocapitalize="none"></label>
       <label>Senha<input class="in" name="password" type="password" autocomplete="current-password" required></label>
       <div class="err" id="lerr" hidden></div>
-      <button class="btn primary block" type="submit">Entrar</button>
+      <button class="btn ${ssoSt.enabled ? "ghost" : "primary"} block" type="submit">Entrar${ssoSt.enabled ? " com senha" : ""}</button>
       <p class="muted small">Acesso por perfil: visualizador, editor ou administrador. Peça acesso a um administrador.</p>
     </form></div>`;
   $("#loginForm").onsubmit = async e => {
@@ -375,7 +382,7 @@ document.addEventListener("click", e => {
 
 /* ───────── rotas ───────── */
 const currentPb = () => { const m = location.hash.match(/^#\/(pb-\d+)/i); return m ? pbBy(m[1].toLowerCase()) : null; };
-const TABS = [["fluxo", "Fluxograma"], ["fases", "Passo a passo"], ["ramos", "Ramos"], ["doc", "Documento"]];
+const TABS = [["fluxo", "Fluxograma"], ["fases", "Passo a passo"], ["ramos", "Ramos"], ["doc", "Documento"], ["versoes", "🕘 Versões"]];
 const EDIT_TABS = [["editar", "✎ Editar documento"], ["editar-fluxo", "✎ Editar fluxograma"]];
 const view = $("#view");
 let lastHash = location.hash, skipGuard = false;
@@ -459,7 +466,7 @@ function route() {
   if (!pb) return notFound();
   const all = TABS.concat(can("editor") ? EDIT_TABS : []);
   const tab = all.some(t => t[0] === parts[1]) ? parts[1] : "fluxo";
-  renderPb(pb, tab, parts[2]);
+  renderPb(pb, tab, parts[2], parts.slice(3));
 }
 window.addEventListener("hashchange", route);
 window.addEventListener("beforeunload", e => { if (Editor.dirty) { e.preventDefault(); e.returnValue = ""; } });
@@ -500,7 +507,7 @@ function govLine(g) {
 }
 
 /* ───────── página do playbook ───────── */
-function renderPb(pb, tab, extra) {
+function renderPb(pb, tab, extra, rest) {
   useTeams(pb);
   const props = pb.props, g = pb.gov;
   const all = TABS.concat(can("editor") ? EDIT_TABS : []);
@@ -530,6 +537,7 @@ function renderPb(pb, tab, extra) {
   const tv = $("#tabview");
   if (tab === "editar") return Editor.docEditor(tv, pb);
   if (tab === "editar-fluxo") { document.body.classList.add("editing"); return Editor.flowEditor(tv, pb); }
+  if (tab === "versoes") return Versions.render(pb, tv, extra, rest || []);
   ({ fluxo: tabFlow, fases: tabSteps, ramos: tabRamos, doc: tabDoc })[tab](pb, tv, extra);
   linkify(tv, pb);
 }
@@ -730,7 +738,10 @@ const Admin = (() => {
     marca_alterada: "Marca alterada", logo_alterada: "Logo alterada", logo_removida: "Logo removida",
     template_criado: "Template criado", template_alterado: "Template alterado", template_documento_salvo: "Documento do template salvo",
     template_fluxograma_salvo: "Fluxograma do template salvo", template_excluido: "Template excluído", template_exportado: "Template exportado",
-    template_importado: "Template importado" };
+    template_importado: "Template importado", template_times_salvos: "Times do template salvos", template_ramos_adicionados: "Ramos adicionados ao template",
+    ramo_criado: "Ramo criado", ramo_excluido: "Ramo excluído", versao_restaurada: "Versão restaurada", admin_inicial: "Administrador inicial",
+    logs_configurados: "Logs configurados", logs_testados: "Teste de envio de logs", auditoria_exportada: "Auditoria exportada",
+    sso_configurado: "SSO configurado", sso_falhou: "Falha no SSO" };
   const fmtTs = t => t ? new Date(t).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "—";
 
   function showTemp(user, pw, what) {
@@ -751,17 +762,20 @@ const Admin = (() => {
     el.innerHTML = `<div class="admin-grid"><div class="ecard">
         <div class="ecard-h"><b>Usuários</b><span class="muted small">${data.users.length} cadastrados</span></div>
         <div class="tw"><table class="utable"><thead><tr><th>Usuário</th><th>Perfil</th><th>Situação</th><th>Último acesso</th><th>Sessões</th><th></th></tr></thead><tbody>
-        ${data.users.map(u => `<tr class="${u.active ? "" : "off"}"><td><b>${esc(u.name)}</b><br><code>${esc(u.login)}</code>${u.mustChange ? ` <span class="tag warn">senha temporária</span>` : ""}</td>
+        ${data.users.map(u => `<tr class="${u.active ? "" : "off"}"><td><b>${esc(u.name)}</b><br><code>${esc(u.login)}</code>${u.mustChange ? ` <span class="tag warn">senha temporária</span>` : ""}
+            <br><select class="in xs auth-sel" data-auth="${esc(u.login)}" ${u.login === App.user.login ? "disabled" : ""} title="Forma de autenticação">
+              <option value="local" ${u.auth !== "sso" ? "selected" : ""}>🔑 Senha local</option><option value="sso" ${u.auth === "sso" ? "selected" : ""}>🔐 SSO${u.auth === "sso" && !u.ssoLinked ? " (aguardando 1º login)" : ""}</option></select></td>
           <td>${roleSel(u)}</td>
           <td><label class="switch"><input type="checkbox" data-active="${esc(u.login)}" ${u.active ? "checked" : ""} ${u.login === App.user.login ? "disabled" : ""}><span>${u.active ? "Ativo" : "Inativo"}</span></label></td>
           <td class="small">${fmtTs(u.lastLogin)}</td>
           <td>${u.sessions ? `<span class="tag">${u.sessions} ativa${u.sessions > 1 ? "s" : ""}</span> ${u.login !== App.user.login ? `<button class="btn ghost xs" data-kick="${esc(u.login)}" title="Desconecta o usuário em todos os navegadores">Encerrar</button>` : ""}` : `<span class="muted small">—</span>`}</td>
-          <td class="ucell-actions"><button class="btn ghost xs" data-reset="${esc(u.login)}">Redefinir senha</button>${u.login !== App.user.login ? `<button class="btn danger xs" data-del="${esc(u.login)}">Excluir</button>` : ""}</td></tr>`).join("")}
+          <td class="ucell-actions">${u.auth === "sso" ? "" : `<button class="btn ghost xs" data-reset="${esc(u.login)}">Redefinir senha</button>`}${u.login !== App.user.login ? `<button class="btn danger xs" data-del="${esc(u.login)}">Excluir</button>` : ""}</td></tr>`).join("")}
         </tbody></table></div></div>
       <div class="ecard"><div class="ecard-h"><b>Novo usuário</b></div>
         <form id="newUser" class="tform" autocomplete="off">
           <label>Nome<input class="in" name="name" required placeholder="Nome e sobrenome"></label>
-          <label>Login<input class="in" name="login" required pattern="[a-z0-9._-]{3,40}" placeholder="ex.: maria.souza"></label>
+          <label>Login<input class="in" name="login" required pattern="[a-z0-9._@\-]{3,80}" placeholder="ex.: maria.souza ou maria@empresa.com"></label>
+          <label>Autenticação<select class="in" name="auth"><option value="local">Senha local (senha temporária gerada agora)</option><option value="sso">SSO (entra pelo provedor com este login)</option></select></label>
           <label>Perfil<select class="in" name="role">${Object.entries(data.roles).map(([k, n]) => `<option value="${k}">${n}</option>`).join("")}</select></label>
           <div class="roles-help">
             <div><b>Visualizador</b> lê playbooks em Homologação e Produção.</div>
@@ -773,6 +787,14 @@ const Admin = (() => {
     const reload = () => users(el);
     const upd = async (login, body, msg) => { try { await api("PUT", `api/users/${encodeURIComponent(login)}`, body); toast(msg); } catch (e) { toast(e.message, "err"); } reload(); };
     el.querySelectorAll("[data-role]").forEach(s => s.onchange = () => upd(s.dataset.role, { role: s.value }, "Perfil alterado"));
+    el.querySelectorAll("[data-auth]").forEach(sel => sel.onchange = async () => {
+      const lg = sel.dataset.auth, to = sel.value;
+      if (!confirm(to === "sso" ? `Converter ${lg} para SSO? A senha local deixa de funcionar e as sessões abertas são encerradas. O login precisa ser igual ao enviado pelo provedor.`
+        : `Voltar ${lg} para senha local? Uma senha temporária será gerada.`)) { sel.value = to === "sso" ? "local" : "sso"; return; }
+      try { const r = await api("PUT", `api/users/${encodeURIComponent(lg)}`, { auth: to }); toast("Autenticação alterada"); if (r.tempPassword) showTemp(r.user, r.tempPassword, "Senha local gerada"); }
+      catch (e) { toast(e.message, "err"); }
+      reload();
+    });
     el.querySelectorAll("[data-active]").forEach(c => c.onchange = () => upd(c.dataset.active, { active: c.checked }, c.checked ? "Usuário reativado" : "Usuário desativado (sessões encerradas)"));
     el.querySelectorAll("[data-reset]").forEach(b => b.onclick = async () => {
       if (!confirm(`Gerar nova senha temporária para ${b.dataset.reset}? As sessões abertas dele serão encerradas.`)) return;
@@ -791,8 +813,9 @@ const Admin = (() => {
       e.preventDefault();
       const f = new FormData(e.target);
       try {
-        const r = await api("POST", "api/users", { name: f.get("name"), login: f.get("login").trim().toLowerCase(), role: f.get("role") });
-        showTemp(r.user, r.tempPassword, "Usuário criado"); reload();
+        const r = await api("POST", "api/users", { name: f.get("name"), login: f.get("login").trim().toLowerCase(), role: f.get("role"), auth: f.get("auth") });
+        if (r.tempPassword) showTemp(r.user, r.tempPassword, "Usuário criado"); else toast("Usuário SSO pré-cadastrado: ele entra pelo botão de SSO");
+        reload();
       } catch (x) { $("#nuerr", el).textContent = x.message; $("#nuerr", el).hidden = false; }
     };
   }
@@ -902,12 +925,118 @@ const Admin = (() => {
     };
   }
 
+  /* ── logs: encaminhamento em JSON e retenção ── */
+  async function logs(el) {
+    let d;
+    try { d = await api("GET", "api/logs"); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+    const c = d.config, st = d.status.destinations;
+    const stat = k => { const x = st[k]; return `<div class="fwd-st"><span>Enviados <b>${x.sent}</b></span><span class="${x.failed ? "bad" : ""}">Falhas <b>${x.failed}</b></span>
+      ${x.last_ok ? `<span>Último envio ${esc(fmtTs(x.last_ok))}</span>` : ""}${x.last_error ? `<span class="bad" title="${esc(x.last_error)}">Último erro: ${esc(x.last_error.split(" · ").slice(1).join(" · ").slice(0, 90))}</span>` : ""}</div>`; };
+    el.innerHTML = `<form id="lgForm" class="admin-grid logs-grid">
+      <div class="ecard"><div class="ecard-h"><b>Retenção</b></div>
+        <label>Guardar a auditoria por<div class="inline-in"><input class="in" type="number" name="retention_days" min="1" max="3650" value="${c.retention_days}"> dias</div></label>
+        <p class="muted small">Eventos e arquivos de log mais antigos são apagados automaticamente (verificação a cada 6 horas e ao salvar). Padrão: 30 dias. O histórico de versões dos playbooks não é afetado.</p>
+        <div class="pp-lbl">Exportar</div>
+        <div class="row-btns"><a class="btn ghost sm" href="api/audit/export?days=${c.retention_days}" download>⤓ Baixar auditoria (JSON Lines)</a></div>
+        <div class="pp-lbl" style="margin-top:16px">Formato de cada evento</div>
+        <pre class="json-sample">${esc(JSON.stringify(d.sample, null, 2))}</pre>
+        <p class="muted small">Campos no padrão Elastic Common Schema (ECS): funciona direto em Elastic, OpenSearch, Splunk, Sentinel, Graylog e Wazuh.</p></div>
+      <div class="ecard"><div class="ecard-h"><b>Encaminhamento</b><span class="muted small">fila na memória: ${d.status.queue}${d.status.dropped ? ` · descartados ${d.status.dropped}` : ""}</span></div>
+        <fieldset class="fwd"><legend><label class="switch"><input type="checkbox" name="http.enabled" ${c.http.enabled ? "checked" : ""}><span>HTTP / HTTPS (SIEM, coletor, webhook)</span></label></legend>
+          <label>URL<input class="in" name="http.url" value="${esc(c.http.url)}" placeholder="https://siem.empresa.com/api/ingest"></label>
+          <div class="pp-row"><label style="max-width:200px">Cabeçalho de autenticação<input class="in" name="http.auth_header" value="${esc(c.http.auth_header)}" placeholder="Authorization"></label>
+            <label>Valor<input class="in" name="http.auth_value" type="password" autocomplete="new-password" placeholder="${c.http.auth_value_set ? "•••••••• (definido; preencha para trocar)" : "ex.: Bearer token, ApiKey …"}"></label></div>
+          ${c.http.auth_value_set ? `<label class="chk-inline"><input type="checkbox" name="http.clear_auth"> remover o valor salvo</label>` : ""}
+          <p class="muted small">POST com um array JSON por lote (até 200 eventos). Até 3 tentativas por lote.</p>
+          <div class="row-btns"><button type="button" class="btn ghost xs" data-test="http">Enviar evento de teste</button></div>${stat("http")}</fieldset>
+        <fieldset class="fwd"><legend><label class="switch"><input type="checkbox" name="syslog.enabled" ${c.syslog.enabled ? "checked" : ""}><span>Syslog (RFC 5424, mensagem em JSON)</span></label></legend>
+          <div class="pp-row"><label>Host<input class="in" name="syslog.host" value="${esc(c.syslog.host)}" placeholder="syslog.empresa.com"></label>
+            <label style="max-width:100px">Porta<input class="in" type="number" name="syslog.port" value="${c.syslog.port}"></label>
+            <label style="max-width:110px">Protocolo<select class="in" name="syslog.proto"><option value="udp" ${c.syslog.proto !== "tcp" ? "selected" : ""}>UDP</option><option value="tcp" ${c.syslog.proto === "tcp" ? "selected" : ""}>TCP</option></select></label>
+            <label style="max-width:120px">Facility<select class="in" name="syslog.facility">${[16, 17, 18, 19, 20, 21, 22, 23, 13, 4, 10].map(f => `<option value="${f}" ${+c.syslog.facility === f ? "selected" : ""}>${f >= 16 ? "local" + (f - 16) : f === 13 ? "log audit" : f === 4 ? "auth" : "authpriv"}</option>`).join("")}</select></label></div>
+          <div class="row-btns"><button type="button" class="btn ghost xs" data-test="syslog">Enviar evento de teste</button></div>${stat("syslog")}</fieldset>
+        <fieldset class="fwd"><legend><label class="switch"><input type="checkbox" name="file.enabled" ${c.file.enabled ? "checked" : ""}><span>Arquivo JSON Lines (para Filebeat, Fluent Bit, agentes)</span></label></legend>
+          <p class="muted small">Um arquivo por dia em <code>${esc(d.logDir)}/audit-AAAA-MM-DD.jsonl</code>, apagado conforme a retenção.</p>
+          <div class="row-btns"><button type="button" class="btn ghost xs" data-test="file">Gravar evento de teste</button></div>${stat("file")}</fieldset>
+        <div class="err" id="lgErr" hidden></div>
+        <div class="create-actions"><button class="btn primary" type="submit">Salvar configuração de logs</button></div></div></form>`;
+    const form = $("#lgForm", el);
+    const collect = () => {
+      const o = { http: {}, syslog: {}, file: {} };
+      form.querySelectorAll("[name]").forEach(i => {
+        const v = i.type === "checkbox" ? i.checked : i.value; const [a, b] = i.name.split(".");
+        if (b) o[a][b] = v; else o[a] = v;
+      });
+      return o;
+    };
+    form.onsubmit = async e => {
+      e.preventDefault();
+      try { await api("PUT", "api/logs", collect()); toast("Configuração de logs salva"); logs(el); }
+      catch (x) { $("#lgErr", el).textContent = x.message; $("#lgErr", el).hidden = false; }
+    };
+    form.querySelectorAll("[data-test]").forEach(b => b.onclick = async () => {
+      b.disabled = true; b.textContent = "Enviando…";
+      try { const r = await api("POST", "api/logs/test", { dest: b.dataset.test, config: collect() }); toast(r.ok ? r.message : `Falhou: ${r.message}`, r.ok ? "ok" : "err"); }
+      catch (x) { toast(x.message, "err"); }
+      b.disabled = false; b.textContent = b.dataset.test === "file" ? "Gravar evento de teste" : "Enviar evento de teste";
+    });
+  }
+
+  /* ── SSO (OpenID Connect) ── */
+  async function ssoAdmin(el) {
+    let d;
+    try { d = await api("GET", "api/sso/config"); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+    const c = d.config;
+    el.innerHTML = `<form id="ssoForm" class="admin-grid sso-grid">
+      <div class="ecard"><div class="ecard-h"><b>Login único (SSO) por OpenID Connect</b>
+          <label class="switch"><input type="checkbox" name="enabled" ${c.enabled ? "checked" : ""}><span>${c.enabled ? "Ativo" : "Desativado"}</span></label></div>
+        <p class="muted small" style="margin-top:0">Opcional. Funciona com Microsoft Entra ID, Okta, Keycloak, Google, Auth0, Authentik, ADFS e outros provedores OIDC. Fluxo authorization code + PKCE; o token é validado pela assinatura (RS256), emissor, audiência, validade e nonce.</p>
+        <label>Emissor (issuer)<div class="inline-in"><input class="in" name="issuer" value="${esc(c.issuer)}" placeholder="https://login.microsoftonline.com/&lt;tenant&gt;/v2.0"><button type="button" class="btn ghost sm" id="ssoTest">Testar</button></div></label>
+        <div id="ssoDisc"></div>
+        <div class="pp-row"><label>Client ID<input class="in" name="client_id" value="${esc(c.client_id)}"></label>
+          <label>Client secret<input class="in" name="client_secret" type="password" autocomplete="new-password" placeholder="${c.client_secret_set ? "•••••••• (definido; preencha para trocar)" : "segredo do aplicativo"}"></label></div>
+        <label>URL pública da aplicação<input class="in" name="public_url" value="${esc(c.public_url)}" placeholder="https://playbooks.empresa.com"></label>
+        <div class="notice small">Cadastre no provedor esta <b>URL de redirecionamento</b>: <code id="ssoRedir">${esc(d.redirectUri || "(informe a URL pública)")}</code></div>
+        <div class="pp-row"><label>Escopos<input class="in" name="scopes" value="${esc(c.scopes)}"></label>
+          <label>Texto do botão<input class="in" name="label" value="${esc(c.label)}" maxlength="60"></label></div></div>
+      <div class="ecard"><div class="ecard-h"><b>Usuários e perfis</b></div>
+        <div class="pp-row"><label>Claim do login<input class="in" name="login_claim" value="${esc(c.login_claim)}" placeholder="preferred_username"></label>
+          <label>Claim do nome<input class="in" name="name_claim" value="${esc(c.name_claim)}"></label>
+          <label>Claim do e-mail<input class="in" name="email_claim" value="${esc(c.email_claim)}"></label></div>
+        <label>Domínios de e-mail permitidos <small>(vírgula; vazio = qualquer)</small><input class="in" name="allowed_domains" value="${esc(c.allowed_domains)}" placeholder="empresa.com, empresa.com.br"></label>
+        <label>Claim de grupos/papéis<input class="in" name="role_claim" value="${esc(c.role_claim)}" placeholder="groups, roles ou realm_access.roles"></label>
+        <div class="pp-lbl">Grupos do provedor → perfil <small class="muted">(valores separados por vírgula; verificado a cada login)</small></div>
+        ${[["admin", "Administrador"], ["editor", "Editor"], ["viewer", "Visualizador"]].map(([k, n]) => `<label>${n}<input class="in" name="role_map.${k}" value="${esc(c.role_map[k] || "")}" placeholder="ex.: ${k === "admin" ? "sec-admins" : k === "editor" ? "csirt, soc-n2" : "soc-n1"}"></label>`).join("")}
+        <div class="pp-row"><label>Sem grupo correspondente<select class="in" name="default_role"><option value="viewer" ${c.default_role === "viewer" ? "selected" : ""}>Entra como Visualizador</option><option value="editor" ${c.default_role === "editor" ? "selected" : ""}>Entra como Editor</option><option value="" ${!c.default_role ? "selected" : ""}>Acesso negado</option></select></label>
+          <label>Usuário novo<select class="in" name="auto_create"><option value="1" ${c.auto_create ? "selected" : ""}>Criar no primeiro login</option><option value="" ${!c.auto_create ? "selected" : ""}>Só pré-cadastrados (Usuários → SSO)</option></select></label></div>
+        <label>Login por senha<select class="in" name="local_login"><option value="all" ${c.local_login !== "admins" ? "selected" : ""}>Continua disponível para todos</option><option value="admins" ${c.local_login === "admins" ? "selected" : ""}>Só administradores (acesso de emergência)</option></select></label>
+        <p class="muted small">Contas locais existentes não são vinculadas automaticamente a uma identidade do SSO: converta-as em <b>Usuários</b> (coluna de autenticação) com o mesmo login enviado pelo provedor.</p>
+        <div class="err" id="ssoErr" hidden></div>
+        <div class="create-actions">${c.client_secret_set ? `<label class="chk-inline" style="margin-right:auto"><input type="checkbox" name="clear_secret"> remover o client secret</label>` : ""}<button class="btn primary" type="submit">Salvar SSO</button></div></div></form>`;
+    const form = $("#ssoForm", el);
+    form.public_url.oninput = () => { $("#ssoRedir", el).textContent = form.public_url.value ? form.public_url.value.replace(/\/+$/, "") + "/api/sso/callback" : "(informe a URL pública)"; };
+    $("#ssoTest", el).onclick = async () => {
+      const box = $("#ssoDisc", el); box.innerHTML = `<div class="muted small">Consultando…</div>`;
+      const r = await api("POST", "api/sso/test", { issuer: form.issuer.value }).catch(x => ({ ok: false, message: x.message }));
+      box.innerHTML = r.ok ? `<div class="notice ok small">Provedor encontrado: <b>${esc(r.issuer)}</b><br>Autorização: ${esc(r.authorization_endpoint)}<br>Token: ${esc(r.token_endpoint)}${r.algs.length ? `<br>Assinaturas: ${esc(r.algs.join(", "))}${r.algs.includes("RS256") ? "" : " · atenção: é preciso RS256"}` : ""}</div>`
+        : `<div class="err">${esc(r.message)}</div>`;
+    };
+    form.onsubmit = async e => {
+      e.preventDefault();
+      const f = new FormData(form), o = { role_map: {} };
+      for (const [k, v] of f.entries()) { if (k.startsWith("role_map.")) o.role_map[k.slice(9)] = v; else o[k] = v; }
+      o.enabled = form.enabled.checked; o.auto_create = !!form.auto_create.value; o.clear_secret = !!(form.clear_secret && form.clear_secret.checked);
+      try { await api("PUT", "api/sso/config", o); toast("SSO salvo"); ssoAdmin(el); }
+      catch (x) { $("#ssoErr", el).textContent = x.message; $("#ssoErr", el).hidden = false; }
+    };
+  }
+
   function render(root, sub) {
-    sub = ["auditoria", "aparencia"].includes(sub) ? sub : "usuarios";
+    sub = ["auditoria", "aparencia", "logs", "sso"].includes(sub) ? sub : "usuarios";
     root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead"><span class="pbid">ADMIN</span><h1>Administração</h1></div>
-      <nav class="tabs"><a href="#/admin/usuarios" class="${sub === "usuarios" ? "on" : ""}">Usuários e perfis</a><a href="#/admin/aparencia" class="${sub === "aparencia" ? "on" : ""}">Aparência</a><a href="#/admin/auditoria" class="${sub === "auditoria" ? "on" : ""}">Auditoria</a></nav></div></div>
+      <nav class="tabs"><a href="#/admin/usuarios" class="${sub === "usuarios" ? "on" : ""}">Usuários e perfis</a><a href="#/admin/aparencia" class="${sub === "aparencia" ? "on" : ""}">Aparência</a><a href="#/admin/auditoria" class="${sub === "auditoria" ? "on" : ""}">Auditoria</a><a href="#/admin/logs" class="${sub === "logs" ? "on" : ""}">Logs e retenção</a><a href="#/admin/sso" class="${sub === "sso" ? "on" : ""}">SSO</a></nav></div></div>
       <div class="wrap" id="adminview"><div class="empty">Carregando…</div></div>`;
-    ({ usuarios: users, aparencia: appearance, auditoria: auditLog })[sub]($("#adminview"));
+    ({ usuarios: users, aparencia: appearance, auditoria: auditLog, logs, sso: ssoAdmin })[sub]($("#adminview"));
   }
   return { render };
 })();
@@ -1233,6 +1362,116 @@ const TemplatesPage = (() => {
     (sub === "times" ? teams : general)(tv, t);
   }
   return { render: (root, key, sub) => key ? detail(root, key, sub) : list(root) };
+})();
+
+/* ───────── versões (histórico, leitura, comparação, restauração) ───────── */
+const Versions = (() => {
+  const fmt = t => t ? new Date(t).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "—";
+  const vpill = v => `<span class="vpill">${esc(v)}</span>`;
+
+  async function list(pb, el) {
+    el.innerHTML = `<div class="empty">Carregando histórico…</div>`;
+    let d; try { d = await api("GET", `api/pb/${pb.id}/versions`); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+    const vs = d.versions;
+    el.innerHTML = `<div class="ver-head"><div><b>Versão atual: ${vpill(d.current)}</b> ${statusPill(d.currentStatus)}</div>
+        <p class="muted small">Desenvolvimento e Homologação somam 1 depois do ponto a cada gravação (0.1 → 0.2). Publicar em Produção, ou alterar um playbook publicado, gera a próxima versão cheia (0.4 → 1.0). ${can("editor") ? "" : "Você vê as versões que estiveram em Homologação ou Produção."}</p></div>
+      ${vs.length ? `<div class="vtimeline">${vs.map((v, i) => `<div class="vitem ${i === 0 ? "latest" : ""}"><div class="vdot"></div>
+          <div class="vbody"><div class="vtop">${vpill(v.version)} ${statusPill(v.status)} <span class="vkind">${esc(v.kindName)}</span>${i === 0 ? `<span class="tag">mais recente</span>` : ""}</div>
+            <div class="vmeta">${esc(fmt(v.created_at))} · ${esc(v.author_name)}${v.note ? ` · <span class="vnote">${esc(v.note)}</span>` : ""}</div></div>
+          <div class="vact"><a class="btn ghost xs" href="#/${pb.slug}/versoes/${v.id}">Ler</a>
+            <a class="btn ghost xs" href="#/${pb.slug}/versoes/${v.id}/comparar/${vs[i + 1] ? vs[i + 1].id : "atual"}" title="${vs[i + 1] ? "Comparar com a versão anterior" : "Comparar com a versão atual"}">Comparar</a>
+            ${can("editor") && i > 0 ? `<button class="btn ghost xs" data-restore="${v.id}" data-v="${esc(v.version)}">Restaurar</button>` : ""}</div></div>`).join("")}</div>`
+        : `<div class="empty">Ainda não há versões registradas. A primeira é criada na próxima gravação.</div>`}`;
+    el.querySelectorAll("[data-restore]").forEach(b => b.onclick = () => restore(pb, b.dataset.restore, b.dataset.v));
+  }
+
+  async function restore(pb, id, v) {
+    if (Editor.dirty) return toast("Salve ou descarte as alterações antes", "warn");
+    if (!confirm(`Restaurar o conteúdo da versão ${v}?\n\nDocumento, fluxograma e vínculos voltam ao daquela versão. O status atual (${pb.gov.status}) e o histórico são mantidos: a restauração vira uma nova versão.`)) return;
+    try {
+      const r = await api("POST", `api/pb/${pb.id}/versions/${id}/restore`, { rev: pb.rev });
+      replacePlaybook(r.playbook); toast(`Conteúdo da versão ${v} restaurado como versão ${r.version}`); location.hash = `#/${pb.slug}/versoes`;
+    } catch (e) { toast(e.message, "err"); }
+  }
+
+  /* leitura de uma versão: documentação completa, com o mesmo visual e o fluxograma interativo */
+  async function read(pb, el, id) {
+    el.innerHTML = `<div class="empty">Carregando versão…</div>`;
+    let d; try { d = await api("GET", `api/pb/${pb.id}/versions/${id}`); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+    const v = d.version, vp = d.playbook, g = vp.gov;
+    vp.slug = pb.slug;
+    const secs = vp.sections.filter(s => !/^Fluxograma/.test(s.title));
+    el.innerHTML = `<div class="ver-banner"><div>📜 Você está lendo a versão ${vpill(v.version)} ${statusPill(v.status)} de <b>${esc(fmt(v.created_at))}</b>, salva por <b>${esc(v.author_name)}</b> (${esc(v.kindName)}${v.note ? `: ${esc(v.note)}` : ""}). Não é necessariamente a versão em uso.</div>
+        <div class="ver-actions"><a class="btn ghost sm" href="#/${pb.slug}/versoes">← Histórico</a><a class="btn ghost sm" href="#/${pb.slug}/versoes/${v.id}/comparar/atual">Comparar com a atual</a>
+          <button class="btn ghost sm" id="vHtml" title="Baixa esta versão como HTML com o fluxograma">⤓ HTML</button><button class="btn ghost sm" id="vPrint">Imprimir / PDF</button>
+          ${can("editor") ? `<button class="btn primary sm" id="vRestore">Restaurar esta versão</button>` : ""}</div></div>
+      <article class="docview">
+        <header class="docview-head"><div class="dv-id">${esc(vp.id)} · versão ${esc(v.version)}</div><h1>${esc(vp.name)}</h1><div class="muted">${esc(vp.byline)}</div>
+          <div class="gov dv-gov"><div><span>Status na versão</span><b>${esc(g.status)}</b></div><div><span>Aprovador</span><b>${esc(g.approver || "—")}</b></div>
+            <div><span>Último revisor</span><b>${esc(g.reviewer || "—")}</b></div><div><span>Data de revisão</span><b>${esc(g.reviewed || "—")}</b></div>
+            <div><span>Owner</span><b>${esc(vp.props["Owner do documento"] || "—")}</b></div><div><span>Template</span><b>${esc(vp.templateName || "—")}</b></div></div></header>
+        <div class="docgrid"><nav class="toc"><a href="#" data-go="vfluxo">Fluxograma</a>${secs.map(s => `<a href="#" data-go="vsec-${s.id}">${esc(s.title)}</a>`).join("")}</nav>
+          <div class="doc"><section id="vfluxo" class="md"><h2>Fluxograma</h2><p class="muted small">Clique em uma caixa para ler o trecho desta versão da documentação.</p><div class="flowbox viewer dv-flow" id="vflow"></div></section>
+            ${secs.map(s => `<section id="vsec-${s.id}" class="md"><h2>${esc(s.title)}</h2>${s.html}${s.subs.map(x => `<h3>${esc(x.title)}</h3>${x.html}`).join("")}</section>`).join("")}</div></div>
+      </article>`;
+    if (vp.flow.nodes.length) {
+      const live = n => (vp.refs[n.id] || []).length || n.team;
+      const { svg, vb } = Flow.svg(vp.flow, { badges: badgesFor(vp), nodeClass: n => live(n) ? "" : "static" });
+      const box = $("#vflow", el);
+      box.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb.join(" ")}" width="${vb[2]}" height="${vb[3]}">${svg}</svg>`;
+      const sv = $("svg", box); const fit = () => { const z = Math.min(1.2, (box.clientWidth - 4) / vb[2]); sv.setAttribute("width", vb[2] * z); sv.setAttribute("height", vb[3] * z); }; fit();
+      sv.addEventListener("click", e => {
+        const node = e.target.closest(".node"); if (!node || node.classList.contains("static")) return;
+        if (node.dataset.team) return showTeam(vp, node.dataset.team);
+        const n = vp.flow.nodes.find(x => x.id === node.dataset.node);
+        showRefs(vp, vp.refs[n.id], esc((n.lines || []).map(l => l.t).join(" ")), false);
+      });
+    } else $("#vflow", el).innerHTML = `<div class="empty">Esta versão não tem fluxograma.</div>`;
+    useTeams(vp); linkify(el.querySelector(".docview .doc"), vp);
+    el.querySelector(".docview .toc").onclick = e => { const a = e.target.closest("[data-go]"); if (!a) return; e.preventDefault(); document.getElementById(a.dataset.go).scrollIntoView({ block: "start" }); };
+    const named = Object.assign({}, vp, { folder: `${(pb.folder || pb.id)}-v${v.version}` });
+    $("#vHtml", el).onclick = () => Exporter.html(named);
+    $("#vPrint", el).onclick = () => Exporter.print(named);
+    if ($("#vRestore", el)) $("#vRestore", el).onclick = () => restore(pb, v.id, v.version);
+  }
+
+  /* comparação: linhas do documento e itens do fluxograma acrescentados (+) e removidos (−) */
+  async function compare(pb, el, id, other) {
+    el.innerHTML = `<div class="empty">Comparando…</div>`;
+    let d, vs;
+    try { [d, vs] = await Promise.all([api("GET", `api/pb/${pb.id}/versions/${id}/diff?with=${encodeURIComponent(other || "atual")}`), api("GET", `api/pb/${pb.id}/versions`)]); }
+    catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+    const opt = sel => `<option value="atual" ${sel === "atual" ? "selected" : ""}>Atual (${esc(vs.current)})</option>` +
+      vs.versions.map(v => `<option value="${v.id}" ${String(v.id) === String(sel) ? "selected" : ""}>${esc(v.version)} · ${esc(fmt(v.created_at))} · ${esc(v.kindName)}</option>`).join("");
+    const CTX = 3, rows = [];
+    let eqRun = [];
+    const flushEq = last => {
+      if (eqRun.length > CTX * 2 + 1 || (last && eqRun.length > CTX)) {
+        const head = rows.length ? eqRun.slice(0, CTX) : [], tail = last ? [] : eqRun.slice(-CTX);
+        head.forEach(x => rows.push(["eq", x])); rows.push(["gap", eqRun.length - head.length - tail.length]); tail.forEach(x => rows.push(["eq", x]));
+      } else eqRun.forEach(x => rows.push(["eq", x]));
+      eqRun = [];
+    };
+    for (const o of d.doc) { if (o.t === "eq") eqRun.push(o.text); else { flushEq(false); rows.push([o.t, o.text]); } }
+    flushEq(true);
+    const line = ([t, x]) => t === "gap" ? `<div class="dl gap">⋯ ${x} linha(s) iguais</div>` : `<div class="dl ${t}"><span class="sg">${t === "add" ? "+" : t === "del" ? "−" : " "}</span>${esc(x) || "&nbsp;"}</div>`;
+    el.innerHTML = `<div class="ver-banner"><div>Comparando ${vpill(d.from.version)} → ${vpill(d.to.version)}
+        <span class="dstat"><b class="add">+${d.stats.added}</b> <b class="del">−${d.stats.removed}</b> linhas no documento · ${d.stats.flowChanges} mudança(s) no fluxograma</span></div>
+        <div class="ver-actions"><a class="btn ghost sm" href="#/${pb.slug}/versoes">← Histórico</a></div></div>
+      <div class="cmp-pick"><label>Versão<select class="in" id="cA">${opt(String(id))}</select></label><span>×</span><label>Comparar com<select class="in" id="cB">${opt(other || "atual")}</select></label></div>
+      <div class="ecard"><div class="ecard-h"><b>Fluxograma</b><span class="muted small">caixas e setas (posição não conta)</span></div>
+        ${d.flow.length ? `<div class="difflines">${d.flow.map(o => line([o.t, o.text])).join("")}</div>` : `<p class="muted">Sem mudanças no fluxograma.</p>`}</div>
+      <div class="ecard"><div class="ecard-h"><b>Documento</b><span class="muted small">Markdown, linha a linha</span></div>
+        ${d.stats.added || d.stats.removed ? `<div class="difflines">${rows.map(line).join("")}</div>` : `<p class="muted">Sem mudanças no documento.</p>`}</div>`;
+    const go = () => { const a = $("#cA", el).value, b = $("#cB", el).value;
+      if (a === "atual" && b === "atual") return;
+      location.hash = a === "atual" ? `#/${pb.slug}/versoes/${b}/comparar/atual` : `#/${pb.slug}/versoes/${a}/comparar/${b}`; };
+    $("#cA", el).onchange = go; $("#cB", el).onchange = go;
+  }
+
+  return {
+    render: (pb, el, id, rest) => !id ? list(pb, el) : rest[0] === "comparar" ? compare(pb, el, id, rest[1]) : read(pb, el, id),
+  };
 })();
 
 /* ───────── importar ───────── */
