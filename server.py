@@ -56,7 +56,8 @@ STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".ico": "image/x-icon", ".woff2": "font/woff2"}
 
-DEFAULT_BRAND = {"name": "Medusa Docs", "color": "#3B5BDB", "homeTitle": "Playbooks de resposta a incidentes",
+LOGO_BGS = ("white", "transparent")       # fundo atrás da logo no topo: branco (legível em qualquer cor) ou transparente
+DEFAULT_BRAND = {"name": "Medusa Docs", "color": "#3B5BDB", "logoBg": "white", "homeTitle": "Playbooks de resposta a incidentes",
                  "homeSubtitle": "Base interativa dos playbooks do time de segurança. Escolha um playbook, navegue pelo fluxograma e clique "
                                  "em qualquer caixa, ramo (R1…), passo (T0, A3…) ou time para ler o trecho da documentação."}
 LOGO_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/svg+xml": ".svg", "image/webp": ".webp"}
@@ -883,8 +884,10 @@ def r_brand_put(h, **_):
     title = " ".join(str(b.get("homeTitle") or cur["homeTitle"]).split())[:120] or DEFAULT_BRAND["homeTitle"]
     sub = " ".join(str(b.get("homeSubtitle", cur["homeSubtitle"]) or "").split())[:600]
     if b.get("homeReset"): title, sub = DEFAULT_BRAND["homeTitle"], DEFAULT_BRAND["homeSubtitle"]
-    open_db().set_setting("branding", {"name": name, "color": color, "homeTitle": title, "homeSubtitle": sub}, by=u["login"])
-    audit(u["login"], "marca_alterada", nome=name, cor=color, titulo_inicio=title)
+    logo_bg = str(b.get("logoBg", cur["logoBg"]))
+    if logo_bg not in LOGO_BGS: raise HttpError(400, "Fundo da logo inválido: use branco ou transparente")
+    open_db().set_setting("branding", {"name": name, "color": color, "logoBg": logo_bg, "homeTitle": title, "homeSubtitle": sub}, by=u["login"])
+    audit(u["login"], "marca_alterada", nome=name, cor=color, fundo_logo=logo_bg, titulo_inicio=title)
     r_brand_get(h)
 
 def r_logo_put(h, **_):

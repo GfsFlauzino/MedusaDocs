@@ -57,7 +57,7 @@ function toast(msg, kind = "ok") {
 
 /* ───────── marca (nome, cor, logo) e tema ───────── */
 const Brand = (() => {
-  const DEFAULT = { name: "Medusa Docs", color: "#3B5BDB", logo: null, homeTitle: "Playbooks de resposta a incidentes", homeSubtitle: "" };
+  const DEFAULT = { name: "Medusa Docs", color: "#3B5BDB", logo: null, logoBg: "white", homeTitle: "Playbooks de resposta a incidentes", homeSubtitle: "" };
   let cur = { ...DEFAULT };
   const clamp = v => Math.max(0, Math.min(255, Math.round(v)));
   const hexToRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
@@ -96,7 +96,7 @@ const Brand = (() => {
     document.title = b.name;
     $("#brandName").textContent = b.name;
     const mark = $("#brandMark");
-    mark.className = "brand-mark " + (b.logo ? "has-logo" : "default");
+    mark.className = "brand-mark " + (b.logo ? "has-logo" + (b.logoBg === "transparent" ? " logo-clear" : "") : "default");
     mark.innerHTML = b.logo ? `<img src="api/branding/logo?v=${encodeURIComponent(b.logo)}" alt="">` : "";
     document.querySelectorAll(".login-brand .bname").forEach(n => n.textContent = b.name);
     return vars;
@@ -902,6 +902,7 @@ const Admin = (() => {
     const card = (title, sub, body, foot) => `<section class="ecard ap-card"><header class="ap-h"><b>${title}</b><small>${sub}</small></header>
       <div class="ap-body">${body}</div><footer class="ap-foot">${foot}</footer></section>`;
     const logoImg = b.logo ? `<img src="api/branding/logo?v=${esc(b.logo)}" alt="">` : "";
+    const clear = b.logoBg === "transparent";
     el.innerHTML = `<div class="appearance">
       ${card("Identidade", "Nome e cor primária da ferramenta", `
         <label>Nome exibido no topo, no login e na aba do navegador<input class="in" id="apName" maxlength="40" value="${esc(st.name)}"></label>
@@ -919,8 +920,13 @@ const Admin = (() => {
         <div class="err" id="aperr" hidden></div>`,
         `<button class="btn ghost" id="apReset">Restaurar padrão</button><button class="btn primary" id="apSave">Salvar identidade</button>`)}
       ${card("Logo", "Aparece no topo, ao lado do nome", `
-        <div class="logo-cur"><div class="lg">${logoImg || `<span class="muted small">sem logo</span>`}</div>
+        <div class="logo-cur"><div class="lg ${clear ? "clear" : ""}" id="lgBox" title="${clear ? "O quadriculado indica as áreas transparentes" : ""}">${logoImg || `<span class="muted small">sem logo</span>`}</div>
           <div class="small muted">PNG, JPG, SVG ou WEBP até 512 KB, de preferência com fundo transparente. A logo se ajusta sozinha à altura do topo.</div></div>
+        <div class="pp-lbl">Fundo da logo no topo</div>
+        <div class="bg-opts" role="radiogroup" aria-label="Fundo da logo">
+          <label class="bg-opt"><input type="radio" name="logoBg" value="white" ${clear ? "" : "checked"}><span><b>Branco</b><small>Caixa branca atrás da logo: legível com qualquer cor primária. Bom para logos escuras.</small></span></label>
+          <label class="bg-opt"><input type="radio" name="logoBg" value="transparent" ${clear ? "checked" : ""}><span><b>Transparente</b><small>A logo fica direto sobre a faixa colorida. Bom para logos claras ou brancas em PNG/SVG transparente.</small></span></label>
+        </div>
         <label class="logo-drop" id="lgDrop"><span>Arraste a imagem aqui ou clique para escolher</span><input type="file" id="lgFile" accept="image/png,image/jpeg,image/svg+xml,image/webp" hidden></label>`,
         `<button class="btn ghost" id="lgDel" ${b.logo ? "" : "disabled"}>Remover logo</button><button class="btn primary" id="lgPick">Enviar logo</button>`)}
       ${card("Página inicial", "Título e subtítulo do topo da página inicial", `
@@ -931,7 +937,7 @@ const Admin = (() => {
         `<button class="btn ghost" id="hmReset">Texto padrão</button><button class="btn primary" id="hmSave">Salvar página inicial</button>`)}
       ${card("Prévia", "Como fica, inclusive o que ainda não foi salvo", `
         <div class="preview-box">
-          <div class="preview-top" style="background:var(--brand-grad);color:var(--on-brand)"><span class="brand-mark ${b.logo ? "has-logo" : "default"}">${logoImg}</span><span id="pvName">${esc(st.name)}</span></div>
+          <div class="preview-top" style="background:var(--brand-grad);color:var(--on-brand)"><span class="brand-mark ${b.logo ? "has-logo" + (clear ? " logo-clear" : "") : "default"}" id="pvMark">${logoImg}</span><span id="pvName">${esc(st.name)}</span></div>
           <div class="preview-hero"><b id="pvTitle"></b><p id="pvSub"></p></div>
           <div class="preview-body"><button class="btn primary sm" type="button">Botão</button><span class="status prd">Produção</span><button class="ref step" type="button">T0</button><span class="chip">chip</span></div></div>`,
         `<span class="muted small">Cada cartão tem o próprio botão de salvar.</span>`)}
@@ -987,6 +993,14 @@ const Admin = (() => {
       };
       rd.readAsDataURL(file);
     };
+    /* fundo da logo: vale na hora (topo, prévia e quadro) e é salvo para todos */
+    el.querySelectorAll("input[name=logoBg]").forEach(r => r.onchange = async () => {
+      const v = r.value, isClear = v === "transparent";
+      $("#lgBox", el).classList.toggle("clear", isClear);
+      $("#pvMark", el).classList.toggle("logo-clear", isClear && !!b.logo);
+      try { Brand.apply(await api("PUT", "api/branding", { logoBg: v })); toast(isClear ? "Logo com fundo transparente" : "Logo com fundo branco"); }
+      catch (x) { toast(x.message, "err"); appearance(el); }
+    });
     $("#lgFile", el).onchange = e => upload(e.target.files[0]);
     $("#lgPick", el).onclick = () => $("#lgFile", el).click();
     const drop = $("#lgDrop", el);

@@ -51,7 +51,7 @@ exibida uma única vez, e precisa trocá-la no primeiro acesso.
 - **Tema claro/escuro** no topo.
 - **📖 Docs** ao lado do perfil: documentação da plataforma (uso, edição, ramos, templates, administração, operação), filtrada pelo perfil. Conteúdo em `docs.js`.
 - **Página inicial** em **cartões**, **lista grande** ou **lista pequena** (escolha salva por usuário).
-- **Aparência** (só administrador), em quatro cartões: Identidade (nome e cor primária: seletor, `#RRGGBB` ou R/G/B), Logo (PNG, JPG, SVG ou WEBP até 512 KB), Página inicial (título e subtítulo) e Prévia. As cores do fluxograma não mudam: fazem parte do modelo dos playbooks.
+- **Aparência** (só administrador), em quatro cartões: Identidade (nome e cor primária: seletor, `#RRGGBB` ou R/G/B), Logo (PNG, JPG, SVG ou WEBP até 512 KB, com fundo branco ou transparente no topo), Página inicial (título e subtítulo) e Prévia. As cores do fluxograma não mudam: fazem parte do modelo dos playbooks.
 - **Resetar aplicação** (só administrador, botão no topo da Administração): volta ao estado de recém-instalada, com confirmação digitando `RESETAR`. Opcionalmente restaura configurações, remove os demais usuários e apaga a auditoria. Tudo vai para `data/lixeira/reset__<data-hora>/`, com cópia do banco e um `LEIA-ME.txt` de como voltar.
 
 ## Perfis

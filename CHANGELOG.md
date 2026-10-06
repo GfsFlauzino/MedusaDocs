@@ -1,5 +1,12 @@
 # Changelog
 
+## Não lançado
+
+### Novidades
+- **Fundo da logo** (Administração → Aparência → Logo): **branco** (padrão, como antes) ou **transparente**. Com
+  transparente, logos PNG/SVG sem fundo ficam direto sobre a faixa colorida do topo; o quadro da logo atual mostra as
+  áreas transparentes com um quadriculado.
+
 ## 2.1.0 — 2026-10-05
 
 ### Novidades

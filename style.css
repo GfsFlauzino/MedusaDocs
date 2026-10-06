@@ -460,6 +460,8 @@ body.viewer-role .tabs a.edit{display:none}
    (max-width/max-height em % dentro de uma caixa de largura automática não têm referência e não encolhem a imagem) */
 .brand-mark.has-logo{background:#fff;padding:3px;width:auto;min-width:30px;max-width:132px;display:flex;align-items:center;justify-content:center}
 .brand-mark.has-logo img{display:block;height:24px;width:auto;max-width:126px;object-fit:contain}
+.brand-mark.has-logo.logo-clear{background:transparent;padding:0;border-radius:0}
+.brand-mark.has-logo.logo-clear img{height:30px;max-width:132px}
 .search{margin-left:auto}
 .theme-tgl{position:relative;width:52px;height:28px;border-radius:999px;border:0;background:rgba(0,0,0,.22);color:var(--on-brand);padding:0;flex:none}
 .theme-tgl span{position:absolute;top:50%;transform:translateY(-50%);font-size:13px;opacity:.75}
@@ -541,6 +543,14 @@ body.auth .top .search,body.auth .top #usermenu{visibility:hidden}
 .logo-drop:hover,.logo-drop.over{border-color:var(--brand);color:var(--brand-ink)}
 .logo-cur{display:flex;align-items:center;gap:14px;margin-top:14px}
 .logo-cur .lg{width:88px;height:88px;flex:none;border-radius:12px;background:#fff;border:1px solid var(--line);display:grid;place-items:center;padding:8px}
+/* transparente: quadriculado mostra as áreas sem fundo */
+.logo-cur .lg.clear{background:repeating-conic-gradient(#d9d9de 0% 25%,#fff 0% 50%) 50%/14px 14px}
+.bg-opts{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+@media (max-width:520px){.bg-opts{grid-template-columns:1fr}}
+.bg-opt{display:flex;gap:8px;align-items:flex-start;margin:0;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--text);font-weight:400;cursor:pointer}
+.bg-opt:has(input:checked){border-color:var(--brand);box-shadow:0 0 0 1px var(--brand)}
+.bg-opt input{margin-top:3px;accent-color:var(--brand)}
+.bg-opt b{display:block;font-size:13.5px}.bg-opt small{display:block;color:var(--muted);font-size:12px;line-height:1.4;margin-top:2px}
 .logo-cur img{display:block;width:100%;height:100%;object-fit:contain}
 .contrast{font-size:12px;margin-top:6px}
 .contrast.bad{color:var(--warn)}
