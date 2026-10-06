@@ -150,12 +150,12 @@ Tudo fica no volume `medusa-data`, montado em `/data` no container:
 
 | Caminho no volume | Conteúdo |
 | --- | --- |
-| `playbooks/` | `.md` e `.drawio` de cada playbook |
+| `playbooks/` | `.md` e `.drawio` de cada playbook, e as imagens do documento em `imagens/` |
 | `templates/` | Templates, com os times e tags de cada um |
 | `mappings.json` | Vínculos das caixas do fluxograma com o documento |
 | `data/playbooks.db` | Banco SQLite: usuários, sessões, auditoria, configurações e histórico de versões dos playbooks |
 | `data/logs/` | Auditoria em JSON Lines (se ligado em Administração → Logs) |
-| `data/lixeira/` | Playbooks e templates excluídos |
+| `data/lixeira/` | Playbooks e templates excluídos e o conteúdo de cada **Resetar aplicação** (`reset__…`, com cópia do banco) |
 | `.backups/` | Versão anterior de cada arquivo, a cada gravação |
 
 Recriar ou atualizar o container **não apaga** o volume. Só `docker compose down -v` o apaga.
@@ -259,6 +259,7 @@ docker logs medusa-docs
 | Log diz "exposto na rede sem --secure-cookies" | Aviso normal dentro do container (ele escuta em `0.0.0.0`). Proteja com `MEDUSA_BIND=127.0.0.1` e proxy HTTPS |
 | Login pelo SSO volta com erro | A mensagem aparece na tela de login; o detalhe fica na auditoria (`sso_falhou`). Confira a URL de redirecionamento cadastrada no provedor, a URL pública e se o container alcança o provedor |
 | Todos os acessos aparecem com o mesmo IP | Defina `MEDUSA_TRUST_PROXY=1` (só com proxy reverso na frente) |
+| Resetei a aplicação sem querer | Pare o container e siga o `LEIA-ME.txt` em `/data/data/lixeira/reset__<data-hora>/`: copie `playbooks/`, `templates/`, `mappings.json` e `.backups/` de volta para `/data` e `playbooks.db` para `/data/data/`, depois `docker compose start` |
 | Conta bloqueada | 5 senhas erradas bloqueiam por 5 minutos. Aguarde ou peça a um administrador para redefinir a senha |
 
 ## Segurança da imagem

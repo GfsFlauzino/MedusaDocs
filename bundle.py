@@ -16,6 +16,9 @@
   ```mermaid
   ...
   ```
+  <!-- medusa:images                    imagens do documento (opcional), em JSON: {"img-….png": "data:image/png;base64,…"}
+  {...}
+  -->
 
 Abre em qualquer visualizador de Markdown; GitHub, GitLab e Confluence (macro Mermaid) desenham o fluxo.
 Um .md comum (sem fluxo) também é aceito na importação.
@@ -27,7 +30,7 @@ import flowdsl
 import pbcore as core
 
 FORMAT, VERSION = "medusa-playbook", 1
-MAX_SIZE = 2 * 1024 * 1024
+MAX_SIZE = 6 * 1024 * 1024
 
 
 class BundleError(ValueError):
@@ -41,7 +44,7 @@ def referenced_teams(view, teams):
     return {n: teams[n] for n in sorted(names) if n in teams}
 
 
-def export(view, teams, user_name, app_name):
+def export(view, teams, user_name, app_name, images=None):
     g = view["gov"]
     fm = {"format": FORMAT, "version": VERSION, "id": view["id"], "name": view["name"],
           "status_origem": g["status"], "aprovador_origem": g.get("approver") or "",
@@ -50,12 +53,13 @@ def export(view, teams, user_name, app_name):
     md = core.doc_to_md(view["doc"])
     tm = json.dumps(referenced_teams(view, teams), ensure_ascii=False, indent=2).replace("-->", "-- >")
     flow = flowdsl.render(view["flow"], view["refs"])
-    return f"{front}{md}\n<!-- medusa:teams\n{tm}\n-->\n\n<!-- medusa:flow -->\n```mermaid\n{flow}```\n"
+    imgs = f"\n<!-- medusa:images\n{json.dumps(images, indent=0)}\n-->\n" if images else ""
+    return f"{front}{md}\n<!-- medusa:teams\n{tm}\n-->\n\n<!-- medusa:flow -->\n```mermaid\n{flow}```\n{imgs}"
 
 
 def parse(text, teams):
     """Lê um .medusa.md (ou .md comum). Não grava nada: devolve o que seria importado."""
-    if len(text.encode("utf-8")) > MAX_SIZE: raise BundleError("Arquivo grande demais (máx. 2 MB)")
+    if len(text.encode("utf-8")) > MAX_SIZE: raise BundleError(f"Arquivo grande demais (máx. {MAX_SIZE // 1024 // 1024} MB)")
     text = text.replace("\r\n", "\n").lstrip("﻿")
     meta, warns = {}, []
     m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
@@ -66,6 +70,16 @@ def parse(text, teams):
         text = text[m.end():]
         if meta.get("format") not in (None, FORMAT, "medusa-template"): warns.append(f"Formato \"{meta.get('format')}\" desconhecido; tentando importar mesmo assim.")
         if str(meta.get("version", "1")) not in ("1",): warns.append(f"Versão {meta.get('version')} do formato; esta ferramenta lê a versão 1.")
+    # imagens (data URLs; o servidor confere tipo, tamanho e nome antes de gravar)
+    images = {}
+    im = re.search(r"<!--\s*medusa:images\s*\n(.*?)\n-->", text, re.S)
+    if im:
+        try:
+            raw = json.loads(im.group(1))
+            if isinstance(raw, dict): images = {str(k)[:80]: str(v) for k, v in list(raw.items())[:200]}
+        except ValueError:
+            warns.append("Bloco de imagens ilegível; ignorado.")
+        text = text[:im.start()] + text[im.end():]
     # times
     team_defs = {}
     tm = re.search(r"<!--\s*medusa:teams\s*\n(.*?)\n-->", text, re.S)
@@ -119,4 +133,4 @@ def parse(text, teams):
                          "never": [str(x)[:300] for x in d.get("never", [])][:30] if isinstance(d.get("never"), list) else [],
                          "category": cat}
     return {"meta": meta, "id": pid, "name": name, "doc": doc, "flow": flow, "refs": refs, "createTeams": create, "warnings": warns,
-            "teamDefs": team_defs}
+            "teamDefs": team_defs, "images": images}

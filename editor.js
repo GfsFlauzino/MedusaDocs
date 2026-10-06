@@ -34,6 +34,8 @@ const Editor = (() => {
     saveDoc: (doc, rev) => api("PUT", `api/pb/${pb.id}/doc`, { doc, rev }).then(E.withSync),
     saveFlow: (flow, refs, rev) => api("PUT", `api/pb/${pb.id}/flow`, { flow, refs, rev }).then(E.withSync),
     reload: () => api("GET", `api/pb/${pb.id}`).then(r => r.playbook),
+    uploadImage: dataUrl => api("POST", `api/pb/${pb.id}/img`, { dataUrl }),
+    imgUrl: src => `api/pb/${pb.id}/img/${String(src).replace(/^imagens\//, "")}`,
     teams: pb.teams || {}, tplKey: pb.templateKey,
     after: v => { replacePlaybook(v); updateHeader(v); renderNav(); },
     banner: prodBanner(pb), fileBase: pb.id.toLowerCase(),
@@ -70,7 +72,8 @@ const Editor = (() => {
   const markDirty = (bar) => { E.dirty = true; if (bar) bar.classList.add("dirty"); };
 
   /* ═════════════════════════ DOCUMENTO ═════════════════════════ */
-  const BLOCK_NAMES = { p: "Parágrafo", ul: "Lista", table: "Tabela", quote: "Destaque" };
+  const BLOCK_NAMES = { p: "Parágrafo", ul: "Lista", table: "Tabela", quote: "Destaque", img: "Imagem" };
+  const IMG_OK = ["image/png", "image/jpeg", "image/webp", "image/gif"], IMG_MAX = 3 * 1024 * 1024;
   const newBlock = t => t === "table" ? { t, head: ["Coluna 1", "Coluna 2"], rows: [["", ""]] } : t === "ul" ? { t, items: [""] } : { t, text: "" };
 
   E.docEditor = (el, pb, mkAd) => {
@@ -96,7 +99,10 @@ const Editor = (() => {
       const govSec = /^Propriedades/.test(ownerOf(owner).title || "");
       const locked = ri => govSec && GOV_ROWS.includes(normTxt((b.rows[ri] || [])[0]));
       const mitreRow = ri => govSec && normTxt((b.rows[ri] || [])[0]).startsWith("tatica mitre") && !/\{\{/.test((b.rows[ri] || [])[1] || "");
-      if (b.t === "p" || b.t === "quote")
+      if (b.t === "img")
+        body = `<figure class="ed-img">${ad.imgUrl ? `<img src="${esc(ad.imgUrl(b.src))}" alt="">` : `<div class="ed-img-missing">Imagem não disponível neste editor</div>`}
+          <figcaption><input class="in" data-f="alt" value="${esc(b.alt || "")}" maxlength="300" placeholder="Legenda (opcional): aparece abaixo da imagem"></figcaption></figure>`;
+      else if (b.t === "p" || b.t === "quote")
         body = `<textarea class="ta ${b.t === "quote" ? "quote" : ""}" data-f="text" rows="1" placeholder="${b.t === "quote" ? "Texto em destaque" : "Escreva o parágrafo…"}">${esc(b.text)}</textarea>`;
       else if (b.t === "ul")
         body = `<ul class="ed-list">${b.items.map((it, i) => {
@@ -121,7 +127,8 @@ const Editor = (() => {
       let extra = "";
       if (ctx === "ramos") extra = `<button class="btn soft xs" data-act="ramo-add" data-o="${owner}">＋ Novo ramo</button><small class="muted sync-hint" title="Ao salvar, ramos criados, renomeados ou removidos aqui são aplicados no fluxograma e na aba Ramos">⇄ sincroniza com o fluxograma</small>`;
       if (ctx === "fases") extra = `<button class="btn soft xs" data-act="fase-add" data-o="${owner}">＋ Nova fase</button>`;
-      return `<div class="addbar" data-o="${owner}"><span>Adicionar:</span>${Object.entries(BLOCK_NAMES).map(([t, n]) => `<button class="btn ghost xs" data-act="blk-add" data-t="${t}" data-o="${owner}">＋ ${n}</button>`).join("")}
+      return `<div class="addbar" data-o="${owner}"><span>Adicionar:</span>${Object.entries(BLOCK_NAMES).filter(([t]) => t !== "img").map(([t, n]) => `<button class="btn ghost xs" data-act="blk-add" data-t="${t}" data-o="${owner}">＋ ${n}</button>`).join("")}
+        ${ad.uploadImage ? `<button class="btn ghost xs" data-act="img-add" data-o="${owner}" title="PNG, JPG, WEBP ou GIF até 3 MB. Também dá para colar (Ctrl+V) ou arrastar a imagem para a seção">＋ Imagem</button>` : ""}
         ${ctx !== "sub" ? `<button class="btn ghost xs" data-act="sub-add" data-o="${owner}">＋ Subseção</button>` : ""}${extra}</div>`;
     }
 
@@ -167,7 +174,7 @@ const Editor = (() => {
         k = PROTO;
       } else k = nextRamo(keys);
       const proto = doc.sections.flatMap(x => x.subs).find(u => RAMO_SUB.test(u.title.trim()));
-      const blocks = proto ? clone(proto.blocks).map(b => b.t === "table" ? { ...b, rows: b.rows.map(r => [r[0]].concat(r.slice(1).map(() => ""))) } : b.t === "ul" ? { ...b, items: [""] } : { ...b, text: "" })
+      const blocks = proto ? clone(proto.blocks).filter(b => b.t !== "img").map(b => b.t === "table" ? { ...b, rows: b.rows.map(r => [r[0]].concat(r.slice(1).map(() => ""))) } : b.t === "ul" ? { ...b, items: [""] } : { ...b, text: "" })
         : [{ t: "table", head: ["Item", "Conteúdo"], rows: RAMO_ROWS.map(x => [x, ""]) }];
       if (k === PROTO) blocks.forEach(b => { if (b.t === "table") b.rows.forEach(r => { if (normTxt(r[0]).startsWith("e sucesso quando")) r[1] = "{{ramo.pergunta}}"; }); });
       sec.subs.push({ title: `R${k} · ${k === PROTO ? "{{ramo.nome}}" : "Novo ramo"}`, blocks });
@@ -218,6 +225,7 @@ const Editor = (() => {
           break;
         }
         case "blk-add": ownerOf(owner).blocks.push(newBlock(btn.dataset.t)); break;
+        case "img-add": return pickImage(owner, ownerOf(owner).blocks.length);
         case "blk-up": swap(ownerOf(owner).blocks, k, k - 1); break;
         case "blk-down": swap(ownerOf(owner).blocks, k, k + 1); break;
         case "blk-del": if (!confirm("Remover este bloco?")) return; ownerOf(owner).blocks.splice(k, 1); break;
@@ -254,6 +262,7 @@ const Editor = (() => {
       else {
         const blk = t.closest(".blk"), b = blockOf(blk.dataset.o, blk.dataset.k);
         if (f === "text") b.text = t.value;
+        else if (f === "alt") b.alt = t.value.replace(/\n/g, " ");
         else if (f === "item") { const i = +t.dataset.i, m = b.items[i].match(/^\[( |x)\] /); b.items[i] = (m ? m[0] : "") + t.value.replace(/\n/g, " "); }
         else if (f === "head") b.head[+t.dataset.c] = t.value.replace(/\n/g, " ");
         else if (f === "cell") b.rows[+t.dataset.r][+t.dataset.c] = t.value.replace(/\n/g, " ");
@@ -271,6 +280,37 @@ const Editor = (() => {
       t.value = v.slice(0, a) + out + v.slice(b);
       t.setSelectionRange(a, a + out.length); t.focus();
       onInput({ target: t });
+    }
+
+    /* imagens: vão para o servidor na hora (pasta imagens/ do playbook); o bloco entra no documento e é gravado ao salvar */
+    async function addImages(files, owner, at) {
+      files = [...files].filter(f => f && f.type.startsWith("image/"));
+      if (!files.length || !ad.uploadImage) return;
+      let n = 0;
+      for (const f of files) {
+        if (!IMG_OK.includes(f.type)) { toast(`${f.name || "Imagem"}: use PNG, JPG, WEBP ou GIF`, "err"); continue; }
+        if (f.size > IMG_MAX) { toast(`${f.name || "Imagem"} grande demais (máx. 3 MB)`, "err"); continue; }
+        toast("Enviando imagem…");
+        try {
+          const dataUrl = await new Promise((ok, bad) => { const rd = new FileReader(); rd.onload = () => ok(rd.result); rd.onerror = bad; rd.readAsDataURL(f); });
+          const r = await ad.uploadImage(dataUrl);
+          ownerOf(owner).blocks.splice(at + n, 0, { t: "img", src: r.src, alt: "" }); n++;
+        } catch (e) { toast(e.message || "Falha ao enviar a imagem", "err"); }
+      }
+      if (n) { markDirty($("#edbar")); render(); toast(n > 1 ? `${n} imagens adicionadas` : "Imagem adicionada: escreva a legenda se quiser e salve o documento"); }
+    }
+    function pickImage(owner, at) {
+      const inp = document.createElement("input");
+      inp.type = "file"; inp.accept = IMG_OK.join(","); inp.multiple = true;
+      inp.onchange = () => addImages(inp.files, owner, at);
+      inp.click();
+    }
+    /* onde entra a imagem colada ou solta: logo depois do bloco em foco, ou no fim da seção/subseção */
+    function dropTarget(node) {
+      const blk = node && node.closest && node.closest(".blk");
+      if (blk) return [blk.dataset.o, +blk.dataset.k + 1];
+      const box = node && node.closest && node.closest(".sub[data-o], .ecard.sec[data-o]");
+      return box ? [box.dataset.o, ownerOf(box.dataset.o).blocks.length] : null;
     }
 
     async function save() {
@@ -296,6 +336,26 @@ const Editor = (() => {
       if (btn && btn.dataset.act !== "li-toggle") act(btn);
     }, sig);
     el.addEventListener("change", e => { if (e.target.dataset.act === "li-toggle") act(e.target); }, sig);
+    if (ad.uploadImage) {
+      el.addEventListener("paste", e => {
+        const files = [...(e.clipboardData ? e.clipboardData.files : [])].filter(f => f.type.startsWith("image/"));
+        const tg = dropTarget(e.target);
+        if (!files.length || !tg) return;
+        e.preventDefault(); addImages(files, ...tg);
+      }, sig);
+      el.addEventListener("dragover", e => {
+        if (![...(e.dataTransfer.items || [])].some(i => i.kind === "file")) return;
+        const box = e.target.closest(".sub[data-o], .ecard.sec[data-o]"); if (!box) return;
+        e.preventDefault(); el.querySelectorAll(".img-over").forEach(x => x !== box && x.classList.remove("img-over")); box.classList.add("img-over");
+      }, sig);
+      el.addEventListener("dragleave", e => { const box = e.target.closest(".img-over"); if (box && !box.contains(e.relatedTarget)) box.classList.remove("img-over"); }, sig);
+      el.addEventListener("drop", e => {
+        el.querySelectorAll(".img-over").forEach(x => x.classList.remove("img-over"));
+        const tg = dropTarget(e.target);
+        if (!tg || !e.dataTransfer.files.length) return;
+        e.preventDefault(); addImages(e.dataTransfer.files, ...tg);
+      }, sig);
+    }
     const key = e => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b" && document.activeElement.tagName === "TEXTAREA") { e.preventDefault(); bold(); }

@@ -354,6 +354,38 @@ class Store:
         with self._db() as c:
             c.execute("UPDATE pb_versions SET pid = ? WHERE pid = ?", (f"{pid}#{suffix}", pid))
 
+    def count_all_versions(self):
+        with self._db() as c:
+            return c.execute("SELECT COUNT(*) FROM pb_versions").fetchone()[0]
+
+    def count_audit(self):
+        with self._db() as c:
+            return c.execute("SELECT COUNT(*) FROM audit").fetchone()[0]
+
+    # ── reset da aplicação
+    def backup_to(self, path):
+        """Cópia consistente do banco (API de backup do SQLite), mesmo com o servidor em uso."""
+        dst = sqlite3.connect(path)
+        try:
+            with self._db() as c: c.backup(dst)
+        finally:
+            dst.close()
+        os.chmod(path, 0o600)
+
+    def reset(self, keep_login, settings=False, users=False, audit=False):
+        """Apaga o histórico de versões e os vínculos playbook→template; opcionalmente configurações
+        (aparência, logs, SSO), os demais usuários e a auditoria. Quem fez o reset continua com a sessão."""
+        with self._tx() as c:
+            c.execute("DELETE FROM pb_versions")
+            c.execute("DELETE FROM sso_states")
+            if settings: c.execute("DELETE FROM settings")
+            else: c.execute("DELETE FROM settings WHERE key = 'pb_templates'")
+            if users:
+                c.execute("DELETE FROM sessions WHERE login <> ?", (keep_login,))
+                c.execute("DELETE FROM users WHERE login <> ?", (keep_login,))
+                c.execute("DELETE FROM login_attempts")
+            if audit: c.execute("DELETE FROM audit")
+
     def read_audit(self, limit=500, q=""):
         sql, args = "SELECT * FROM audit", []
         if q:

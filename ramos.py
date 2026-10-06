@@ -106,7 +106,7 @@ def _detail_blocks(sec, q):
                 b["rows"] = [[r[0]] + [""] * (len(r) - 1) if r else r for r in b["rows"]]
             elif b["t"] in ("p", "quote"): b["text"] = ""
             elif b["t"] == "ul": b["items"] = [""]
-        blocks = [b for b in blocks if not (b["t"] in ("p", "quote") and not b["text"]) and not (b["t"] == "ul" and b["items"] == [""])]
+        blocks = [b for b in blocks if not (b["t"] in ("p", "quote") and not b["text"]) and not (b["t"] == "ul" and b["items"] == [""]) and b["t"] != "img"]
     else:
         blocks = [{"t": "table", "head": ["Item", "Conteúdo"], "rows": [[x, ""] for x in DETAIL_ROWS]}]
     tmp = {"blocks": blocks}

@@ -1,12 +1,34 @@
 # Changelog
 
+## 2.1.0 — 2026-10-05
+
+### Novidades
+- **Imagens na documentação.** No editor de documento: **＋ Imagem**, colar (Ctrl+V) ou arrastar para a seção.
+  PNG, JPG, WEBP ou GIF até 3 MB, com legenda opcional. Os arquivos ficam em `imagens/` na pasta do playbook, com
+  nome pelo conteúdo (nunca sobrescritos: versões antigas continuam mostrando as imagens que tinham), e entram no
+  `.md` como Markdown comum. Na leitura, clique amplia. O servidor confere o tipo real do arquivo e aplica as mesmas
+  permissões do playbook (visualizador não vê imagens de playbooks em Desenvolvimento).
+- Exportações com imagens: o pacote `.medusa.md` leva as imagens (e a importação as grava), o HTML e a impressão as
+  embutem no arquivo, e o Markdown vira `.zip` com a pasta `imagens/`.
+- **Resetar aplicação** (Administração, só administrador): volta a instalação ao estado de recém-configurada, com
+  confirmação digitando `RESETAR`, como na exclusão de playbook. Opcionalmente restaura configurações, remove os
+  demais usuários e apaga a auditoria. Tudo vai para `data/lixeira/reset__<data-hora>/`, com cópia do banco.
+- **Página inicial:** além dos cartões, **lista grande** e **lista pequena**; a escolha fica salva por usuário.
+
+### Melhorias
+- **Aparência** reorganizada em quatro cartões simétricos (Identidade, Logo, Página inicial, Prévia), com campos de
+  cor alinhados, rodapé de ações na mesma altura e prévia do título e subtítulo da página inicial.
+- A aba **Versões** do playbook perdeu o ícone, no padrão das demais abas.
+- Ações destrutivas (excluir, resetar) usam vermelho fixo, independente da cor da marca.
+- Administração não transborda mais na horizontal em telas estreitas.
+
 ## 2.0.0 — 2026-10-05
 
 ### Novidades
 - **Versionamento automático.** Gravações em Desenvolvimento e Homologação somam 1 depois do ponto (0.1 → 0.2);
   publicar em Produção, ou alterar um playbook publicado, gera a próxima versão cheia (0.4 → 1.0, 1.0 → 2.0).
   Republicar sem alteração mantém o número.
-- **Histórico de versões** (aba 🕘 Versões): cada gravação guarda o conteúdo completo. É possível ler qualquer versão
+- **Histórico de versões** (aba Versões): cada gravação guarda o conteúdo completo. É possível ler qualquer versão
   como documentação completa, com o fluxograma clicável daquele momento (e baixar em HTML ou imprimir), comparar
   duas versões (documento linha a linha e caixas/setas do fluxograma) e restaurar uma versão (editores).
 - **Encaminhamento de logs em JSON** (Administração → Logs e retenção): HTTP/HTTPS, syslog (RFC 5424, UDP/TCP) e

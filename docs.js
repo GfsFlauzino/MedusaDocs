@@ -9,7 +9,8 @@ const Docs = (() => {
       <ul><li><b>Fonte da verdade:</b> cada playbook é um par de arquivos <code>.md</code> + <code>.drawio</code> na pasta <code>playbooks/PB-xx-…/</code>, que podem ir para o Confluence, Git ou draw.io. A ferramenta lê e grava esses arquivos.</li>
         <li><b>Abas:</b> cada playbook ou página aberta vira uma aba no topo, como num navegador. ${K("✕")} fecha; clique do meio também. As abas ficam guardadas no seu navegador.</li>
         <li><b>Busca:</b> ${K("/")} foca a busca; encontra passos (T0, A3…), ramos, seções e times em todos os playbooks que você pode ver.</li>
-        <li><b>Tema:</b> o botão ☀/☾ alterna claro e escuro. As cores do fluxograma seguem o modelo e não mudam com o tema.</li></ul>` },
+        <li><b>Tema:</b> o botão ☀/☾ alterna claro e escuro. As cores do fluxograma seguem o modelo e não mudam com o tema.</li>
+        <li><b>Página inicial:</b> os botões ao lado de "Novo playbook" alternam a lista entre <b>cartões</b>, <b>lista grande</b> (com template, revisão, ramos e passos) e <b>lista pequena</b> (uma linha por playbook, boa para muitos playbooks). A escolha fica guardada no seu navegador.</li></ul>` },
     { id: "perfis", role: "viewer", title: "Perfis e permissões", html: `
       <table><thead><tr><th>Perfil</th><th>Vê</th><th>Pode</th></tr></thead><tbody>
         <tr><td>Visualizador</td><td>Playbooks em <b>Homologação</b> e <b>Produção</b></td><td>Ler, buscar, exportar e trocar a própria senha</td></tr>
@@ -20,7 +21,7 @@ const Docs = (() => {
       <ul><li><b>Fluxograma:</b> clique em uma caixa para ler o trecho da documentação vinculado a ela (passos, ramo, seção). Clique no nome de um time (raia ou caixa de apoio) para ver as responsabilidades e o que ele não faz. A etiqueta no canto da caixa mostra o ID do passo.</li>
         <li><b>Passo a passo:</b> as fases com os passos (ID, ação, critério de saída), filtráveis por time.</li>
         <li><b>Ramos:</b> os cenários R1, R2… do playbook. Clique para abrir o detalhamento.</li>
-        <li><b>Documento:</b> o documento completo com índice lateral.</li>
+        <li><b>Documento:</b> o documento completo com índice lateral. Clique numa imagem para ampliar (${K("Esc")} fecha).</li>
         <li>No texto, IDs como <b>T3</b>, <b>R2</b> ou <b>E4</b> e nomes de times são clicáveis.</li></ul>` },
     { id: "versoes", role: "viewer", title: "Versões e histórico", html: `
       <p>Cada playbook tem número de versão automático, no cabeçalho e na tabela de propriedades:</p>
@@ -29,7 +30,7 @@ const Docs = (() => {
         <tr><td>Publicação em Produção</td><td>próxima versão cheia</td><td>0.4 → 1.0 · 2.4 → 3.0</td></tr>
         <tr><td>Alteração em um playbook publicado</td><td>próxima versão cheia</td><td>1.0 → 2.0</td></tr>
         <tr><td>Republicar sem nenhuma alteração</td><td>mantém</td><td>1.0 → 1.0</td></tr></tbody></table>
-      <p>A aba <b>🕘 Versões</b> lista o histórico (quem, quando, o que mudou). Em cada versão:</p>
+      <p>A aba <b>Versões</b> lista o histórico (quem, quando, o que mudou). Em cada versão:</p>
       <ul><li><b>Ler</b>: abre a versão como documentação completa, com o fluxograma clicável, como era naquele momento. Dá para baixar em HTML ou imprimir.</li>
         <li><b>Comparar</b>: mostra linhas do documento e caixas/setas do fluxograma acrescentadas (+) e removidas (−) entre duas versões, ou contra a atual.</li>
         <li><b>Restaurar</b> (editores): volta o conteúdo daquela versão. O status atual e o histórico são mantidos; a restauração vira uma versão nova.</li></ul>
@@ -37,13 +38,13 @@ const Docs = (() => {
     { id: "exportar", role: "viewer", title: "Exportar", html: `
       <p>O botão <b>⤓ Exportar</b> do playbook está disponível para todos os perfis:</p>
       <table><thead><tr><th>Formato</th><th>Uso</th></tr></thead><tbody>
-        <tr><td>Markdown <code>.md</code></td><td>documento para Confluence, Git ou qualquer editor</td></tr>
-        <tr><td>HTML com fluxograma</td><td>abre em qualquer navegador ou no Word</td></tr>
+        <tr><td>Markdown <code>.md</code></td><td>documento para Confluence, Git ou qualquer editor. Com imagens, vem um <code>.zip</code> com o <code>.md</code> e a pasta <code>imagens/</code></td></tr>
+        <tr><td>HTML com fluxograma</td><td>abre em qualquer navegador ou no Word; as imagens vão dentro do arquivo</td></tr>
         <tr><td>Imprimir / PDF</td><td>documento completo com o fluxograma</td></tr>
         <tr><td>draw.io <code>.drawio</code></td><td>fluxograma editável no draw.io e no Confluence</td></tr>
         <tr><td>Mermaid <code>.mmd</code></td><td>fluxograma em texto (GitHub, GitLab, mermaid.live)</td></tr>
         <tr><td>SVG</td><td>imagem do fluxograma</td></tr>
-        <tr><td>Medusa <code>.medusa.md</code></td><td>pacote completo (documento + times + fluxo), reimportável em outra instalação</td></tr></tbody></table>
+        <tr><td>Medusa <code>.medusa.md</code></td><td>pacote completo (documento + imagens + times + fluxo), reimportável em outra instalação</td></tr></tbody></table>
       <p>Na página inicial, <b>Exportar todos</b> baixa um <code>.zip</code> com os playbooks que você pode ver. Toda exportação fica na auditoria.</p>` },
     { id: "ciclo", role: "editor", title: "Ciclo de vida e revisão", html: `
       <p><b>Desenvolvimento → Homologação → Produção</b>, pelo botão <b>⇄ Alterar status</b> do playbook.</p>
@@ -61,6 +62,7 @@ const Docs = (() => {
     { id: "editar-documento", role: "editor", title: "Editar o documento", html: `
       <ul><li>Seções, subseções, parágrafos, listas, checklists, destaques e tabelas, sem código. ${K("Ctrl+S")} salva, ${K("Ctrl+B")} aplica negrito.</li>
         <li>Na tabela de propriedades, o botão 🎯 da linha "Tática MITRE" abre a lista de táticas.</li>
+        <li><b>Imagens</b> (prints de alerta, telas, evidências): <b>＋ Imagem</b> na barra "Adicionar" da seção, ou cole (${K("Ctrl+V")}) uma imagem copiada, ou arraste o arquivo para a seção. Entra logo depois do bloco em que o cursor está. PNG, JPG, WEBP ou GIF até 3 MB; a legenda é opcional. O arquivo vai para <code>imagens/</code> na pasta do playbook e o documento recebe <code>![legenda](imagens/img-….png)</code>, Markdown comum. Imagens nunca são sobrescritas, então versões antigas continuam mostrando as delas. Templates não recebem imagens.</li>
         <li><b>＋ Novo ramo</b> (na seção de ramos) ou <b>＋ Seção de ramos</b> (no índice, se ainda não houver) criam ramos; ver <a href="#/docs/ramos">Ramos</a>.</li>
         <li><b>Descartar</b> recarrega a versão salva. Cada gravação guarda backup da versão anterior.</li>
         <li>Se outra pessoa salvou depois que você abriu, a gravação é recusada e a tela oferece recarregar (suas alterações continuam na tela para copiar).</li>
@@ -151,7 +153,13 @@ const Docs = (() => {
         <li><b>Login por senha</b> pode continuar para todos ou ficar só para administradores (acesso de emergência).</li>
         <li><b>Segurança:</b> authorization code + PKCE, state amarrado ao navegador, nonce, e o ID token validado pela assinatura RS256 (chaves do provedor), emissor, audiência e validade. Falhas ficam na auditoria (<code>sso_falhou</code>).</li></ul>` },
     { id: "aparencia", role: "admin", title: "Aparência", html: `
-      <p><b>⚙ Administração → Aparência</b>: nome exibido no topo, cor primária (seletor, código <code>#RRGGBB</code> ou RGB), logo (PNG, JPG, SVG sem script ou WEBP, até 512 KB) e o <b>título e subtítulo da página inicial</b>. Vale para todos os usuários. As cores do fluxograma não mudam: seguem o modelo dos playbooks.</p>` },
+      <p><b>⚙ Administração → Aparência</b>, em quatro cartões: <b>Identidade</b> (nome exibido no topo e cor primária: seletor, código <code>#RRGGBB</code>, RGB ou uma das sugestões), <b>Logo</b> (PNG, JPG, SVG sem script ou WEBP, até 512 KB), <b>Página inicial</b> (título e subtítulo) e <b>Prévia</b>, que mostra o resultado antes de salvar. Cada cartão tem o próprio botão de salvar. Vale para todos os usuários. As cores do fluxograma não mudam: seguem o modelo dos playbooks.</p>` },
+    { id: "reset", role: "admin", title: "Resetar a aplicação", html: `
+      <p><b>⚙ Administração → Resetar aplicação</b> (botão no topo da página) volta a instalação ao estado de recém-configurada: saem todos os playbooks, templates e o histórico de versões, e o template <b>Padrão</b> é recriado. Opcionalmente também:</p>
+      <ul><li><b>Configurações:</b> aparência, logs e SSO voltam ao padrão (indisponível para quem entrou pelo SSO, que seria desligado);</li>
+        <li><b>Usuários:</b> exclui todos os outros usuários; fica só quem fez o reset;</li>
+        <li><b>Auditoria:</b> apaga os eventos e os arquivos de log (o próprio reset fica registrado).</li></ul>
+      <p>A confirmação é igual à da exclusão de playbook: digite <b>RESETAR</b>. Nada é apagado de vez: playbooks, templates, vínculos, backups e uma <b>cópia do banco</b> vão para <code>data/lixeira/reset__&lt;data-hora&gt;/</code>, com um <code>LEIA-ME.txt</code> explicando como voltar (pare o servidor, copie os itens de volta, <code>playbooks.db</code> em <code>data/</code>, e inicie).</p>` },
     { id: "auditoria", role: "admin", title: "Auditoria", html: `
       <p><b>⚙ Administração → Auditoria</b> lista quem fez o quê e quando: login e falhas, gravações (com os ramos sincronizados), mudanças de status, criação, importação, exportação, exclusão, templates, times, usuários e aparência. Fica na tabela <code>audit</code> do banco.</p>` },
     { id: "servidor", role: "admin", title: "Servidor e operação", html: `
@@ -169,12 +177,12 @@ python3 server.py --host 0.0.0.0 --port 8765 --secure-cookies      # rede, atrá
         <tr><td><code>MEDUSA_ADMIN_LOGIN</code> · <code>MEDUSA_ADMIN_NAME</code> · <code>MEDUSA_ADMIN_PASSWORD</code></td><td>administrador inicial (só quando não há nenhum)</td></tr></tbody></table>
       <p>Dentro de <code>MEDUSA_HOME</code>:</p>
       <table><thead><tr><th>Caminho</th><th>Conteúdo</th></tr></thead><tbody>
-        <tr><td><code>playbooks/PB-xx-*/</code></td><td><code>.md</code> e <code>.drawio</code> de cada playbook</td></tr>
+        <tr><td><code>playbooks/PB-xx-*/</code></td><td><code>.md</code> e <code>.drawio</code> de cada playbook, e as imagens do documento em <code>imagens/</code></td></tr>
         <tr><td><code>mappings.json</code></td><td>caixa do fluxograma → passos, ramos ou seções</td></tr>
         <tr><td><code>templates/*.medusa-template.md</code></td><td>templates, com os times e tags de cada um</td></tr>
         <tr><td><code>data/playbooks.db</code></td><td>SQLite: usuários, sessões, auditoria, configurações (aparência, logs, SSO), template e <b>histórico de versões</b> de cada playbook</td></tr>
         <tr><td><code>data/logs/</code></td><td>auditoria em JSON Lines (se o destino "arquivo" estiver ligado)</td></tr>
-        <tr><td><code>data/lixeira/</code></td><td>playbooks e templates excluídos (para restaurar, mova de volta e reinicie)</td></tr>
+        <tr><td><code>data/lixeira/</code></td><td>playbooks e templates excluídos e o conteúdo de cada reset (<code>reset__…</code>); para restaurar, mova de volta e reinicie</td></tr>
         <tr><td><code>.backups/&lt;PB&gt;/&lt;data-hora&gt;/</code></td><td>versão anterior de cada arquivo, a cada gravação</td></tr></tbody></table>
       <p><b>Backup do banco:</b> copie <code>data/playbooks.db</code> com o servidor parado ou use <code>sqlite3 data/playbooks.db ".backup copia.db"</code>. Novas versões do esquema são aplicadas sozinhas ao iniciar.</p>
       <p><b>Ambiente de teste:</b> aponte <code>MEDUSA_HOME</code> para uma cópia da pasta de dados.</p>` },

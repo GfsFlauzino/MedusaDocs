@@ -46,7 +46,7 @@ SESSION_TTL = 8 * 3600          # inatividade máxima
 PBKDF2_ITERS = 310_000
 MIN_PASSWORD = 10
 MAX_BODY = 8 * 1024 * 1024
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 LOGIN_RE = re.compile(r"^[a-z0-9._@-]{3,80}$")          # @ e até 80 caracteres: logins vindos do SSO (e-mail)
 NO_PASSWORD = "!sso"                                      # hash impossível: conta só entra pelo SSO
 TRUST_PROXY = os.environ.get("MEDUSA_TRUST_PROXY", "").lower() in ("1", "true", "yes", "sim")
@@ -62,6 +62,10 @@ DEFAULT_BRAND = {"name": "Medusa Docs", "color": "#3B5BDB", "homeTitle": "Playbo
 LOGO_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/svg+xml": ".svg", "image/webp": ".webp"}
 MAX_LOGO = 512 * 1024
 HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+IMG_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif"}
+IMG_MIME = {v: k for k, v in IMG_TYPES.items()}
+MAX_IMG = 3 * 1024 * 1024
+RESET_WORD = "RESETAR"
 
 LOCK = threading.RLock()        # serializa gravações nos arquivos dos playbooks
 SECURE_COOKIES = False
@@ -332,6 +336,7 @@ class Handler(BaseHTTPRequestHandler):
             key = re.sub(r"/PB-\d{2,3}", "/{pb}", re.sub(r"^/api/users/[^/]+", "/api/users/{u}", path))
             key = re.sub(r"^(/api/pb/\{pb\}/ramos)/[^/]+$", r"\1/{r}", key)
             key = re.sub(r"^(/api/pb/\{pb\}/versions)/\d+", r"\1/{v}", key)
+            key = re.sub(r"^(/api/pb/\{pb\}/img)/[^/]+$", r"\1/{f}", key)
             if not path.startswith("/api/templates/import"):
                 key = re.sub(r"^/api/templates/[^/]+", "/api/templates/{t}", key)
             route = ROUTES.get((method, key))
@@ -671,6 +676,58 @@ def r_pb_delete(h, pid, **_):
     audit(u["login"], "playbook_excluido", pid, lixeira=dest.name)
     h.send_json({"ok": True, "trash": dest.name})
 
+# ───────────────────────── imagens do documento ─────────────────────────
+# Arquivos em <pasta do playbook>/imagens/, com nome pelo hash do conteúdo: nunca são sobrescritos, então
+# versões antigas do documento continuam mostrando as imagens que tinham.
+
+def decode_image(data_url, what="Imagem"):
+    """data:image/...;base64 → (extensão, bytes). Confere o tipo declarado com a assinatura do arquivo."""
+    m = re.fullmatch(r"data:([\w/+.-]+);base64,([A-Za-z0-9+/=\s]+)", str(data_url or ""))
+    if not m or m.group(1) not in IMG_TYPES: raise HttpError(400, f"{what}: envie PNG, JPG, WEBP ou GIF")
+    try: data = base64.b64decode(m.group(2), validate=False)
+    except ValueError: raise HttpError(400, f"{what}: arquivo ilegível")
+    if len(data) > MAX_IMG: raise HttpError(400, f"{what} grande demais (máx. {MAX_IMG // 1024 // 1024} MB)")
+    ext = IMG_TYPES[m.group(1)]
+    ok = {"png": data[:8] == b"\x89PNG\r\n\x1a\n", "jpg": data[:3] == b"\xff\xd8\xff",
+          "gif": data[:6] in (b"GIF87a", b"GIF89a"), "webp": data[:4] == b"RIFF" and data[8:12] == b"WEBP"}[ext]
+    if not ok: raise HttpError(400, f"{what}: o conteúdo não é um {ext.upper()} válido")
+    return ext, data
+
+def store_image(folder, ext, data):
+    name = f"img-{hashlib.sha256(data).hexdigest()[:16]}.{ext}"
+    d = folder / core.IMG_DIR
+    d.mkdir(exist_ok=True)
+    if not (d / name).exists(): (d / name).write_bytes(data)
+    return name
+
+def pb_images(folder, doc):
+    """Imagens citadas no documento, como data URL (para o pacote .medusa.md)."""
+    out = {}
+    for n in sorted(core.images_of(doc)):
+        f = folder / core.IMG_DIR / n
+        if core.IMG_NAME_RE.fullmatch(n) and f.is_file():
+            out[n] = f"data:{IMG_MIME[n.rsplit('.', 1)[1]]};base64," + base64.b64encode(f.read_bytes()).decode()
+    return out
+
+def r_pb_img_post(h, pid, **_):
+    u = h.require("editor")
+    folder = get_folder(pid)
+    ext, data = decode_image(h.body().get("dataUrl"))
+    with LOCK: name = store_image(folder, ext, data)
+    audit(u["login"], "imagem_enviada", pid, arquivo=name, tamanho_kb=round(len(data) / 1024))
+    h.send_json({"ok": True, "src": f"{core.IMG_DIR}/{name}", "url": f"api/pb/{pid}/img/{name}"})
+
+def r_pb_img_get(h, pid, **_):
+    u = h.require()
+    folder = get_folder(pid)
+    name = h.path.split("?")[0].rsplit("/", 1)[-1]
+    f = folder / core.IMG_DIR / name
+    if not core.IMG_NAME_RE.fullmatch(name) or not f.is_file(): raise HttpError(404, "imagem não encontrada")
+    if ROLES[u["role"]] < ROLES["editor"]:
+        md, _ = core.files_of(folder)
+        if core.get_gov(core.parse_md(md.read_text("utf-8")))["status"] not in VIEWER_STATUSES: raise HttpError(404, "imagem não encontrada")
+    h.send_bytes(f.read_bytes(), IMG_MIME[name.rsplit(".", 1)[1]], sandbox=True)
+
 def team_usage(tkey):
     """Onde cada time do template aparece: no fluxograma modelo e nos playbooks que usam o template."""
     use, lk = {}, links()
@@ -708,9 +765,18 @@ def r_pb_export(h, pid, **_):
     if fmt not in EXPORT_FMTS: raise HttpError(400, "formato inválido")
     base = view["folder"].lower()
     if fmt == "medusa":
-        data, ctype, fname = bundle.export(view, {**core.load_teams(), **view["teams"]}, u["name"], brand()["name"]).encode(), "text/markdown; charset=utf-8", f"{base}.medusa.md"
+        data, ctype, fname = (bundle.export(view, {**core.load_teams(), **view["teams"]}, u["name"], brand()["name"], pb_images(folder, view["doc"])).encode(),
+                              "text/markdown; charset=utf-8", f"{base}.medusa.md")
     elif fmt == "md":
         data, ctype, fname = core.doc_to_md(view["doc"]).encode(), "text/markdown; charset=utf-8", f"{base}.md"
+        imgs = [folder / core.IMG_DIR / n for n in sorted(core.images_of(view["doc"]))]
+        if any(f.is_file() for f in imgs):        # com imagens: .zip com o .md e a pasta imagens/ (os links relativos continuam valendo)
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+                z.writestr(fname, data)
+                for f in imgs:
+                    if f.is_file(): z.write(f, f"{core.IMG_DIR}/{f.name}")
+            data, ctype, fname = buf.getvalue(), "application/zip", f"{base}.zip"
     elif fmt == "drawio":
         _, dio = core.files_of(folder)
         data = dio.read_bytes() if dio else core.flow_to_drawio(view["flow"], pid, view["name"]).encode()
@@ -727,7 +793,7 @@ def r_export_all(h, **_):
         for f in core.all_folders():
             v = load_pb(f, lk)
             if not visible(v, u): continue
-            z.writestr(f"{f.name.lower()}.medusa.md", bundle.export(v, {**union, **v["teams"]}, u["name"], name))
+            z.writestr(f"{f.name.lower()}.medusa.md", bundle.export(v, {**union, **v["teams"]}, u["name"], name, pb_images(f, v["doc"])))
     audit(u["login"], "playbooks_exportados")
     h.send_bytes(buf.getvalue(), "application/zip", f"playbooks-{date.today().isoformat()}.zip")
 
@@ -749,6 +815,14 @@ def r_import(h, **_):
                "sections": len(p["doc"]["sections"]), "nodes": len(p["flow"]["nodes"]), "edges": len(p["flow"]["edges"]),
                "lanes": [l["label"] for l in p["flow"]["lanes"]], "createTeams": sorted(p["createTeams"]),
                "warnings": p["warnings"], "origin": p["meta"], "template": tpl.load(tkey)["name"]}
+    images = {}
+    for n, durl in p["images"].items():
+        if not core.IMG_NAME_RE.fullmatch(n): p["warnings"].append(f"Imagem com nome inválido ignorada: {n[:60]}"); continue
+        try: images[n] = decode_image(durl, f"Imagem {n}")[1]
+        except HttpError as e: p["warnings"].append(e.msg + " (ignorada)")
+    missing = sorted(core.images_of(p["doc"]) - set(images))
+    if missing: p["warnings"].append(f"{len(missing)} imagem(ns) citada(s) no documento não vieram no arquivo: {', '.join(missing[:5])}")
+    summary["images"] = len(images)
     if b.get("dryRun"): return h.send_json({"preview": summary})
     if existing and b.get("mode") != "replace":
         raise HttpError(409, f"{pid} já existe. Escolha substituir ou importe com outro ID.")
@@ -770,6 +844,8 @@ def r_import(h, **_):
         folder.mkdir(parents=True)
         (folder / f"{base}.md").write_text(core.doc_to_md(doc), "utf-8")
         (folder / f"{pid.lower()}-{core.slug(name)}.drawio").write_text(core.flow_to_drawio(p["flow"], pid, name), "utf-8")
+        for n, data in images.items():
+            (folder / core.IMG_DIR).mkdir(exist_ok=True); (folder / core.IMG_DIR / n).write_bytes(data)
         save_refs(pid, p["refs"])
         set_link(pid, tkey)
         snapshot(folder, pid, u, "importacao", f"Importado de {p['meta'].get('gerado_por') or 'arquivo'}" + (f" ({p['id']})" if p["id"] and p["id"] != pid else ""))
@@ -833,6 +909,46 @@ def r_logo_get(h, **_):
     logo = open_db().get_setting("logo")
     if not logo: raise HttpError(404, "sem logo")
     h.send_bytes(base64.b64decode(logo["data"]), logo["mime"], sandbox=True)
+
+# ───────────────────────── rotas: reset da aplicação ─────────────────────────
+# Volta a instalação ao estado de recém-configurada. Nada é apagado de verdade: o conteúdo vai para
+# data/lixeira/reset__<data>/ (playbooks, templates, vínculos, backups e uma cópia do banco).
+
+def r_admin_summary(h, **_):
+    h.require("admin")
+    db = open_db()
+    h.send_json({"playbooks": len(core.all_folders()), "templates": len(tpl._files()), "users": len(db.list_users()),
+                 "versions": db.count_all_versions(), "audit": db.count_audit(), "word": RESET_WORD})
+
+def r_admin_reset(h, **_):
+    u = h.require("admin"); b = h.body()
+    if str(b.get("confirm", "")).strip().upper() != RESET_WORD: raise HttpError(400, f"Para confirmar, digite {RESET_WORD}")
+    opts = {k: bool(b.get(k)) for k in ("settings", "users", "audit")}
+    if opts["settings"] and (u.get("auth") or "local") == "sso":
+        raise HttpError(400, "Sua conta entra pelo SSO e restaurar as configurações desliga o SSO. Use uma conta de administrador com senha local "
+                             "ou desmarque “Configurações”.")
+    db = open_db()
+    with LOCK:
+        dest, i = TRASH / f"reset__{time.strftime('%Y%m%d-%H%M%S')}", 1
+        while dest.exists(): i += 1; dest = dest.with_name(f"reset__{time.strftime('%Y%m%d-%H%M%S')}-{i}")
+        dest.mkdir(parents=True)
+        db.backup_to(dest / "playbooks.db")
+        moved = []
+        for src, name in ((core.SRC, "playbooks"), (tpl.TPL_DIR, "templates"), (core.MAPPINGS_FILE, "mappings.json"), (BACKUPS, ".backups"),
+                          *(((DATA_DIR / "logs", "logs"),) if opts["audit"] else ())):
+            if Path(src).exists(): shutil.move(str(src), str(dest / name)); moved.append(name)
+        core.SRC.mkdir(parents=True, exist_ok=True)
+        tpl.ensure_seed()
+        db.reset(u["login"], **opts)
+        _log_cfg["at"] = 0
+        (dest / "LEIA-ME.txt").write_text(
+            f"Reset da aplicação feito por {u['login']} em {datetime.now().isoformat(timespec='seconds')}.\n"
+            f"Conteúdo guardado: {', '.join(moved + ['playbooks.db (cópia do banco antes do reset)'])}.\n"
+            "Para voltar ao estado anterior: pare o servidor, copie estes itens de volta para a pasta de dados\n"
+            "(playbooks.db vai em data/) e inicie de novo.\n", "utf-8")
+    audit(u["login"], "aplicacao_resetada", lixeira=dest.name, configuracoes="sim" if opts["settings"] else "não",
+          usuarios="sim" if opts["users"] else "não", auditoria="sim" if opts["audit"] else "não")
+    h.send_json({"ok": True, "archive": dest.name})
 
 # ───────────────────────── rotas: templates ─────────────────────────
 
@@ -1364,6 +1480,8 @@ ROUTES = {
     ("POST", "/api/pb"): r_pb_create, ("DELETE", "/api/pb/{pb}"): r_pb_delete,
     ("GET", "/api/pb/{pb}/versions"): r_versions, ("GET", "/api/pb/{pb}/versions/{v}"): r_version_get,
     ("GET", "/api/pb/{pb}/versions/{v}/diff"): r_version_diff, ("POST", "/api/pb/{pb}/versions/{v}/restore"): r_version_restore,
+    ("POST", "/api/pb/{pb}/img"): r_pb_img_post, ("GET", "/api/pb/{pb}/img/{f}"): r_pb_img_get,
+    ("GET", "/api/admin/summary"): r_admin_summary, ("POST", "/api/admin/reset"): r_admin_reset,
     ("POST", "/api/pb/{pb}/ramos"): r_pb_ramo_add, ("DELETE", "/api/pb/{pb}/ramos/{r}"): r_pb_ramo_delete,
     ("POST", "/api/templates/{t}/ramos"): r_tpl_ramos,
     ("GET", "/api/approvers"): r_approvers, ("PUT", "/api/templates/{t}/teams"): r_tpl_teams,

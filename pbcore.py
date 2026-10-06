@@ -15,6 +15,11 @@ HOME = Path(os.environ.get("MEDUSA_HOME") or HERE)
 SRC = Path(os.environ.get("PB_SRC") or HOME / "playbooks")
 MAPPINGS_FILE = Path(os.environ.get("PB_MAPPINGS") or HOME / "mappings.json")
 ID_RE = re.compile(r"^PB-\d{2,3}$")
+# Imagens do documento: ficam na pasta do playbook (imagens/), com nome pelo conteúdo (nunca sobrescritas),
+# e entram no .md como Markdown comum numa linha própria: ![legenda](imagens/img-0123456789abcdef.png)
+IMG_DIR = "imagens"
+IMG_NAME_RE = re.compile(r"^img-[0-9a-f]{16}\.(?:png|jpg|webp|gif)$")
+IMG_LINE_RE = re.compile(r"^!\[([^\]\n]*)\]\((imagens/img-[0-9a-f]{16}\.(?:png|jpg|webp|gif))\)\s*$")
 
 # ───────────────────────── catálogo do modelo visual ─────────────────────────
 # Formas, cores e raias são as já usadas nos fluxogramas. O editor só oferece o que está aqui.
@@ -105,6 +110,9 @@ def parse_blocks(lines):
             while i < len(lines) and lines[i].startswith("- "):
                 items.append(lines[i][2:]); i += 1
             blocks.append({"t": "ul", "items": items})
+        elif IMG_LINE_RE.match(ln.strip()):
+            m = IMG_LINE_RE.match(ln.strip())
+            blocks.append({"t": "img", "alt": m.group(1).strip(), "src": m.group(2)}); i += 1
         elif ln.startswith(">"):
             q = []
             while i < len(lines) and lines[i].startswith(">"):
@@ -112,7 +120,7 @@ def parse_blocks(lines):
             blocks.append({"t": "quote", "text": " ".join(q)})
         else:
             p = []
-            while i < len(lines) and lines[i].strip() and not lines[i].startswith(("|", "- ", ">")):
+            while i < len(lines) and lines[i].strip() and not lines[i].startswith(("|", "- ", ">")) and not IMG_LINE_RE.match(lines[i].strip()):
                 p.append(lines[i]); i += 1
             blocks.append({"t": "p", "text": " ".join(p)})
     return blocks
@@ -144,6 +152,9 @@ def blocks_md(blocks):
             out.append(b["text"].strip())
         elif t == "quote" and b.get("text", "").strip():
             out.append("> " + b["text"].strip())
+        elif t == "img" and IMG_LINE_RE.match(f"![]({b.get('src', '')})"):
+            alt = re.sub(r"[\[\]\s]+", " ", str(b.get("alt", ""))).strip()[:300]
+            out.append(f"![{alt}]({b['src']})")
         elif t == "ul":
             items = [i for i in b.get("items", []) if i.strip()]
             if items: out.append("\n".join("- " + i.strip() for i in items))
@@ -169,10 +180,26 @@ def doc_to_md(doc):
             for b in blocks_md(x.get("blocks", [])): out += [b, ""]
     return "\n".join(out).rstrip() + "\n"
 
-def render_blocks(blocks):
+def images_of(doc):
+    """Nomes dos arquivos de imagem citados no documento."""
+    out = set()
+    for s in doc.get("sections", []):
+        for bl in [s.get("blocks", [])] + [x.get("blocks", []) for x in s.get("subs", [])]:
+            out |= {b["src"].split("/", 1)[1] for b in bl if b.get("t") == "img" and "/" in b.get("src", "")}
+    return out
+
+def render_blocks(blocks, img_base=None):
     out = []
     for b in blocks:
-        if b["t"] == "p":
+        if b["t"] == "img":
+            alt = html.escape(b.get("alt", ""))
+            cap = f"<figcaption>{alt}</figcaption>" if alt else ""
+            if img_base:
+                src = html.escape(img_base + b["src"].split("/", 1)[1])
+                out.append(f'<figure class="docimg"><img src="{src}" alt="{alt}" loading="lazy">{cap}</figure>')
+            else:
+                out.append(f'<figure class="docimg missing"><span>Imagem não disponível aqui</span>{cap}</figure>')
+        elif b["t"] == "p":
             out.append(f"<p>{inline(b['text'])}</p>")
         elif b["t"] == "quote":
             out.append(f"<blockquote>{inline(b['text'])}</blockquote>")
@@ -564,6 +591,8 @@ def team_of_phase(title):
 
 def build_view(pid, folder, doc, flow, refs, teams=None):
     props, steps, ramos, states, snippets, closing, secs = {}, [], [], [], [], {}, []
+    img = f"api/pb/{pid}/img/" if ID_RE.fullmatch(pid) else None
+    render = lambda bl: render_blocks(bl, img)
     for sec in doc["sections"]:
         blocks = sec["blocks"]
         if sec["title"].startswith("Propriedades"):
@@ -571,7 +600,7 @@ def build_view(pid, folder, doc, flow, refs, teams=None):
                 if b["t"] == "table": props = {r[0]: (r[1] if len(r) > 1 else "") for r in b["rows"]}
         subs = []
         for sub in sec["subs"]:
-            shtml = render_blocks(sub["blocks"])
+            shtml = render(sub["blocks"])
             subs.append({"id": slug(sub["title"]), "title": sub["title"], "html": shtml})
             if re.match(r"R\d+\s*·", sub["title"]):
                 ramos.append({"id": sub["title"].split()[0], "title": sub["title"], "html": shtml,
@@ -600,7 +629,7 @@ def build_view(pid, folder, doc, flow, refs, teams=None):
                     if b["t"] == "ul": snippets += [(sec["title"], plain(i)) for i in b["items"]]
                     elif b["t"] == "table": snippets += [(ttl, plain(" — ".join(r))) for r in b["rows"]]
                     elif b["t"] in ("p", "quote"): snippets.append((sec["title"], plain(b["text"])))
-        secs.append({"id": slug(sec["title"]), "title": sec["title"], "html": render_blocks(blocks), "subs": subs})
+        secs.append({"id": slug(sec["title"]), "title": sec["title"], "html": render(blocks), "subs": subs})
     mentions = {}
     for team, pats in team_patterns(teams if teams is not None else load_teams()).items():
         seen, lst = set(), []

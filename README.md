@@ -8,7 +8,8 @@ templates e auditoria.
 - Só Python 3 (biblioteca padrão): nada para instalar além do Python, ou uma imagem Docker pronta.
 - White label: nome, cor, logo e textos da página inicial configuráveis no painel administrativo.
 - Formatos abertos: cada playbook é um `.md` + um `.drawio`; troca entre instalações em `.medusa.md` (Markdown + Mermaid).
-- Versão atual: **2.0.0** (novidades em [CHANGELOG.md](CHANGELOG.md)): versionamento automático com histórico navegável,
+- Versão atual: **2.1.0** (novidades em [CHANGELOG.md](CHANGELOG.md)): imagens na documentação, reset da aplicação pela
+  administração e novas visualizações da lista de playbooks. Na 2.0: versionamento automático com histórico navegável,
   encaminhamento de logs em JSON com retenção, login único (SSO) por OpenID Connect.
 
 ## Instalação
@@ -49,7 +50,9 @@ exibida uma única vez, e precisa trocá-la no primeiro acesso.
 - **Abas:** cada playbook ou página aberta vira uma aba, como num navegador (`✕` ou botão do meio fecha; `＋` abre o início). Ficam salvas no navegador de cada usuário.
 - **Tema claro/escuro** no topo.
 - **📖 Docs** ao lado do perfil: documentação da plataforma (uso, edição, ramos, templates, administração, operação), filtrada pelo perfil. Conteúdo em `docs.js`.
-- **Aparência** (só administrador): nome exibido, cor primária (seletor, `#RRGGBB` ou R/G/B), logo (PNG, JPG, SVG ou WEBP até 512 KB) e **título e subtítulo da página inicial**. As cores do fluxograma não mudam: fazem parte do modelo dos playbooks.
+- **Página inicial** em **cartões**, **lista grande** ou **lista pequena** (escolha salva por usuário).
+- **Aparência** (só administrador), em quatro cartões: Identidade (nome e cor primária: seletor, `#RRGGBB` ou R/G/B), Logo (PNG, JPG, SVG ou WEBP até 512 KB), Página inicial (título e subtítulo) e Prévia. As cores do fluxograma não mudam: fazem parte do modelo dos playbooks.
+- **Resetar aplicação** (só administrador, botão no topo da Administração): volta ao estado de recém-instalada, com confirmação digitando `RESETAR`. Opcionalmente restaura configurações, remove os demais usuários e apaga a auditoria. Tudo vai para `data/lixeira/reset__<data-hora>/`, com cópia do banco e um `LEIA-ME.txt` de como voltar.
 
 ## Perfis
 
@@ -81,7 +84,7 @@ As permissões são verificadas no servidor. O visualizador nem recebe os playbo
 
 A versão fica na tabela "Propriedades do playbook" (bloqueada no editor) e na linha de versão do documento. Cada
 gravação guarda o conteúdo completo (`.md`, `.drawio`, vínculos) na tabela `pb_versions` do banco. A aba
-**🕘 Versões** do playbook lista o histórico e permite:
+A aba **Versões** do playbook lista o histórico e permite:
 
 - **Ler** uma versão como documentação completa, com o fluxograma clicável daquele momento (e baixar em HTML ou imprimir);
 - **Comparar** duas versões (ou uma com a atual): linhas do documento e caixas/setas do fluxograma acrescentadas e removidas;
@@ -102,7 +105,7 @@ registro inicial na primeira alteração. Excluir um playbook guarda o históric
  "event": {"kind": "event", "dataset": "medusa.audit", "action": "documento_salvo", "category": ["configuration"], "outcome": "success"},
  "user": {"name": "maria.souza"}, "source": {"ip": "10.0.0.15"},
  "medusa": {"target": "PB-01", "detail": {"versao": "0.2"}},
- "service": {"name": "Medusa Docs", "type": "medusa-docs", "version": "2.0.0"}, "host": {"hostname": "medusa"}}
+ "service": {"name": "Medusa Docs", "type": "medusa-docs", "version": "2.1.0"}, "host": {"hostname": "medusa"}}
 ```
 
 | Destino | Como funciona |
@@ -170,7 +173,8 @@ Um ramo (R1, R2…) existe nos dois lados e fica sincronizado ao salvar (`ramos.
 
 ## Editores
 
-- **Documento:** seções, subseções, parágrafos, listas, checklists, destaques e tabelas. `Ctrl+S` salva, `Ctrl+B` negrito, 🎯 escolhe táticas MITRE ATT&CK. **Descartar** recarrega a versão salva.
+- **Documento:** seções, subseções, parágrafos, listas, checklists, destaques, tabelas e **imagens**. `Ctrl+S` salva, `Ctrl+B` negrito, 🎯 escolhe táticas MITRE ATT&CK. **Descartar** recarrega a versão salva.
+  - Imagens: **＋ Imagem**, colar (`Ctrl+V`) ou arrastar para a seção. PNG, JPG, WEBP ou GIF até 3 MB, legenda opcional. Ficam em `imagens/` na pasta do playbook com nome pelo conteúdo (nunca sobrescritas) e entram no `.md` como `![legenda](imagens/img-….png)`. O servidor confere o tipo real do arquivo e aplica as permissões do playbook.
 - **Fluxograma:** só as formas, cores e setas do modelo; arrastar a caixa para outra raia troca o time.
   - Texto das setas arrastável (posição gravada no `.drawio` e no Mermaid).
   - Seleção múltipla (`Shift`/`Ctrl`+clique, laço, `Ctrl+A`), mover em grupo, redimensionar proporcionalmente, alinhar e distribuir.
@@ -182,11 +186,11 @@ Um ramo (R1, R2…) existe nos dois lados e fica sincronizado ao salvar (`ramos.
 
 | Ação | Onde | Formatos |
 | --- | --- | --- |
-| Exportar um playbook (todos os perfis) | **⤓ Exportar ▾** no playbook | Markdown, HTML com fluxograma, PDF, draw.io, Mermaid, SVG, Medusa |
+| Exportar um playbook (todos os perfis) | **⤓ Exportar ▾** no playbook | Markdown (`.zip` com `imagens/` se houver imagens), HTML com fluxograma e imagens embutidas, PDF, draw.io, Mermaid, SVG, Medusa |
 | Exportar todos | Página inicial | `.zip` de `.medusa.md` |
 | Importar (editor) | Página inicial → **⤒ Importar** | `.medusa.md` ou `.md` comum |
 
-O `.medusa.md` é Markdown comum com front matter, um bloco de times e o fluxograma em Mermaid: abre em qualquer
+O `.medusa.md` é Markdown comum com front matter, um bloco de times, o fluxograma em Mermaid e, se houver, um bloco com as imagens (até 6 MB no total): abre em qualquer
 visualizador e GitHub, GitLab, Confluence (macro Mermaid) e mermaid.live desenham o fluxo. Na importação, escolha o
 template do playbook; times citados no arquivo que faltarem são acrescentados a ele. O playbook entra em Desenvolvimento.
 
@@ -241,12 +245,12 @@ Tudo fica em `MEDUSA_HOME` (padrão: a pasta da aplicação; no Docker, o volume
 
 | Caminho | O que é |
 | --- | --- |
-| `playbooks/PB-xx-*/` | `.md` e `.drawio` de cada playbook |
+| `playbooks/PB-xx-*/` | `.md` e `.drawio` de cada playbook, e as imagens do documento em `imagens/` |
 | `mappings.json` | Caixa do fluxograma → passos, ramos ou seções |
 | `templates/` | Templates, com os times e tags de cada um |
 | `data/playbooks.db` | SQLite: usuários, sessões, tentativas de login, auditoria, configurações (aparência, logs, SSO), template e histórico de versões de cada playbook |
 | `data/logs/` | Auditoria em JSON Lines, quando o destino "arquivo" está ligado |
-| `data/lixeira/` | Playbooks e templates excluídos |
+| `data/lixeira/` | Playbooks e templates excluídos e o conteúdo de cada reset da aplicação (`reset__…`) |
 | `.backups/<PB>/<data-hora>/` | Versão anterior de cada arquivo, guardada a cada gravação |
 
 **Backup:** copie a pasta inteira (com o servidor parado) ou use `sqlite3 data/playbooks.db ".backup copia.db"` para o banco com ele rodando.

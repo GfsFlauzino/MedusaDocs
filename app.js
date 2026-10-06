@@ -130,6 +130,19 @@ function modal({ title, html, wide, onMount, dismissable = true }) {
   return close;
 }
 
+/* imagens do documento: clique amplia */
+function lightbox(img) {
+  const cap = img.closest("figure") && img.closest("figure").querySelector("figcaption");
+  const bg = document.createElement("div");
+  bg.className = "lightbox"; bg.setAttribute("role", "dialog"); bg.setAttribute("aria-modal", "true");
+  bg.innerHTML = `<figure><img src="${esc(img.getAttribute("src"))}" alt="${esc(img.alt)}">${cap ? `<figcaption>${esc(cap.textContent)}</figcaption>` : ""}</figure><button class="mclose" title="Fechar (Esc)">✕</button>`;
+  const close = () => { bg.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = e => { if (e.key === "Escape") close(); };
+  bg.onclick = close; document.addEventListener("keydown", onKey);
+  document.body.append(bg);
+}
+document.addEventListener("click", e => { const im = e.target.closest(".docimg img"); if (im) { e.preventDefault(); lightbox(im); } });
+
 /* ───────── refs clicáveis em texto ───────── */
 let REF_SRC = "", REF_TEST = /$^/;
 function buildRefRegex() {
@@ -382,7 +395,7 @@ document.addEventListener("click", e => {
 
 /* ───────── rotas ───────── */
 const currentPb = () => { const m = location.hash.match(/^#\/(pb-\d+)/i); return m ? pbBy(m[1].toLowerCase()) : null; };
-const TABS = [["fluxo", "Fluxograma"], ["fases", "Passo a passo"], ["ramos", "Ramos"], ["doc", "Documento"], ["versoes", "🕘 Versões"]];
+const TABS = [["fluxo", "Fluxograma"], ["fases", "Passo a passo"], ["ramos", "Ramos"], ["doc", "Documento"], ["versoes", "Versões"]];
 const EDIT_TABS = [["editar", "✎ Editar documento"], ["editar-fluxo", "✎ Editar fluxograma"]];
 const view = $("#view");
 let lastHash = location.hash, skipGuard = false;
@@ -477,9 +490,55 @@ function notFound() {
 
 /* ───────── home ───────── */
 let homeFilter = "Todos";
+/* Três formas de ver a lista; a escolhida fica salva no navegador, por usuário */
+const HOME_VIEWS = [
+  ["cards", "Cartões", `<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="1.5" width="5.5" height="5.5" rx="1.3"/><rect x="9" y="1.5" width="5.5" height="5.5" rx="1.3"/><rect x="1.5" y="9" width="5.5" height="5.5" rx="1.3"/><rect x="9" y="9" width="5.5" height="5.5" rx="1.3"/></svg>`],
+  ["lg", "Lista grande", `<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="1.75" width="13" height="5.25" rx="1.3"/><rect x="1.5" y="9" width="13" height="5.25" rx="1.3"/></svg>`],
+  ["sm", "Lista pequena", `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3.25h12M2 6.42h12M2 9.58h12M2 12.75h12"/></svg>`],
+];
+const homeViewKey = () => "medusa-home-view:" + (App.user ? App.user.login : "");
+function homeView() {
+  let v = null; try { v = localStorage.getItem(homeViewKey()); } catch { }
+  return HOME_VIEWS.some(x => x[0] === v) ? v : "cards";
+}
+const pbVersion = p => (p.props["Versão"] || "").split(" ")[0];
+const pbSubtitle = p => p.props["Tática MITRE principal"] || p.props["Fase NIST"] || "";
+
+function homeCards(list) {
+  return `<div class="cards">${list.map(p => `<a class="card st-${STATUS_CLS[p.gov.status]}" href="#/${p.slug}/fluxo">
+      <div class="card-top"><span class="id">${p.id} · v${esc(pbVersion(p))}</span>${statusPill(p.gov.status)}</div><h3>${esc(p.name)}</h3>
+      <p>${esc(pbSubtitle(p))}</p>
+      <div class="meta"><span class="chip">${p.ramos.length} ramos</span><span class="chip">${p.steps.length} passos</span></div>
+      <div class="govline">${govLine(p.gov)}</div></a>`).join("")}
+    ${!list.length ? homeEmpty() : ""}
+    ${can("editor") ? `<a class="card add" href="#/novo"><span class="plus">＋</span><h3>Criar playbook</h3><p>Preencha o essencial; a ferramenta gera o documento no padrão e o fluxograma inicial. Começa em Desenvolvimento.</p></a>` : ""}</div>`;
+}
+function homeLarge(list) {
+  if (!list.length) return homeEmpty();
+  return `<div class="plist">${list.map(p => `<a class="prow st-${STATUS_CLS[p.gov.status]}" href="#/${p.slug}/fluxo">
+      <div class="pr-main">
+        <div class="pr-top"><span class="id">${p.id}</span><span class="pr-ver">v${esc(pbVersion(p))}</span>${p.templateName ? `<span class="pr-tpl" title="Template">${esc(p.templateName)}</span>` : ""}</div>
+        <h3>${esc(p.name)}</h3>${pbSubtitle(p) ? `<p>${esc(pbSubtitle(p))}</p>` : ""}
+        <div class="pr-gov">${govLine(p.gov)}</div></div>
+      <div class="pr-stats"><div><b>${p.ramos.length}</b><span>ramos</span></div><div><b>${p.steps.length}</b><span>passos</span></div></div>
+      <div class="pr-status">${statusPill(p.gov.status)}</div></a>`).join("")}</div>`;
+}
+function homeSmall(list) {
+  if (!list.length) return homeEmpty();
+  return `<div class="ptable" role="table" aria-label="Playbooks">
+      <div class="pt-row pt-head" role="row"><span role="columnheader">ID</span><span role="columnheader">Nome</span><span role="columnheader">Status</span><span role="columnheader">Versão</span><span role="columnheader" class="pt-num">Ramos</span><span role="columnheader" class="pt-num">Passos</span><span role="columnheader" class="pt-rev">Última revisão</span></div>
+      ${list.map(p => `<a class="pt-row st-${STATUS_CLS[p.gov.status]}" role="row" href="#/${p.slug}/fluxo">
+        <span class="pt-id" role="cell">${p.id}</span><span class="pt-name" role="cell" title="${esc(p.name)}">${esc(p.name)}</span>
+        <span role="cell"><span class="pt-st"><i class="dot ${STATUS_CLS[p.gov.status]}"></i>${esc(p.gov.status)}</span></span><span role="cell" class="pt-ver">v${esc(pbVersion(p))}</span>
+        <span role="cell" class="pt-num">${p.ramos.length}</span><span role="cell" class="pt-num">${p.steps.length}</span>
+        <span role="cell" class="pt-rev">${p.gov.reviewed ? esc(p.gov.reviewed) + (p.gov.reviewer ? ` · ${esc(p.gov.reviewer)}` : "") : `<span class="muted">—</span>`}</span></a>`).join("")}</div>`;
+}
+const homeEmpty = () => `<div class="empty">Nenhum playbook ${homeFilter === "Todos" ? "disponível" : "em " + esc(homeFilter)}.</div>`;
+
 function renderHome() {
   const counts = s => PBS.filter(p => p.gov.status === s).length;
   const list = PBS.filter(p => homeFilter === "Todos" || p.gov.status === homeFilter);
+  const hv = homeView();
   view.innerHTML = `<section class="hero"><div class="wrap">
       <h1>${esc(Brand.get().homeTitle || Brand.DEFAULT.homeTitle)}</h1>
       ${Brand.get().homeSubtitle ? `<p>${esc(Brand.get().homeSubtitle)}</p>` : ""}
@@ -488,15 +547,16 @@ function renderHome() {
     <div class="wrap">
     <div class="home-bar"><div class="filters">${["Todos", ...App.data.statuses.filter(s => can("editor") || s !== "Desenvolvimento")].map(s =>
       `<button class="${s === homeFilter ? "on" : ""}" data-hf="${esc(s)}">${s === "Todos" ? "Todos" : `<i class="dot ${STATUS_CLS[s]}"></i>${esc(s)}`} <span class="cnt">${s === "Todos" ? PBS.length : counts(s)}</span></button>`).join("")}</div>
-      <div class="home-actions">${can("editor") ? `<a class="btn primary sm" href="#/novo">＋ Novo playbook</a><button class="btn ghost sm" id="impBtn" title="Importar um arquivo .medusa.md ou .md">⤒ Importar</button>` : ""}<a class="btn ghost sm" href="api/export" download title="Baixa um .zip com os playbooks que você pode ver, no formato .medusa.md">⤓ Exportar todos</a></div></div>
-    <div class="cards">${list.map(p => `<a class="card st-${STATUS_CLS[p.gov.status]}" href="#/${p.slug}/fluxo">
-      <div class="card-top"><span class="id">${p.id} · v${esc((p.props["Versão"] || "").split(" ")[0])}</span>${statusPill(p.gov.status)}</div><h3>${esc(p.name)}</h3>
-      <p>${esc(p.props["Tática MITRE principal"] || p.props["Fase NIST"] || "")}</p>
-      <div class="meta"><span class="chip">${p.ramos.length} ramos</span><span class="chip">${p.steps.length} passos</span></div>
-      <div class="govline">${govLine(p.gov)}</div></a>`).join("")}
-      ${!list.length ? `<div class="empty">Nenhum playbook ${homeFilter === "Todos" ? "disponível" : "em " + esc(homeFilter)}.</div>` : ""}
-      ${can("editor") ? `<a class="card add" href="#/novo"><span class="plus">＋</span><h3>Criar playbook</h3><p>Preencha o essencial; a ferramenta gera o documento no padrão e o fluxograma inicial. Começa em Desenvolvimento.</p></a>` : ""}</div></div>`;
+      <div class="home-actions"><div class="view-seg" role="group" aria-label="Visualização da lista">${HOME_VIEWS.map(([k, n, ic]) =>
+        `<button class="${k === hv ? "on" : ""}" data-hv="${k}" title="${n}" aria-label="${n}" aria-pressed="${k === hv}">${ic}</button>`).join("")}</div>
+        ${can("editor") ? `<a class="btn primary sm" href="#/novo">＋ Novo playbook</a><button class="btn ghost sm" id="impBtn" title="Importar um arquivo .medusa.md ou .md">⤒ Importar</button>` : ""}<a class="btn ghost sm" href="api/export" download title="Baixa um .zip com os playbooks que você pode ver, no formato .medusa.md">⤓ Exportar todos</a></div></div>
+    ${hv === "lg" ? homeLarge(list) : hv === "sm" ? homeSmall(list) : homeCards(list)}</div>`;
   view.querySelector(".filters").onclick = e => { const b = e.target.closest("[data-hf]"); if (b) { homeFilter = b.dataset.hf; renderHome(); } };
+  view.querySelector(".view-seg").onclick = e => {
+    const b = e.target.closest("[data-hv]"); if (!b) return;
+    try { localStorage.setItem(homeViewKey(), b.dataset.hv); } catch { }
+    renderHome();
+  };
   if ($("#impBtn")) $("#impBtn").onclick = importDialog;
 }
 function govLine(g) {
@@ -516,7 +576,7 @@ function renderPb(pb, tab, extra, rest) {
       <div class="pbactions"><div class="menu-wrap"><button class="btn ghost sm" id="expBtn" aria-haspopup="true">⤓ Exportar ▾</button>
         <div class="dmenu" id="expMenu" hidden>
           <div class="dm-h">Documento</div>
-          <a href="api/pb/${pb.id}/export?fmt=md" download><b>Markdown</b><small>.md · Confluence, Git, qualquer editor</small></a>
+          <a href="api/pb/${pb.id}/export?fmt=md" download><b>Markdown</b><small>.md · Confluence, Git, qualquer editor (.zip se tiver imagens)</small></a>
           <button data-exp="html"><b>HTML com fluxograma</b><small>.html · abre em qualquer navegador ou no Word</small></button>
           <button data-exp="print"><b>Imprimir / salvar PDF</b><small>documento completo com o fluxograma</small></button>
           <div class="dm-h">Fluxograma</div>
@@ -741,7 +801,7 @@ const Admin = (() => {
     template_importado: "Template importado", template_times_salvos: "Times do template salvos", template_ramos_adicionados: "Ramos adicionados ao template",
     ramo_criado: "Ramo criado", ramo_excluido: "Ramo excluído", versao_restaurada: "Versão restaurada", admin_inicial: "Administrador inicial",
     logs_configurados: "Logs configurados", logs_testados: "Teste de envio de logs", auditoria_exportada: "Auditoria exportada",
-    sso_configurado: "SSO configurado", sso_falhou: "Falha no SSO" };
+    sso_configurado: "SSO configurado", sso_falhou: "Falha no SSO", imagem_enviada: "Imagem enviada", aplicacao_resetada: "Aplicação resetada" };
   const fmtTs = t => t ? new Date(t).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "—";
 
   function showTemp(user, pw, what) {
@@ -833,43 +893,49 @@ const Admin = (() => {
     $("#afilter", el).oninput = ev => { const v = ev.target.value.toLowerCase(); el.querySelectorAll("tbody tr").forEach(tr => tr.hidden = v && !tr.dataset.q.includes(v)); };
   }
 
+  /* Aparência: grade 2×2 de cartões do mesmo formato (título, conteúdo, ações no rodapé).
+     Identidade | Logo  /  Página inicial | Prévia. A prévia mostra o que ainda não foi salvo. */
   function appearance(el) {
     const b = Brand.get();
     let st = { name: b.name, color: b.color };
     const SW = ["#3B5BDB", "#CC092F", "#0F766E", "#2E7D32", "#7A3E9D", "#B25E09", "#374151", "#AD1457"];
-    el.innerHTML = `<div class="appearance"><div class="ecard">
-        <div class="ecard-h"><b>Identidade da ferramenta</b></div>
+    const card = (title, sub, body, foot) => `<section class="ecard ap-card"><header class="ap-h"><b>${title}</b><small>${sub}</small></header>
+      <div class="ap-body">${body}</div><footer class="ap-foot">${foot}</footer></section>`;
+    const logoImg = b.logo ? `<img src="api/branding/logo?v=${esc(b.logo)}" alt="">` : "";
+    el.innerHTML = `<div class="appearance">
+      ${card("Identidade", "Nome e cor primária da ferramenta", `
         <label>Nome exibido no topo, no login e na aba do navegador<input class="in" id="apName" maxlength="40" value="${esc(st.name)}"></label>
-        <div class="pp-lbl" style="margin-top:16px">Cor primária</div>
-        <div class="color-row">
-          <label>Seletor<input type="color" id="apPick" value="${esc(st.color)}"></label>
-          <label>Código<input class="in hex" id="apHex" value="${esc(st.color)}" maxlength="7"></label>
-          <label>R<input class="in rgb" id="apR" type="number" min="0" max="255"></label>
-          <label>G<input class="in rgb" id="apG" type="number" min="0" max="255"></label>
-          <label>B<input class="in rgb" id="apB" type="number" min="0" max="255"></label>
+        <div class="pp-lbl">Cor primária</div>
+        <div class="color-grid">
+          <label class="cf"><span>Seletor</span><input type="color" id="apPick" value="${esc(st.color)}"></label>
+          <label class="cf"><span>Hexadecimal</span><input class="in hex" id="apHex" value="${esc(st.color)}" maxlength="7"></label>
+          <label class="cf"><span>R</span><input class="in" id="apR" type="number" min="0" max="255"></label>
+          <label class="cf"><span>G</span><input class="in" id="apG" type="number" min="0" max="255"></label>
+          <label class="cf"><span>B</span><input class="in" id="apB" type="number" min="0" max="255"></label>
         </div>
-        <div class="swatches">${SW.map(c => `<button style="background:${c}" data-sw="${c}" title="${c}"></button>`).join("")}</div>
+        <div class="swatches" role="group" aria-label="Cores sugeridas">${SW.map(c => `<button style="background:${c}" data-sw="${c}" title="${c}" aria-label="${c}"></button>`).join("")}</div>
         <div class="contrast" id="apContrast"></div>
-        <p class="muted small">A cor muda botões, cabeçalho, abas e destaques. As cores das raias, formas e setas dos fluxogramas não mudam, porque fazem parte do modelo dos playbooks.</p>
-        <div class="err" id="aperr" hidden></div>
-        <div class="create-actions"><button class="btn ghost" id="apReset">Restaurar padrão</button><button class="btn primary" id="apSave">Salvar aparência</button></div>
-      </div>
-      <div class="ecard"><div class="ecard-h"><b>Página inicial</b></div>
+        <p class="muted small">A cor muda botões, cabeçalho, abas e destaques. As cores das raias, formas e setas dos fluxogramas não mudam: fazem parte do modelo dos playbooks.</p>
+        <div class="err" id="aperr" hidden></div>`,
+        `<button class="btn ghost" id="apReset">Restaurar padrão</button><button class="btn primary" id="apSave">Salvar identidade</button>`)}
+      ${card("Logo", "Aparece no topo, ao lado do nome", `
+        <div class="logo-cur"><div class="lg">${logoImg || `<span class="muted small">sem logo</span>`}</div>
+          <div class="small muted">PNG, JPG, SVG ou WEBP até 512 KB, de preferência com fundo transparente. A logo se ajusta sozinha à altura do topo.</div></div>
+        <label class="logo-drop" id="lgDrop"><span>Arraste a imagem aqui ou clique para escolher</span><input type="file" id="lgFile" accept="image/png,image/jpeg,image/svg+xml,image/webp" hidden></label>`,
+        `<button class="btn ghost" id="lgDel" ${b.logo ? "" : "disabled"}>Remover logo</button><button class="btn primary" id="lgPick">Enviar logo</button>`)}
+      ${card("Página inicial", "Título e subtítulo do topo da página inicial", `
         <label>Título<input class="in" id="hmTitle" maxlength="120" value="${esc(b.homeTitle || "")}"></label>
         <label>Subtítulo<textarea class="in" id="hmSub" rows="4" maxlength="600">${esc(b.homeSubtitle || "")}</textarea></label>
-        <p class="muted small">Texto do topo da página inicial, para todos os usuários. Não muda os playbooks nem os fluxogramas.</p>
-        <div class="err" id="hmErr" hidden></div>
-        <div class="create-actions"><button class="btn ghost" id="hmReset">Texto padrão</button><button class="btn primary" id="hmSave">Salvar página inicial</button></div>
-      </div>
-      <div class="ecard"><div class="ecard-h"><b>Logo da empresa / time</b></div>
-        <div class="logo-cur"><div class="lg">${b.logo ? `<img src="api/branding/logo?v=${esc(b.logo)}" alt="">` : `<span class="muted small">sem logo</span>`}</div>
-          <div class="small muted">Aparece no topo, ao lado do nome. PNG, JPG, SVG ou WEBP até 512 KB; de preferência com fundo transparente.</div></div>
-        <label class="logo-drop" id="lgDrop">Arraste a imagem aqui ou clique para escolher<input type="file" id="lgFile" accept="image/png,image/jpeg,image/svg+xml,image/webp" hidden></label>
-        ${b.logo ? `<div class="create-actions"><button class="btn danger sm" id="lgDel">Remover logo</button></div>` : ""}
-        <div class="pp-lbl" style="margin-top:16px">Prévia</div>
-        <div class="preview-box"><div class="preview-top" style="background:var(--brand-grad);color:var(--on-brand)"><span class="brand-mark ${b.logo ? "has-logo" : "default"}">${b.logo ? `<img src="api/branding/logo?v=${esc(b.logo)}" alt="">` : ""}</span><span id="pvName">${esc(st.name)}</span></div>
-          <div class="preview-body"><button class="btn primary sm">Botão</button><span class="status prd">Produção</span><button class="ref step">T0</button><span class="chip">chip</span></div></div>
-      </div></div>`;
+        <p class="muted small">Vale para todos os usuários. Não muda os playbooks nem os fluxogramas.</p>
+        <div class="err" id="hmErr" hidden></div>`,
+        `<button class="btn ghost" id="hmReset">Texto padrão</button><button class="btn primary" id="hmSave">Salvar página inicial</button>`)}
+      ${card("Prévia", "Como fica, inclusive o que ainda não foi salvo", `
+        <div class="preview-box">
+          <div class="preview-top" style="background:var(--brand-grad);color:var(--on-brand)"><span class="brand-mark ${b.logo ? "has-logo" : "default"}">${logoImg}</span><span id="pvName">${esc(st.name)}</span></div>
+          <div class="preview-hero"><b id="pvTitle"></b><p id="pvSub"></p></div>
+          <div class="preview-body"><button class="btn primary sm" type="button">Botão</button><span class="status prd">Produção</span><button class="ref step" type="button">T0</button><span class="chip">chip</span></div></div>`,
+        `<span class="muted small">Cada cartão tem o próprio botão de salvar.</span>`)}
+    </div>`;
     const hex = $("#apHex", el), pick = $("#apPick", el), R = $("#apR", el), G = $("#apG", el), B = $("#apB", el);
     function set(color, from) {
       if (!/^#[0-9A-Fa-f]{6}$/.test(color)) return;
@@ -881,9 +947,16 @@ const Admin = (() => {
       const c = Brand.contrast([r, g, bb], [255, 255, 255]);
       $("#apContrast", el).className = "contrast" + (c < 3 ? " bad" : "");
       $("#apContrast", el).textContent = c < 3 ? `Contraste baixo com branco (${c.toFixed(1)}:1): o texto sobre a cor ficará escuro.` : `Contraste com branco: ${c.toFixed(1)}:1`;
+      el.querySelectorAll("[data-sw]").forEach(x => x.classList.toggle("on", x.dataset.sw === st.color));
       Brand.preview(st);
     }
     set(st.color);
+    const pvHome = () => {
+      $("#pvTitle", el).textContent = $("#hmTitle", el).value.trim() || Brand.DEFAULT.homeTitle;
+      const sub = $("#hmSub", el).value.trim(); $("#pvSub", el).textContent = sub; $("#pvSub", el).hidden = !sub;
+    };
+    pvHome();
+    $("#hmTitle", el).oninput = pvHome; $("#hmSub", el).oninput = pvHome;
     pick.oninput = () => set(pick.value, "pick");
     hex.oninput = () => { let v = hex.value.trim(); if (!v.startsWith("#")) v = "#" + v; set(v, "hex"); };
     [R, G, B].forEach(i => i.oninput = () => set(Brand.rgbToHex(+R.value || 0, +G.value || 0, +B.value || 0), "rgb"));
@@ -891,7 +964,7 @@ const Admin = (() => {
     $("#apName", el).oninput = e => { st.name = e.target.value; $("#pvName", el).textContent = st.name || Brand.DEFAULT.name; };
     $("#apReset", el).onclick = () => { $("#apName", el).value = Brand.DEFAULT.name; st.name = Brand.DEFAULT.name; $("#pvName", el).textContent = st.name; set(Brand.DEFAULT.color); };
     $("#apSave", el).onclick = async () => {
-      try { Brand.apply(await api("PUT", "api/branding", st)); toast("Aparência salva para todos os usuários"); }
+      try { Brand.apply(await api("PUT", "api/branding", st)); $("#aperr", el).hidden = true; toast("Identidade salva para todos os usuários"); }
       catch (x) { $("#aperr", el).textContent = x.message; $("#aperr", el).hidden = false; }
     };
     $("#hmReset", el).onclick = async () => {
@@ -915,14 +988,53 @@ const Admin = (() => {
       rd.readAsDataURL(file);
     };
     $("#lgFile", el).onchange = e => upload(e.target.files[0]);
+    $("#lgPick", el).onclick = () => $("#lgFile", el).click();
     const drop = $("#lgDrop", el);
     drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
     drop.ondragleave = () => drop.classList.remove("over");
     drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); upload(e.dataTransfer.files[0]); };
-    if ($("#lgDel", el)) $("#lgDel", el).onclick = async () => {
+    $("#lgDel", el).onclick = async () => {
       if (!confirm("Remover a logo?")) return;
       try { Brand.apply(await api("DELETE", "api/branding/logo")); toast("Logo removida"); appearance(el); } catch (x) { toast(x.message, "err"); }
     };
+  }
+
+  /* ── reset da aplicação (só administrador), com a mesma confirmação da exclusão de playbook ── */
+  async function resetDialog() {
+    if (Editor.dirty) return toast("Salve ou descarte as alterações antes", "warn");
+    let s;
+    try { s = await api("GET", "api/admin/summary"); } catch (e) { return toast(e.message, "err"); }
+    const sso = App.user.auth === "sso", n = (v, one, many) => `${v} ${v === 1 ? one : many}`;
+    modal({
+      title: "Resetar aplicação", html: `<form id="rsForm" class="tform">
+        <div class="notice danger">A aplicação volta ao estado de recém-instalada para <b>todos os usuários</b>: saem
+          <b>${n(s.playbooks, "playbook", "playbooks")}</b>, <b>${n(s.templates, "template", "templates")}</b> (o template Padrão é recriado)
+          e <b>${n(s.versions, "versão", "versões")}</b> do histórico.<br>Nada é apagado de vez: o conteúdo e uma cópia do banco vão para a lixeira do
+          servidor (<code>data/lixeira/reset__…</code>) e podem ser restaurados por quem administra o servidor.</div>
+        <div class="pp-lbl">Também voltar ao padrão</div>
+        <label class="opt-row ${sso ? "off" : ""}"><input type="checkbox" name="settings" ${sso ? "disabled" : "checked"}><span><b>Configurações</b>
+          <small>${sso ? "Indisponível: sua conta entra pelo SSO, que seria desligado." : "Aparência (nome, cor, logo e página inicial), logs e SSO."}</small></span></label>
+        <label class="opt-row"><input type="checkbox" name="users"><span><b>Usuários</b><small>Exclui ${n(Math.max(0, s.users - 1), "outro usuário", "outros usuários")}; fica só a sua conta.</small></span></label>
+        <label class="opt-row"><input type="checkbox" name="audit"><span><b>Auditoria</b><small>Apaga ${n(s.audit, "evento", "eventos")} e os arquivos de log. O próprio reset fica registrado.</small></span></label>
+        <label>Para confirmar, digite <b>${esc(s.word)}</b><input class="in" name="confirm" autocomplete="off" spellcheck="false"></label>
+        <div class="err" id="rserr" hidden></div>
+        <div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn danger" type="submit" disabled>Resetar aplicação</button></div></form>`,
+      onMount: (bx, close) => {
+        const form = $("#rsForm", bx), btn = form.querySelector("[type=submit]");
+        form.confirm.oninput = () => { btn.disabled = form.confirm.value.trim().toUpperCase() !== s.word; };
+        form.querySelector("[data-cancel]").onclick = close;
+        form.onsubmit = async e => {
+          e.preventDefault();
+          btn.disabled = true; btn.textContent = "Resetando…";
+          try {
+            const r = await api("POST", "api/admin/reset", { confirm: form.confirm.value.trim().toUpperCase(),
+              settings: form.settings.checked, users: form.users.checked, audit: form.audit.checked });
+            close(); toast(`Aplicação resetada · cópia em data/lixeira/${r.archive}`);
+            setTimeout(() => { location.hash = "#/"; location.reload(); }, 900);
+          } catch (x) { $("#rserr", bx).textContent = x.message; $("#rserr", bx).hidden = false; btn.disabled = false; btn.textContent = "Resetar aplicação"; }
+        };
+      }
+    });
   }
 
   /* ── logs: encaminhamento em JSON e retenção ── */
@@ -1033,9 +1145,11 @@ const Admin = (() => {
 
   function render(root, sub) {
     sub = ["auditoria", "aparencia", "logs", "sso"].includes(sub) ? sub : "usuarios";
-    root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead"><span class="pbid">ADMIN</span><h1>Administração</h1></div>
+    root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead"><span class="pbid">ADMIN</span><h1>Administração</h1>
+        <div class="pbactions"><button class="btn danger sm" id="resetBtn" title="Volta a aplicação ao estado de recém-instalada (somente administrador)">Resetar aplicação</button></div></div>
       <nav class="tabs"><a href="#/admin/usuarios" class="${sub === "usuarios" ? "on" : ""}">Usuários e perfis</a><a href="#/admin/aparencia" class="${sub === "aparencia" ? "on" : ""}">Aparência</a><a href="#/admin/auditoria" class="${sub === "auditoria" ? "on" : ""}">Auditoria</a><a href="#/admin/logs" class="${sub === "logs" ? "on" : ""}">Logs e retenção</a><a href="#/admin/sso" class="${sub === "sso" ? "on" : ""}">SSO</a></nav></div></div>
       <div class="wrap" id="adminview"><div class="empty">Carregando…</div></div>`;
+    $("#resetBtn").onclick = resetDialog;
     ({ usuarios: users, aparencia: appearance, auditoria: auditLog, logs, sso: ssoAdmin })[sub]($("#adminview"));
   }
   return { render };
@@ -1174,12 +1288,25 @@ const Exporter = (() => {
     table{border-collapse:collapse;width:100%;font-size:13.5px;margin:8px 0}th,td{border:1px solid #ccc;padding:6px 9px;text-align:left;vertical-align:top}th{background:#f2f2f4}
     blockquote{margin:10px 0;padding:8px 14px;border-left:4px solid #999;background:#f6f6f8}code{background:#f0f0f3;padding:1px 4px;border-radius:3px}
     .meta{color:#666;font-size:13px}.flow{overflow:auto;border:1px solid #ddd;border-radius:8px;margin:12px 0}.flow svg{display:block;max-width:100%;height:auto}
+    figure.docimg{margin:14px 0;text-align:center}figure.docimg img{max-width:100%;height:auto;border:1px solid #ddd;border-radius:6px}figure.docimg figcaption{font-size:13px;color:#666;margin-top:6px}
     li.chk{list-style:none;margin-left:-20px}li.chk::before{content:"☐ "}li.chk.done::before{content:"☑ "}
     @media print{body{margin:0;max-width:none}.flow{border:0;page-break-inside:avoid}h2{page-break-after:avoid}}`;
   const SVG_CSS = `.nodetxt{width:100%;height:100%;display:flex;align-items:center;justify-content:center;text-align:center;font:11px/1.25 Helvetica,Arial,sans-serif;color:#1b2230;padding:2px 4px;box-sizing:border-box;overflow:hidden}.nodetxt .m{color:#666}`;
   function flowSvg(pb) {
     const { svg, vb } = Flow.svg(pb.flow, { badges: badgesFor(pb) });
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb.join(" ")}" width="${vb[2]}" height="${vb[3]}"><style>${SVG_CSS}</style><rect x="${vb[0]}" y="${vb[1]}" width="${vb[2]}" height="${vb[3]}" fill="#fff"/>${svg}</svg>`;
+  }
+  /* imagens do documento entram no arquivo como data URL: o HTML funciona sozinho, fora da aplicação */
+  async function inlineImages(text) {
+    const urls = [...new Set([...text.matchAll(/src="(api\/pb\/PB-\d+\/img\/[\w.-]+)"/g)].map(m => m[1]))];
+    for (const u of urls) {
+      try {
+        const blob = await (await fetch(u, { credentials: "same-origin" })).blob();
+        const data = await new Promise(ok => { const rd = new FileReader(); rd.onload = () => ok(rd.result); rd.readAsDataURL(blob); });
+        text = text.split(`src="${u}"`).join(`src="${data}"`);
+      } catch { }
+    }
+    return text;
   }
   function html(pb) {
     const g = pb.gov, secs = pb.sections;
@@ -1200,14 +1327,14 @@ const Exporter = (() => {
   }
   const base = pb => (pb.folder || pb.id).toLowerCase();
   return {
-    html: pb => { download(`${base(pb)}.html`, html(pb), "text/html"); toast("Documento HTML gerado"); },
+    html: async pb => { download(`${base(pb)}.html`, await inlineImages(html(pb)), "text/html"); toast("Documento HTML gerado"); },
     svg: pb => { download(`${base(pb)}-fluxo.svg`, flowSvg(pb), "image/svg+xml"); toast("Imagem do fluxograma gerada"); },
-    print: pb => {
-      const url = URL.createObjectURL(new Blob([html(pb)], { type: "text/html" }));
-      const w = window.open(url, "_blank");
-      if (!w) { URL.revokeObjectURL(url); return toast("O navegador bloqueou a nova janela. Use “HTML com fluxograma” e imprima o arquivo.", "warn"); }
-      w.addEventListener("load", () => { setTimeout(() => { w.focus(); w.print(); }, 300); });
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    print: async pb => {
+      const w = window.open("", "_blank");       // abre já no clique (senão o navegador bloqueia) e recebe o conteúdo depois
+      if (!w) return toast("O navegador bloqueou a nova janela. Use “HTML com fluxograma” e imprima o arquivo.", "warn");
+      const text = await inlineImages(html(pb));
+      w.document.open(); w.document.write(text); w.document.close();
+      setTimeout(() => { w.focus(); w.print(); }, 400);
     },
   };
 })();
@@ -1497,7 +1624,7 @@ async function importDialog() {
               <span>Arquivo</span><b>${esc(fname || "texto colado")}</b>
               <span>Playbook</span><b>${esc(p.id)} — ${esc(p.name)}</b>
               <span>Origem</span><b>${esc(p.origin.gerado_por || "—")}${p.origin.status_origem ? ` · estava em ${esc(p.origin.status_origem)}` : ""}${p.origin.exportado_por ? ` · exportado por ${esc(p.origin.exportado_por)}` : ""}</b>
-              <span>Conteúdo</span><b>${p.sections} seções · ${p.nodes} caixas · ${p.edges} setas</b>
+              <span>Conteúdo</span><b>${p.sections} seções · ${p.nodes} caixas · ${p.edges} setas${p.images ? ` · ${p.images} imagem(ns)` : ""}</b>
               <span>Raias</span><b>${p.lanes.map(esc).join(", ")}</b>
               <span>Template</span><b>${esc(p.template)}</b>
               ${p.createTeams.length ? `<span>Times novos</span><b>${p.createTeams.map(esc).join(", ")} <small class="muted">(entram no template ${esc(p.template)})</small></b>` : ""}
@@ -1522,7 +1649,7 @@ async function importDialog() {
       }
       const readFile = f => {
         if (!f) return;
-        if (f.size > 2 * 1024 * 1024) return toast("Arquivo grande demais (máx. 2 MB)", "err");
+        if (f.size > 6 * 1024 * 1024) return toast("Arquivo grande demais (máx. 6 MB)", "err");
         fname = f.name; const rd = new FileReader(); rd.onload = () => { text = rd.result; analyze(); }; rd.readAsText(f, "utf-8");
       };
       $("#imFile", b).onchange = e => readFile(e.target.files[0]);
