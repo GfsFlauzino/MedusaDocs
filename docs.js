@@ -13,12 +13,22 @@ const Docs = (() => {
         <li><b>Menu do perfil</b> (seu nome, no rodapé da barra lateral): documentação, troca de senha e sair.</li>
         <li><b>Tema:</b> o botão ${ic("sun")}/${ic("moon")}, ao lado do perfil, alterna claro e escuro (vale para você, neste navegador). As cores do fluxograma seguem o modelo e não mudam com o tema.</li>
         <li><b>Página inicial:</b> os botões ao lado de "Novo playbook" alternam a lista entre <b>cartões</b>, <b>lista grande</b> (com template, revisão, ramos e passos) e <b>lista pequena</b> (uma linha por playbook, boa para muitos playbooks). A escolha fica guardada no seu navegador.</li></ul>` },
-    { id: "perfis", role: "viewer", title: "Perfis e permissões", html: `
-      <table><thead><tr><th>Perfil</th><th>Vê</th><th>Pode</th></tr></thead><tbody>
+    { id: "perfis", role: "viewer", title: "Papéis e permissões", html: `
+      <p>Cada usuário tem um <b>papel</b>, e cada papel uma lista de permissões. Os três papéis do sistema:</p>
+      <table><thead><tr><th>Papel</th><th>Vê</th><th>Pode</th></tr></thead><tbody>
         <tr><td>Visualizador</td><td>Playbooks em <b>Homologação</b> e <b>Produção</b></td><td>Ler, buscar, exportar e trocar a própria senha</td></tr>
-        <tr><td>Editor</td><td>Todos, inclusive <b>Desenvolvimento</b></td><td>Criar, editar e importar playbooks, mudar status, editar templates, times e tags</td></tr>
-        <tr><td>Administrador</td><td>Todos</td><td>Tudo do editor + usuários, aparência, auditoria, exclusão de playbooks e de templates</td></tr></tbody></table>
-      <p>As permissões são verificadas no servidor: o visualizador nem recebe os playbooks em Desenvolvimento.</p>` },
+        <tr><td>Editor</td><td>Todos, inclusive <b>Desenvolvimento</b></td><td>Criar, editar e importar playbooks, mudar status, aprovar, restaurar versões, editar templates, times e tags</td></tr>
+        <tr><td>Administrador</td><td>Todos</td><td>Tudo, inclusive usuários, papéis, aparência, auditoria, logs, SSO e exclusões. Não pode ser alterado</td></tr></tbody></table>
+      <p>O administrador cria outros papéis em <b>Administração → Papéis</b>, marcando por tipo de documento e por ação o que cada um pode fazer (ver, ver rascunhos, criar, editar, alterar status, aprovar, restaurar, importar, exportar, excluir) e as permissões da plataforma (templates, usuários, papéis, auditoria, logs, SSO, aparência, reset).
+        O seu papel aparece no menu do perfil. As permissões são verificadas no servidor: quem não pode ver rascunhos nem recebe os playbooks em Desenvolvimento.</p>` },
+    { id: "papeis", role: "admin", title: "Gerenciar papéis", html: `
+      <p><b>${ic("settings")}Administração → Papéis</b>: à esquerda a lista (com quantos usuários usam cada um); à direita o editor.</p>
+      <ul><li><b>Matriz:</b> linhas são as ações, colunas os tipos de documento. Clique no nome da linha ou da coluna para marcar ou desmarcar tudo. Abaixo, as permissões da plataforma.</li>
+        <li><b>Novo papel</b> ou <b>Duplicar</b> um existente. A <b>prioridade</b> decide qual papel vence quando o usuário do SSO está em mais de um grupo mapeado.</li>
+        <li><b>Editor</b> e <b>Visualizador</b> podem ser ajustados e têm <b>Restaurar padrão</b>; <b>Administrador</b> não muda. Papéis do sistema não podem ser excluídos.</li>
+        <li>Excluir um papel em uso pede para qual papel os usuários vão.</li>
+        <li>Ninguém concede o que não tem: quem gerencia papéis sem ser administrador vê desabilitadas as permissões que não possui e não mexe em papéis mais fortes que o seu.</li>
+        <li>As mudanças valem na hora (na próxima ação de cada usuário) e vão para a auditoria (<code>papel_criado</code>, <code>papel_alterado</code> com o que entrou e saiu, <code>papel_excluido</code>).</li></ul>` },
     { id: "leitura", role: "viewer", title: "Lendo um playbook", html: `
       <ul><li><b>Fluxograma:</b> clique em uma caixa para ler o trecho da documentação vinculado a ela (passos, ramo, seção). Clique no nome de um time (raia ou caixa de apoio) para ver as responsabilidades e o que ele não faz. A etiqueta no canto da caixa mostra o ID do passo.</li>
         <li><b>Documentação:</b> o documento completo, com índice lateral por seção e subseção: fases e passos (ID, ação, critério de saída), ramos R1, R2…, critérios e o restante. Clique numa imagem para ampliar (${K("Esc")} fecha).</li>
@@ -54,7 +64,7 @@ const Docs = (() => {
       <p><b>Desenvolvimento → Homologação → Produção</b>, pelo botão <b>${ic("swap")}Alterar status</b> do playbook.</p>
       <ul><li>Playbook criado ou importado começa em Desenvolvimento (visível só para editores).</li>
         <li>Homologação: validação com o time; visualizadores já leem.</li>
-        <li>Produção exige um <b>aprovador</b> (editor ou administrador ativo).</li>
+        <li>Produção exige um <b>aprovador</b>: usuário ativo cujo papel pode aprovar e que seja <b>outra pessoa</b>, diferente de quem está publicando e de quem fez a última alteração do conteúdo. A lista do diálogo já mostra só quem vale, e diz quem ficou de fora. A regra fica em <b>Administração → Aparência → Governança</b> (ligada por padrão). Playbooks que já estavam em Produção não mudam.</li>
         <li><b>Último revisor</b> e <b>data de revisão</b> são preenchidos a cada gravação. Os quatro campos ficam na tabela "Propriedades do playbook" e aparecem bloqueados (${ic("lock")}) no editor.</li>
         <li>Editar algo em Produção mostra um aviso: a alteração fica visível para todos na hora. Ao salvar, escolha <b>Minor</b> (ajuste: 2.3 → 2.4) ou <b>Major</b> (mudança de operação: 2.3 → 3.0) e descreva o que mudou. Para revisões maiores, volte antes para Homologação.</li></ul>` },
     { id: "criar", role: "editor", title: "Criar playbook", html: `
@@ -133,7 +143,7 @@ const Docs = (() => {
       <p>Sem <code>@pos</code>, as caixas são posicionadas automaticamente ("Reorganizar automaticamente").</p>` },
     { id: "usuarios", role: "admin", title: "Usuários", html: `
       <p><b>${ic("settings")}Administração → Usuários</b>:</p>
-      <ul><li><b>Criar:</b> login (3 a 80 caracteres: minúsculas, números, <code>. _ - @</code>), nome e perfil. A senha temporária aparece uma única vez; o usuário é obrigado a trocá-la no primeiro acesso (mínimo 10 caracteres).</li>
+      <ul><li><b>Criar:</b> login (3 a 80 caracteres: minúsculas, números, <code>. _ - @</code>), nome e papel. A senha temporária aparece uma única vez; o usuário é obrigado a trocá-la no primeiro acesso (mínimo 10 caracteres).</li>
         <li><b>Autenticação:</b> cada usuário entra por <b>senha local</b> ou pelo <b>SSO</b> (coluna de autenticação). Usuário SSO não tem senha na ferramenta; o login pode ser um e-mail (até 80 caracteres, com <code>@</code>).</li>
         <li><b>Redefinir senha</b> gera outra temporária e encerra as sessões. <b>Encerrar</b> derruba as sessões abertas.</li>
         <li><b>Desativar</b> bloqueia o acesso sem perder o histórico; <b>excluir</b> remove o usuário.</li>
@@ -153,7 +163,7 @@ const Docs = (() => {
       <p><b>${ic("settings")}Administração → SSO</b>, opcional, por <b>OpenID Connect</b> (Microsoft Entra ID, Okta, Keycloak, Google, Auth0, Authentik, ADFS…).</p>
       <ol><li>No provedor, crie um aplicativo web (cliente confidencial) com a <b>URL de redirecionamento</b> mostrada na tela: <code>https://SEU-ENDERECO/api/sso/callback</code>.</li>
         <li>Na ferramenta, informe o <b>emissor</b> (issuer), clique em <b>Testar</b>, preencha client ID, client secret e a <b>URL pública</b>, e ative.</li>
-        <li>Opcional: indique a claim de grupos (<code>groups</code>, <code>roles</code>, <code>realm_access.roles</code>) e quais grupos viram Administrador, Editor ou Visualizador. O perfil é reaplicado a cada login.</li></ol>
+        <li>Opcional: indique a claim de grupos (<code>groups</code>, <code>roles</code>, <code>realm_access.roles</code>) e quais grupos viram cada papel (inclusive os criados). Se o usuário estiver em grupos de mais de um papel, vale o de maior prioridade. O papel é reaplicado a cada login.</li></ol>
       <ul><li><b>Usuário novo:</b> criado no primeiro login, ou só pré-cadastrados (Usuários → Autenticação: SSO, com o login igual ao enviado pelo provedor).</li>
         <li><b>Contas locais</b> não são vinculadas automaticamente a uma identidade do SSO (evita tomada de conta): converta em <b>Usuários</b>.</li>
         <li><b>Login por senha</b> pode continuar para todos ou ficar só para administradores (acesso de emergência).</li>
@@ -216,12 +226,18 @@ python3 server.py --host 0.0.0.0 --port 8765 --secure-cookies      # rede, atrá
         <tr><td>Restaurar uma versão</td><td>copie o arquivo de <code>.backups/&lt;PB&gt;/&lt;data-hora&gt;/</code> para a pasta do playbook</td></tr></tbody></table>` },
   ];
   const ROLE_LBL = { viewer: "todos", editor: "editores", admin: "administradores" };
+  /* quem vê cada tópico: pelo público (role) e, nos de administração, pela permissão específica */
+  const AUD = { viewer: () => true, editor: () => canAny("playbook.edit", "playbook.create", "templates.view"), admin: () => canAdmin() };
+  const VIS = { papeis: () => can("roles.manage"), usuarios: () => can("users.manage"), logs: () => can("logs.manage"), sso: () => can("sso.manage"),
+    aparencia: () => can("branding.edit"), reset: () => can("app.reset"), auditoria: () => can("audit.view"), templates: () => can("templates.view"),
+    times: () => can("templates.view"), importar: () => can("playbook.import"), criar: () => can("playbook.create"), ciclo: () => can("playbook.status") };
+  const visible = s => (VIS[s.id] || AUD[s.role])();
 
   function render(root, focus) {
-    const secs = SECTIONS.filter(s => can(s.role));
+    const secs = SECTIONS.filter(visible);
     root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead"><span class="pbid">${ic("docs")}</span><h1>Documentação</h1>
         <div class="pbactions"><input class="in sm" id="docQ" type="search" placeholder="Filtrar tópicos…" style="width:220px"></div></div>
-        <p class="muted" style="margin:6px 0 16px">Como usar e administrar o ${esc(Brand.get().name)}${Brand.get().appVersion ? ` (Medusa Docs ${esc(Brand.get().appVersion)})` : ""}. Você vê os tópicos do seu perfil (${esc(App.user.roleName)}).</p></div></div>
+        <p class="muted" style="margin:6px 0 16px">Como usar e administrar o ${esc(Brand.get().name)}${Brand.get().appVersion ? ` (Medusa Docs ${esc(Brand.get().appVersion)})` : ""}. Você vê os tópicos do seu papel (${esc(App.user.roleName)}).</p></div></div>
       <div class="wrap"><div class="docgrid"><nav class="toc" id="docToc">${secs.map(s => `<a href="#/docs/${s.id}" data-go="${s.id}">${esc(s.title)}</a>`).join("")}</nav>
         <div class="doc docs-page">${secs.map(s => `<section id="doc-${s.id}" class="md" data-txt="${esc((s.title + " " + s.html.replace(/<[^>]+>/g, " ")).toLowerCase())}">
           <h2>${esc(s.title)} ${s.role !== "viewer" ? `<span class="aud ${s.role}">${ROLE_LBL[s.role]}</span>` : ""}</h2>${s.html}</section>`).join("")}</div></div></div>`;

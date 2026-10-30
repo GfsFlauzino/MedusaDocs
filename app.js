@@ -15,8 +15,11 @@ const pbBy = slug => PBS.find(p => p.slug === slug);
 const norm = s => String(s || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 const TEAM_COLOR = n => (TEAMS[n] && TEAMS[n].color) || "#5B6673";
 const TEAM_ORDER = ["SOC N1", "SOC N2", "CSIRT"];
-const LEVEL = { viewer: 1, editor: 2, admin: 3 };
-const can = role => !!App.user && LEVEL[App.user.role] >= LEVEL[role];
+/* permissões do papel do usuário ("área.ação", ex.: playbook.edit); o servidor confere de novo em cada chamada */
+const can = p => !!App.user && (App.user.permissions || []).includes(p);
+const canAny = (...ps) => ps.some(can);
+const ADMIN_PERMS = ["users.manage", "roles.manage", "audit.view", "logs.manage", "sso.manage", "branding.edit", "app.reset"];
+const canAdmin = () => canAny(...ADMIN_PERMS);
 const STATUS_CLS = { "Desenvolvimento": "dev", "Homologação": "hml", "Produção": "prd" };
 const statusPill = st => `<span class="status ${STATUS_CLS[st] || "dev"}">${esc(st)}</span>`;
 
@@ -295,7 +298,7 @@ function showTeam(pb, name, keep) {
   if (!keep) stack = [];
   const t = TEAMS[name]; if (!t) return;
   let h = `<div class="teamhero" style="border-color:${t.color}"><div class="kind">${esc(t.kind)}</div><p style="margin:6px 0 0">${esc(t.summary)}</p></div>`;
-  if (can("editor") && pb && pb.templateKey) h += `<button class="btn ghost sm" id="editTeam" title="Edita o time no template deste playbook">${ic("edit")}Editar time</button>`;
+  if (can("templates.edit") && pb && pb.templateKey) h += `<button class="btn ghost sm" id="editTeam" title="Edita o time no template deste playbook">${ic("edit")}Editar time</button>`;
   if (t.does && t.does.length) h += `<h4>Responsabilidades</h4><div class="does">${listStr(t.does)}</div>`;
   if (t.never && t.never.length) h += `<h4>O que não faz</h4><div class="never">${listStr(t.never)}</div>`;
   if (pb) {
@@ -396,8 +399,8 @@ function renderSide() {
   const key = (location.hash.replace(/^#\/?/, "").split("/")[0] || "").toLowerCase();
   const on = k => (k === "home" ? (!key || /^pb-\d+$/.test(key) || key === "novo") : key === k) ? "on" : "";
   $("#sideNav").innerHTML = !App.user ? "" : `<a href="#/" class="${on("home")}">${ic("playbooks")}<span>Playbooks</span><small>${PBS.length}</small></a>
-    ${can("editor") ? `<a href="#/templates" class="${on("templates")}">${ic("templates")}<span>Templates</span></a>` : ""}
-    ${can("admin") ? `<a href="#/admin" class="${on("admin")}">${ic("settings")}<span>Administração</span></a>` : ""}`;
+    ${can("templates.view") ? `<a href="#/templates" class="${on("templates")}">${ic("templates")}<span>Templates</span></a>` : ""}
+    ${canAdmin() ? `<a href="#/admin" class="${on("admin")}">${ic("settings")}<span>Administração</span></a>` : ""}`;
 }
 /* Menu lateral. Desktop (> 900 px): o botão recolhe/expande (body.side-collapsed), estado salvo no navegador; atalho [.
    Telas estreitas: o menu vira gaveta (body.side-open) com fundo escurecido; Esc ou o botão de fechar fecham e o foco
@@ -477,9 +480,9 @@ const Tabs = (() => {
   const save = () => { try { localStorage.setItem(storeKey(), JSON.stringify(list)); } catch { } };
   const keyOf = hash => (hash.replace(/^#\/?/, "").split("/").filter(Boolean)[0] || "").toLowerCase() || null;
   function info(key) {
-    if (key === "novo") return can("editor") && { title: "Novo playbook", icon: "plus" };
-    if (key === "admin") return can("admin") && { title: "Administração", icon: "settings" };
-    if (key === "templates") return can("editor") && { title: "Templates, times e tags", icon: "templates" };
+    if (key === "novo") return can("playbook.create") && { title: "Novo playbook", icon: "plus" };
+    if (key === "admin") return canAdmin() && { title: "Administração", icon: "settings" };
+    if (key === "templates") return can("templates.view") && { title: "Templates, times e tags", icon: "templates" };
     if (key === "docs") return { title: "Documentação", icon: "docs" };
     const pb = pbBy(key);
     return pb && { title: `${pb.id} · ${pb.name}`, dot: STATUS_CLS[pb.gov.status] };
@@ -540,17 +543,17 @@ function route() {
   window.scrollTo(0, 0);
   /* classes da página (o estado do menu lateral, side-collapsed, é preservado) */
   document.body.classList.remove("auth", "editing");
-  document.body.classList.toggle("viewer-role", !can("editor"));
-  if (parts[0] === "novo") return can("editor") ? Editor.createForm(view) : notFound();
-  if (parts[0] === "admin") return can("admin") ? Admin.render(view, parts[1]) : notFound();
+  document.body.classList.toggle("viewer-role", !can("playbook.edit"));
+  if (parts[0] === "novo") return can("playbook.create") ? Editor.createForm(view) : notFound();
+  if (parts[0] === "admin") return canAdmin() ? Admin.render(view, parts[1], parts[2]) : notFound();
   if (parts[0] === "times" || (parts[0] === "templates" && parts[1] === "@times")) { location.replace("#/templates"); return; }
   if (parts[0] === "docs") return Docs.render(view, parts[1]);
-  if (parts[0] === "templates") return can("editor") ? TemplatesPage.render(view, parts[1], parts[2]) : notFound();
+  if (parts[0] === "templates") return can("templates.view") ? TemplatesPage.render(view, parts[1], parts[2]) : notFound();
   if (!parts.length) return renderHome();
   const s = pbBy(parts[0].toLowerCase());
   if (!s) return notFound();
   if (parts[1] === "fases" || parts[1] === "ramos") { location.replace(`#/${s.slug}/doc${parts[2] ? "/" + parts[2] : ""}`); return; }
-  const all = TABS.concat(can("editor") ? EDIT_TABS : []);
+  const all = TABS.concat(can("playbook.edit") ? EDIT_TABS : []);
   const tab = all.some(t => t[0] === parts[1]) ? parts[1] : "fluxo";
   const show = pb => renderPb(pb, tab, parts[2], parts.slice(3));
   const ready = DETAIL.get(s.id);
@@ -590,7 +593,7 @@ function homeCards(list) {
       <p>${esc(pbSubtitle(p))}</p>
       <div class="meta"><span class="chip">${p.ramos} ramos</span><span class="chip">${p.steps} passos</span></div>
       <div class="govline">${govLine(p.gov)}</div></a>`).join("")}
-    ${can("editor") ? addCard() : ""}</div>`;
+    ${can("playbook.create") ? addCard() : ""}</div>`;
 }
 function homeLarge(list) {
   if (!list.length) return homeEmpty();
@@ -614,7 +617,7 @@ function homeSmall(list) {
 }
 const addCard = () => `<a class="card add" href="#/novo"><span class="plus">${ic("plus")}</span><h3>Criar playbook</h3><p>Preencha o essencial; a ferramenta gera o documento no padrão e o fluxograma inicial. Começa em Desenvolvimento.</p></a>`;
 /* lista vazia: só a opção de criar (para quem pode criar); sem mensagem de "nenhum playbook" */
-const homeEmpty = () => can("editor") ? `<div class="cards">${addCard()}</div>` : "";
+const homeEmpty = () => can("playbook.create") ? `<div class="cards">${addCard()}</div>` : "";
 
 /* a lista vem filtrada e paginada do servidor (/api/library); "Carregar mais" traz os próximos 100 */
 const HOME_PAGE = 100;
@@ -630,9 +633,9 @@ async function renderHome() {
   const list = d.items, hv = homeView();
   view.innerHTML = `<div class="wrap">
     <header class="page-head"><h1>Playbooks</h1><span class="count">${d.all}</span>
-      <div class="home-actions">${can("editor") ? `<button class="btn ghost sm" id="impBtn" title="Importar .medusa.md ou .md">${ic("upload")}Importar</button>` : ""}<a class="btn ghost sm" href="api/export" download title="Baixar todos (.zip de .medusa.md)">${ic("download")}Exportar</a>
-        ${can("editor") ? `<a class="btn primary sm" href="#/novo">${ic("plus")}Novo playbook</a>` : ""}</div></header>
-    <div class="home-bar"><div class="filters">${["Todos", ...App.data.statuses.filter(s => can("editor") || s !== "Desenvolvimento")].map(s =>
+      <div class="home-actions">${can("playbook.create") && can("playbook.import") ? `<button class="btn ghost sm" id="impBtn" title="Importar .medusa.md ou .md">${ic("upload")}Importar</button>` : ""}<a class="btn ghost sm" href="api/export" download title="Baixar todos (.zip de .medusa.md)">${ic("download")}Exportar</a>
+        ${can("playbook.create") ? `<a class="btn primary sm" href="#/novo">${ic("plus")}Novo playbook</a>` : ""}</div></header>
+    <div class="home-bar"><div class="filters">${["Todos", ...App.data.statuses.filter(s => can("playbook.view_drafts") || s !== "Desenvolvimento")].map(s =>
       `<button class="${s === homeFilter ? "on" : ""}" data-hf="${esc(s)}">${s === "Todos" ? "Todos" : `<i class="dot ${STATUS_CLS[s]}"></i>${esc(s)}`} <span class="cnt">${s === "Todos" ? d.all : d.counts[s] || 0}</span></button>`).join("")}</div>
       <div class="view-seg" role="group" aria-label="Visualização da lista">${HOME_VIEWS.map(([k, n, ic]) =>
         `<button class="${k === hv ? "on" : ""}" data-hv="${k}" title="${n}" aria-label="${n}" aria-pressed="${k === hv}">${ic}</button>`).join("")}</div></div>
@@ -658,7 +661,7 @@ function govLine(g) {
 function renderPb(pb, tab, extra, rest) {
   useTeams(pb);
   const props = pb.props, g = pb.gov;
-  const all = TABS.concat(can("editor") ? EDIT_TABS : []);
+  const all = TABS.concat(can("playbook.edit") ? EDIT_TABS : []);
   view.innerHTML = `<div class="pbbar"><div class="wrap">
     <div class="pbhead"><span class="pbid">${pb.id}</span><h1>${esc(pb.name)}</h1>${statusPill(g.status)}
       <div class="pbactions"><div class="menu-wrap"><button class="btn ghost sm" id="expBtn" aria-haspopup="true">${ic("download")}Exportar${ic("caret", "caret")}</button>
@@ -675,7 +678,7 @@ function renderPb(pb, tab, extra, rest) {
           <div class="dm-h">Pacote completo</div>
           <a href="api/pb/${pb.id}/export?fmt=medusa" download><b>Medusa</b><small>.medusa.md · documento + fluxograma, reimportável</small></a>
         </div></div>
-        ${can("editor") ? `<button class="btn ghost sm" id="stBtn">${ic("swap")}Alterar status</button>` : ""}${can("admin") ? `<button class="btn danger sm" id="delBtn" title="Excluir playbook (somente administrador)">${ic("trash")}Excluir</button>` : ""}</div></div>
+        ${can("playbook.status") ? `<button class="btn ghost sm" id="stBtn">${ic("swap")}Alterar status</button>` : ""}${can("playbook.delete") ? `<button class="btn danger sm" id="delBtn" title="Excluir playbook">${ic("trash")}Excluir</button>` : ""}</div></div>
     ${govHtml(pb)}
     <nav class="tabs">${all.map(([k, l]) => `<a href="#/${pb.slug}/${k}" class="${k === tab ? "on" : ""} ${k.startsWith("editar") ? "edit" : ""}">${k.startsWith("editar") ? ic("edit") : ""}${l}${Editor.hasDraft(pb.id.toLowerCase() + (k === "editar" ? ":doc" : ":flow")) && k.startsWith("editar") ? `<i class="draft-dot" title="Alterações não salvas"></i>` : ""}</a>`).join("")}</nav></div></div>
     <div class="wrap" id="tabview"></div>`;
@@ -712,8 +715,13 @@ function updateHeader(pb) {
 /* ── ciclo de vida ── */
 async function statusDialog(pb) {
   if (Editor.dirty || Editor.hasDraft(pb.id.toLowerCase())) return toast("Salve ou descarte as alterações dos editores deste playbook antes de mudar o status", "warn");
-  let approvers = [];
-  try { approvers = (await api("GET", "api/approvers")).approvers; } catch (e) { return toast(e.message, "err"); }
+  let ap;
+  try { ap = await api("GET", `api/approvers?type=playbook&pid=${encodeURIComponent(pb.id)}`); } catch (e) { return toast(e.message, "err"); }
+  /* só quem pode aprovar agora: a regra do aprovador diferente tira quem publica e quem fez a última alteração */
+  const approvers = ap.approvers.filter(a => !a.excluded);
+  const out = ap.approvers.filter(a => a.excluded);
+  const apNote = !approvers.length ? `<div class="notice warn small">Ninguém pode aprovar agora${out.length ? `: ${out.map(a => `${esc(a.name)} ${esc(a.excluded)}`).join("; ")}` : ""}. Peça a um administrador para cadastrar outro aprovador${ap.distinct ? " ou para revisar a regra de governança" : ""}.</div>`
+    : ap.distinct && out.length ? `<p class="muted small">Não aparece${out.length > 1 ? "m" : ""} ${out.map(a => a.login === App.user.login ? "você" : `${esc(a.name)} (${a.excluded})`).join(" nem ")}.</p>` : "";
   const cur = pb.gov.status, sts = App.data.statuses;
   const desc = { "Desenvolvimento": "Rascunho em elaboração. Visível só para editores e administradores.",
     "Homologação": "Em validação com o time. Visualizadores já podem ler.",
@@ -722,7 +730,7 @@ async function statusDialog(pb) {
     title: `Status do ${pb.id}`, html: `<form id="stForm" class="tform">
       <div class="stepper">${sts.map((s, i) => `<label class="stp ${STATUS_CLS[s]} ${s === cur ? "cur" : ""}"><input type="radio" name="status" value="${esc(s)}" ${s === cur ? "disabled" : ""} ${i === sts.indexOf(cur) + 1 ? "checked" : ""}>
         <span class="n">${i + 1}</span><b>${esc(s)}</b><small>${desc[s]}</small>${s === cur ? `<em>atual</em>` : ""}</label>`).join("")}</div>
-      <div id="apBox"><label>Aprovador<select class="in" name="approver"><option value="">Selecione…</option>${approvers.map(a => `<option value="${esc(a.login)}" ${a.login === App.user.login ? "selected" : ""}>${esc(a.name)} (${esc(a.roleName)})</option>`).join("")}</select></label></div>
+      <div id="apBox"><label>Aprovador<select class="in" name="approver"><option value="">Selecione…</option>${approvers.map(a => `<option value="${esc(a.login)}" ${a.login === App.user.login || approvers.length === 1 ? "selected" : ""}>${esc(a.name)} (${esc(a.roleName)})</option>`).join("")}</select></label>${apNote}</div>
       <label>Observação <small>(vai para a auditoria)</small><textarea class="in" name="note" rows="2" placeholder="ex.: validado com o SOC em reunião de 03/10"></textarea></label>
       <div class="err" id="sterr" hidden></div>
       <div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn primary" type="submit">Confirmar mudança</button></div></form>`,
@@ -858,10 +866,10 @@ const Admin = (() => {
   async function users(el) {
     let data;
     try { data = await api("GET", "api/users"); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
-    const roleSel = (u) => `<select class="in sm" data-role="${esc(u.login)}" ${u.login === App.user.login ? "disabled title='Você não pode alterar o próprio perfil'" : ""}>${Object.entries(data.roles).map(([k, n]) => `<option value="${k}" ${k === u.role ? "selected" : ""}>${n}</option>`).join("")}</select>`;
+    const roleSel = (u) => `<select class="in sm" data-role="${esc(u.login)}" ${u.login === App.user.login ? "disabled title='Você não pode alterar o próprio papel'" : ""}>${data.roleList.map(r => `<option value="${esc(r.key)}" ${r.key === u.roleId ? "selected" : ""}>${esc(r.name)}</option>`).join("")}${data.roleList.some(r => r.key === u.roleId) ? "" : `<option selected disabled>${esc(u.roleName)}</option>`}</select>`;
     el.innerHTML = `<div class="admin-grid"><div class="ecard">
         <div class="ecard-h"><b>Usuários</b><span class="muted small">${data.users.length} cadastrados</span></div>
-        <div class="tw"><table class="utable"><thead><tr><th>Usuário</th><th>Perfil</th><th>Situação</th><th>Último acesso</th><th>Sessões</th><th></th></tr></thead><tbody>
+        <div class="tw"><table class="utable"><thead><tr><th>Usuário</th><th>Papel</th><th>Situação</th><th>Último acesso</th><th>Sessões</th><th></th></tr></thead><tbody>
         ${data.users.map(u => `<tr class="${u.active ? "" : "off"}"><td><b>${esc(u.name)}</b><br><code>${esc(u.login)}</code>${u.mustChange ? ` <span class="tag warn">senha temporária</span>` : ""}
             <br><select class="in xs auth-sel" data-auth="${esc(u.login)}" ${u.login === App.user.login ? "disabled" : ""} title="Forma de autenticação">
               <option value="local" ${u.auth !== "sso" ? "selected" : ""}>Senha local</option><option value="sso" ${u.auth === "sso" ? "selected" : ""}>SSO${u.auth === "sso" && !u.ssoLinked ? " (aguardando 1º login)" : ""}</option></select></td>
@@ -876,17 +884,14 @@ const Admin = (() => {
           <label>Nome<input class="in" name="name" required placeholder="Nome e sobrenome"></label>
           <label>Login<input class="in" name="login" required pattern="[a-z0-9._@\-]{3,80}" placeholder="ex.: maria.souza ou maria@empresa.com"></label>
           <label>Autenticação<select class="in" name="auth"><option value="local">Senha local (senha temporária gerada agora)</option><option value="sso">SSO (entra pelo provedor com este login)</option></select></label>
-          <label>Perfil<select class="in" name="role">${Object.entries(data.roles).map(([k, n]) => `<option value="${k}">${n}</option>`).join("")}</select></label>
-          <div class="roles-help">
-            <div><b>Visualizador</b> lê playbooks em Homologação e Produção.</div>
-            <div><b>Editor</b> cria e edita todos, muda status, edita templates, times e tags.</div>
-            <div><b>Administrador</b> tudo do editor + usuários, auditoria e exclusão de playbooks.</div></div>
+          <label>Papel<select class="in" name="role">${data.roleList.map(r => `<option value="${esc(r.key)}" ${r.key === "viewer" ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></label>
+          <p class="muted small">O que cada papel pode fazer está em ${can("roles.manage") ? `<a href="#/admin/papeis">Papéis</a>` : "Papéis"}.</p>
           <div class="err" id="nuerr" hidden></div>
           <div class="create-actions"><button class="btn primary" type="submit">Criar usuário</button></div>
         </form></div></div>`;
     const reload = () => users(el);
     const upd = async (login, body, msg) => { try { await api("PUT", `api/users/${encodeURIComponent(login)}`, body); toast(msg); } catch (e) { toast(e.message, "err"); } reload(); };
-    el.querySelectorAll("[data-role]").forEach(s => s.onchange = () => upd(s.dataset.role, { role: s.value }, "Perfil alterado"));
+    el.querySelectorAll("[data-role]").forEach(s => s.onchange = () => upd(s.dataset.role, { role: s.value }, "Papel alterado"));
     el.querySelectorAll("[data-auth]").forEach(sel => sel.onchange = async () => {
       const lg = sel.dataset.auth, to = sel.value;
       if (!(await ask(to === "sso" ? `Converter ${lg} para SSO? A senha local deixa de funcionar e as sessões abertas são encerradas. O login precisa ser igual ao enviado pelo provedor.`
@@ -934,9 +939,25 @@ const Admin = (() => {
   }
 
   /* Aparência: só o nome do workspace e a logo. O tema (claro/escuro) é escolha de cada usuário, na barra lateral. */
+  async function governanceCard(el) {
+    const box = $("#govCard", el); if (!box) return;
+    let g; try { g = (await api("GET", "api/governance")).governance; } catch (e) { box.remove(); return; }
+    box.innerHTML = `<header class="ap-h"><b>Governança</b></header>
+      <div class="ap-body"><label class="switch"><input type="checkbox" id="govDistinct" ${g.require_distinct_approver ? "checked" : ""}><span>Aprovador diferente de quem edita</span></label>
+        <p class="muted small">Ao publicar em Produção, o aprovador não pode ser quem está publicando nem quem fez a última alteração do conteúdo. Recomendado: desligue só em instalações com uma única pessoa editando.</p></div>`;
+    $("#govDistinct", box).onchange = async e => {
+      const on = e.target.checked;
+      if (!on && !(await ask("Desligar a regra? Quem edita um playbook poderá também aprová-lo para Produção.", { title: "Governança", ok: "Desligar", danger: true }))) { e.target.checked = true; return; }
+      try { await api("PUT", "api/governance", { require_distinct_approver: on }); toast(on ? "Regra do aprovador ligada" : "Regra do aprovador desligada"); }
+      catch (x) { toast(x.message, "err"); e.target.checked = !on; }
+    };
+  }
+
   function appearance(el) {
     const b = Brand.get();
     const logoImg = b.logo ? `<img src="api/branding/logo?v=${esc(b.logo)}" alt="">` : "";
+    const gov = canAny("app.reset", "users.manage") ? `<section class="ecard ap-card" id="govCard"><div class="empty">Carregando…</div></section>` : "";
+    if (!can("branding.edit")) { el.innerHTML = `<div class="appearance">${gov}</div>`; return governanceCard(el); }
     el.innerHTML = `<div class="appearance">
       <section class="ecard ap-card"><header class="ap-h"><b>Workspace</b></header>
         <div class="ap-body"><label>Nome<input class="in" id="apName" maxlength="40" value="${esc(b.name)}" placeholder="${esc(Brand.DEFAULT.name)}"></label>
@@ -948,7 +969,8 @@ const Admin = (() => {
           <label class="logo-drop" id="lgDrop"><span>Arraste a imagem ou clique para escolher</span><input type="file" id="lgFile" accept="image/png,image/jpeg,image/svg+xml,image/webp" hidden></label>
           <p class="muted small">PNG, SVG, JPG ou WEBP até 512 KB. Prefira fundo transparente; a prévia mostra os dois temas.</p></div>
         <footer class="ap-foot"><button class="btn ghost" id="lgDel" ${b.logo ? "" : "disabled"}>Remover</button><button class="btn primary" id="lgPick">Enviar logo</button></footer></section>
-    </div>`;
+      ${gov}</div>`;
+    governanceCard(el);
     $("#apReset", el).onclick = () => { $("#apName", el).value = Brand.DEFAULT.name; };
     $("#apSave", el).onclick = async () => {
       try { Brand.apply(await api("PUT", "api/branding", { name: $("#apName", el).value.trim() })); $("#aperr", el).hidden = true; toast("Nome do workspace salvo"); }
@@ -973,6 +995,82 @@ const Admin = (() => {
     $("#lgDel", el).onclick = async () => {
       if (!(await ask("Remover a logo? A barra lateral volta a mostrar o símbolo padrão.", { title: "Remover logo", ok: "Remover", danger: true }))) return;
       try { Brand.apply(await api("DELETE", "api/branding/logo")); toast("Logo removida"); appearance(el); } catch (x) { toast(x.message, "err"); }
+    };
+  }
+
+  /* ── papéis: lista à esquerda; à direita, o editor com a matriz ação × tipo de documento e as permissões da
+     plataforma. Permissões que o seu papel não tem aparecem desabilitadas (não dá para conceder o que não se tem). */
+  async function roles(el, key) {
+    let d; try { d = await api("GET", "api/roles"); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+    const cat = d.catalog, mine = new Set(d.mine);
+    const isNew = key === "novo", cur = isNew ? null : d.roles.find(r => r.key === key) || d.roles[0];
+    const all = cur && cur.permissions === "*";
+    const has = p => all || (cur && cur.permissions.includes(p));
+    const locked = cur && !cur.editable;
+    const off = p => locked || (!d.isAdmin && !mine.has(p));
+    const box = (p, label) => `<input type="checkbox" data-perm="${esc(p)}" ${has(p) ? "checked" : ""} ${off(p) ? "disabled" : ""} aria-label="${esc(label)}">`;
+    const matrix = `<div class="tw"><table class="perm-matrix"><thead><tr><th></th>${cat.types.map(t => `<th><button type="button" class="linkish" data-col="${esc(t.key)}" title="Marcar/desmarcar a coluna">${esc(t.label)}</button></th>`).join("")}</tr></thead><tbody>
+      ${cat.actions.map(a => `<tr><th><button type="button" class="linkish" data-row="${esc(a.key)}" title="${esc(a.help)}">${esc(a.label)}</button><small>${esc(a.help)}</small></th>
+        ${cat.types.map(t => t.perms.includes(`${t.key}.${a.key}`) ? `<td>${box(`${t.key}.${a.key}`, `${a.label} · ${t.label}`)}</td>` : `<td class="na">—</td>`).join("")}</tr>`).join("")}
+      </tbody></table></div>`;
+    const globals = `<div class="perm-global">${cat.global.map(g => `<label class="chk-inline">${box(g.key, g.label)} ${esc(g.label)}</label>`).join("")}</div>`;
+    el.innerHTML = `<div class="roles-grid">
+      <aside class="ecard role-list"><div class="ecard-h"><b>Papéis</b><a class="btn ghost xs" href="#/admin/papeis/novo" style="margin-left:auto">${ic("plus")}Novo papel</a></div>
+        ${d.roles.map(r => `<a class="role-item ${cur && r.key === cur.key ? "on" : ""}" href="#/admin/papeis/${esc(r.key)}"><b>${esc(r.name)}</b>${r.system ? `<span class="tag">sistema</span>` : ""}
+          <small>${esc(r.description || "")}</small><span class="role-users">${r.users} usuário${r.users === 1 ? "" : "s"}</span></a>`).join("")}</aside>
+      <form class="ecard role-edit" id="roleForm" autocomplete="off">
+        <div class="ecard-h"><b>${isNew ? "Novo papel" : esc(cur.name)}</b>${locked ? `<span class="muted small">não editável: tem todas as permissões, inclusive as futuras</span>` : ""}</div>
+        <div class="pp-row"><label>Nome<input class="in" name="name" maxlength="40" required value="${esc(isNew ? "" : cur.name)}" ${locked ? "disabled" : ""}></label>
+          <label style="max-width:150px" title="Ordem do mapeamento de grupos do SSO: o de maior prioridade vence">Prioridade<input class="in" type="number" name="priority" min="1" max="99" value="${isNew ? 20 : cur.priority}" ${locked ? "disabled" : ""}></label></div>
+        <label>Descrição<input class="in" name="description" maxlength="200" value="${esc(isNew ? "" : cur.description)}" ${locked ? "disabled" : ""}></label>
+        <div class="pp-lbl">Documentos</div>${matrix}
+        <div class="pp-lbl">Plataforma</div>${globals}
+        <div class="err" id="rlErr" hidden></div>
+        <div class="create-actions">
+          ${!isNew && cur.deletable ? `<button type="button" class="btn danger" id="rlDel" style="margin-right:auto">Excluir</button>` : ""}
+          ${!isNew && cur.system && cur.editable ? `<button type="button" class="btn ghost" id="rlReset" style="margin-right:auto">Restaurar padrão</button>` : ""}
+          ${!isNew ? `<button type="button" class="btn ghost" id="rlDup">Duplicar</button>` : ""}
+          ${locked ? "" : `<button class="btn primary" type="submit">${isNew ? "Criar papel" : "Salvar"}</button>`}</div></form></div>`;
+    const form = $("#roleForm", el), err = $("#rlErr", el);
+    const fail = x => { err.textContent = x.message; err.hidden = false; };
+    const boxes = sel => [...form.querySelectorAll(`input[data-perm]${sel}`)].filter(b => !b.disabled);
+    const flip = list => { const on = !list.every(b => b.checked); list.forEach(b => b.checked = on); };
+    form.querySelectorAll("[data-col]").forEach(b => b.onclick = () => flip(boxes(`[data-perm^="${b.dataset.col}."]`)));
+    form.querySelectorAll("[data-row]").forEach(b => b.onclick = () => flip(boxes(`[data-perm$=".${b.dataset.row}"]`)));
+    const collect = () => [...form.querySelectorAll("input[data-perm]:checked")].map(b => b.dataset.perm);
+    form.onsubmit = async e => {
+      e.preventDefault();
+      const body = { name: form.name.value.trim(), description: form.description.value.trim(), priority: +form.priority.value, permissions: collect() };
+      try {
+        const r = isNew ? await api("POST", "api/roles", body) : await api("PUT", `api/roles/${encodeURIComponent(cur.key)}`, body);
+        toast(isNew ? "Papel criado" : "Papel salvo"); location.hash = `#/admin/papeis/${r.role.key}`; if (!isNew) roles(el, r.role.key);
+      } catch (x) { fail(x); }
+    };
+    if ($("#rlDup", el)) $("#rlDup", el).onclick = async () => {
+      try { const r = await api("POST", "api/roles", { name: `${cur.name} (cópia)`.slice(0, 40), description: cur.description, priority: Math.min(99, cur.priority), from: cur.key }); toast("Papel duplicado"); location.hash = `#/admin/papeis/${r.role.key}`; }
+      catch (x) { fail(x); }
+    };
+    if ($("#rlReset", el)) $("#rlReset", el).onclick = async () => {
+      if (!(await ask(`Voltar o papel ${cur.name} às permissões padrão?`, { title: "Restaurar padrão", ok: "Restaurar" }))) return;
+      try { await api("PUT", `api/roles/${cur.key}`, { reset: true }); toast("Permissões padrão restauradas"); roles(el, cur.key); } catch (x) { fail(x); }
+    };
+    if ($("#rlDel", el)) $("#rlDel", el).onclick = () => {
+      const others = d.roles.filter(r => r.key !== cur.key && r.key !== "admin");
+      modal({ title: `Excluir o papel ${esc(cur.name)}`, html: `<form class="tform" id="rdForm">
+          ${cur.users ? `<p>${cur.users} usuário${cur.users === 1 ? " usa" : "s usam"} este papel. Para onde ${cur.users === 1 ? "ele vai" : "eles vão"}?</p>
+            <label>Novo papel<select class="in" name="reassign">${others.map(r => `<option value="${esc(r.key)}" ${r.key === "viewer" ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></label>`
+            : `<p>Nenhum usuário usa este papel.</p>`}
+          <div class="err" id="rdErr" hidden></div>
+          <div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn danger" type="submit">Excluir papel</button></div></form>`,
+        onMount: (b, close) => {
+          const f = $("#rdForm", b);
+          f.querySelector("[data-cancel]").onclick = close;
+          f.onsubmit = async e => {
+            e.preventDefault();
+            try { await api("DELETE", `api/roles/${cur.key}`, cur.users ? { reassign: f.reassign.value } : {}); close(); toast("Papel excluído"); location.hash = "#/admin/papeis"; }
+            catch (x) { $("#rdErr", b).textContent = x.message; $("#rdErr", b).hidden = false; }
+          };
+        } });
     };
   }
 
@@ -1088,15 +1186,15 @@ const Admin = (() => {
         <div class="notice small">Cadastre no provedor esta <b>URL de redirecionamento</b>: <code id="ssoRedir">${esc(d.redirectUri || "(informe a URL pública)")}</code></div>
         <div class="pp-row"><label>Escopos<input class="in" name="scopes" value="${esc(c.scopes)}"></label>
           <label>Texto do botão<input class="in" name="label" value="${esc(c.label)}" maxlength="60"></label></div></div>
-      <div class="ecard"><div class="ecard-h"><b>Usuários e perfis</b></div>
+      <div class="ecard"><div class="ecard-h"><b>Usuários e papéis</b></div>
         <div class="pp-row"><label>Claim do login<input class="in" name="login_claim" value="${esc(c.login_claim)}" placeholder="preferred_username"></label>
           <label>Claim do nome<input class="in" name="name_claim" value="${esc(c.name_claim)}"></label>
           <label>Claim do e-mail<input class="in" name="email_claim" value="${esc(c.email_claim)}"></label></div>
         <label>Domínios de e-mail permitidos <small>(vírgula; vazio = qualquer)</small><input class="in" name="allowed_domains" value="${esc(c.allowed_domains)}" placeholder="empresa.com, empresa.com.br"></label>
         <label>Claim de grupos/papéis<input class="in" name="role_claim" value="${esc(c.role_claim)}" placeholder="groups, roles ou realm_access.roles"></label>
-        <div class="pp-lbl">Grupos do provedor → perfil <small class="muted">(valores separados por vírgula; verificado a cada login)</small></div>
-        ${[["admin", "Administrador"], ["editor", "Editor"], ["viewer", "Visualizador"]].map(([k, n]) => `<label>${n}<input class="in" name="role_map.${k}" value="${esc(c.role_map[k] || "")}" placeholder="ex.: ${k === "admin" ? "sec-admins" : k === "editor" ? "csirt, soc-n2" : "soc-n1"}"></label>`).join("")}
-        <div class="pp-row"><label>Sem grupo correspondente<select class="in" name="default_role"><option value="viewer" ${c.default_role === "viewer" ? "selected" : ""}>Entra como Visualizador</option><option value="editor" ${c.default_role === "editor" ? "selected" : ""}>Entra como Editor</option><option value="" ${!c.default_role ? "selected" : ""}>Acesso negado</option></select></label>
+        <div class="pp-lbl">Grupos do provedor → papel <small class="muted">(valores separados por vírgula; verificado a cada login, do papel de maior prioridade para o menor)</small></div>
+        ${d.roles.map(r => `<label>${esc(r.name)}<input class="in" name="role_map.${esc(r.key)}" value="${esc((c.role_map || {})[r.key] || "")}" placeholder="ex.: ${r.key === "admin" ? "sec-admins" : r.key === "editor" ? "csirt, soc-n2" : r.key === "viewer" ? "soc-n1" : "grupo-do-provedor"}"></label>`).join("")}
+        <div class="pp-row"><label>Sem grupo correspondente<select class="in" name="default_role">${d.roles.filter(r => r.key !== "admin").map(r => `<option value="${esc(r.key)}" ${c.default_role === r.key ? "selected" : ""}>Entra como ${esc(r.name)}</option>`).join("")}<option value="" ${!c.default_role ? "selected" : ""}>Acesso negado</option></select></label>
           <label>Usuário novo<select class="in" name="auto_create"><option value="1" ${c.auto_create ? "selected" : ""}>Criar no primeiro login</option><option value="" ${!c.auto_create ? "selected" : ""}>Só pré-cadastrados (Usuários → SSO)</option></select></label></div>
         <label>Login por senha<select class="in" name="local_login"><option value="all" ${c.local_login !== "admins" ? "selected" : ""}>Continua disponível para todos</option><option value="admins" ${c.local_login === "admins" ? "selected" : ""}>Só administradores (acesso de emergência)</option></select></label>
         <p class="muted small">Contas locais existentes não são vinculadas automaticamente a uma identidade do SSO: converta-as em <b>Usuários</b> (coluna de autenticação) com o mesmo login enviado pelo provedor.</p>
@@ -1120,14 +1218,21 @@ const Admin = (() => {
     };
   }
 
-  function render(root, sub) {
-    sub = ["auditoria", "aparencia", "logs", "sso"].includes(sub) ? sub : "usuarios";
+  /* sub-abas conforme as permissões do papel; a Aparência também aparece para quem pode mudar a governança */
+  const SUBS = [
+    ["usuarios", "Usuários", () => can("users.manage")], ["papeis", "Papéis", () => can("roles.manage")],
+    ["aparencia", "Aparência", () => canAny("branding.edit", "app.reset", "users.manage")], ["auditoria", "Auditoria", () => can("audit.view")],
+    ["logs", "Logs e retenção", () => can("logs.manage")], ["sso", "SSO", () => can("sso.manage")]];
+  function render(root, sub, key) {
+    const subs = SUBS.filter(x => x[2]());
+    if (!subs.length) return notFound();
+    sub = subs.some(x => x[0] === sub) ? sub : subs[0][0];
     root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead"><span class="pbid">ADMIN</span><h1>Administração</h1>
-        <div class="pbactions"><button class="btn danger sm" id="resetBtn" title="Volta a aplicação ao estado de recém-instalada (somente administrador)">Resetar aplicação</button></div></div>
-      <nav class="tabs"><a href="#/admin/usuarios" class="${sub === "usuarios" ? "on" : ""}">Usuários e perfis</a><a href="#/admin/aparencia" class="${sub === "aparencia" ? "on" : ""}">Aparência</a><a href="#/admin/auditoria" class="${sub === "auditoria" ? "on" : ""}">Auditoria</a><a href="#/admin/logs" class="${sub === "logs" ? "on" : ""}">Logs e retenção</a><a href="#/admin/sso" class="${sub === "sso" ? "on" : ""}">SSO</a></nav></div></div>
+        <div class="pbactions">${can("app.reset") ? `<button class="btn danger sm" id="resetBtn" title="Volta a aplicação ao estado de recém-instalada">Resetar aplicação</button>` : ""}</div></div>
+      <nav class="tabs">${subs.map(([k, l]) => `<a href="#/admin/${k}" class="${sub === k ? "on" : ""}">${l}</a>`).join("")}</nav></div></div>
       <div class="wrap" id="adminview"><div class="empty">Carregando…</div></div>`;
-    $("#resetBtn").onclick = resetDialog;
-    ({ usuarios: users, aparencia: appearance, auditoria: auditLog, logs, sso: ssoAdmin })[sub]($("#adminview"));
+    if ($("#resetBtn")) $("#resetBtn").onclick = resetDialog;
+    ({ usuarios: users, papeis: el => roles(el, key), aparencia: appearance, auditoria: auditLog, logs, sso: ssoAdmin })[sub]($("#adminview"));
   }
   return { render };
 })();
@@ -1388,7 +1493,7 @@ const TemplatesPage = (() => {
         <div class="govline">${t.lanes.map(esc).join(" · ")}<br><span class="muted">${esc(upd(t))}</span></div>
         <div class="row-btns" style="margin-top:12px"><a class="btn primary xs" href="#/templates/${esc(t.key)}/geral">Abrir</a>
           <button class="btn ghost xs" data-dup="${esc(t.key)}">Duplicar</button><a class="btn ghost xs" href="api/templates/${esc(t.key)}/export" download>${ic("download")}Exportar</a>
-          ${can("admin") && t.key !== "padrao" ? `<button class="btn danger xs" data-del="${esc(t.key)}">Excluir</button>` : ""}</div></div>`).join("")}</div>`;
+          ${can("templates.delete") && t.key !== "padrao" ? `<button class="btn danger xs" data-del="${esc(t.key)}">Excluir</button>` : ""}</div></div>`).join("")}</div>`;
     const reload = () => list(root);
     $("#tNew").onclick = () => newDialog(data.templates, null, reload);
     $("#tImp").onclick = () => importDialog(reload);
@@ -1519,13 +1624,13 @@ const Versions = (() => {
     let d; try { d = await api("GET", `api/pb/${pb.id}/versions`); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
     const vs = d.versions;
     el.innerHTML = `<div class="ver-head"><div><b>Versão atual: ${vpill(d.current)}</b> ${statusPill(d.currentStatus)}</div>
-        <p class="muted small">Desenvolvimento e Homologação somam 1 depois do ponto a cada gravação (0.1 → 0.2). Publicar em Produção gera a próxima versão cheia (0.4 → 1.0). Em Produção, cada alteração é Minor (2.3 → 2.4) ou Major (2.3 → 3.0), com a descrição de quem salvou. ${can("editor") ? "" : "Você vê as versões que estiveram em Homologação ou Produção."}</p></div>
+        <p class="muted small">Desenvolvimento e Homologação somam 1 depois do ponto a cada gravação (0.1 → 0.2). Publicar em Produção gera a próxima versão cheia (0.4 → 1.0). Em Produção, cada alteração é Minor (2.3 → 2.4) ou Major (2.3 → 3.0), com a descrição de quem salvou. ${can("playbook.view_drafts") ? "" : "Você vê as versões que estiveram em Homologação ou Produção."}</p></div>
       ${vs.length ? `<div class="vtimeline">${vs.map((v, i) => `<div class="vitem ${i === 0 ? "latest" : ""}"><div class="vdot"></div>
           <div class="vbody"><div class="vtop">${vpill(v.version)} ${statusPill(v.status)} <span class="vkind">${esc(v.kindName)}</span>${i === 0 ? `<span class="tag">mais recente</span>` : ""}</div>
             <div class="vmeta">${esc(fmt(v.created_at))} · ${esc(v.author_name)}${v.note ? ` · <span class="vnote">${esc(v.note)}</span>` : ""}</div></div>
           <div class="vact"><a class="btn ghost xs" href="#/${pb.slug}/versoes/${v.id}">Ler</a>
             <a class="btn ghost xs" href="#/${pb.slug}/versoes/${v.id}/comparar/${vs[i + 1] ? vs[i + 1].id : "atual"}" title="${vs[i + 1] ? "Comparar com a versão anterior" : "Comparar com a versão atual"}">Comparar</a>
-            ${can("editor") && i > 0 ? `<button class="btn ghost xs" data-restore="${v.id}" data-v="${esc(v.version)}">Restaurar</button>` : ""}</div></div>`).join("")}</div>`
+            ${can("playbook.restore") && i > 0 ? `<button class="btn ghost xs" data-restore="${v.id}" data-v="${esc(v.version)}">Restaurar</button>` : ""}</div></div>`).join("")}</div>`
         : `<div class="empty">Ainda não há versões registradas. A primeira é criada na próxima gravação.</div>`}`;
     el.querySelectorAll("[data-restore]").forEach(b => b.onclick = () => restore(pb, b.dataset.restore, b.dataset.v));
   }
@@ -1551,7 +1656,7 @@ const Versions = (() => {
     el.innerHTML = `<div class="ver-banner"><div>${ic("history")}Você está lendo a versão ${vpill(v.version)} ${statusPill(v.status)} de <b>${esc(fmt(v.created_at))}</b>, salva por <b>${esc(v.author_name)}</b> (${esc(v.kindName)}${v.note ? `: ${esc(v.note)}` : ""}). Não é necessariamente a versão em uso.</div>
         <div class="ver-actions"><a class="btn ghost sm" href="#/${pb.slug}/versoes">${ic("left")}Histórico</a><a class="btn ghost sm" href="#/${pb.slug}/versoes/${v.id}/comparar/atual">${ic("compare")}Comparar com a atual</a>
           <button class="btn ghost sm" id="vHtml" title="Baixa esta versão como HTML com o fluxograma">${ic("download")}HTML</button><button class="btn ghost sm" id="vPrint">${ic("print")}Imprimir / PDF</button>
-          ${can("editor") ? `<button class="btn primary sm" id="vRestore">Restaurar esta versão</button>` : ""}</div></div>
+          ${can("playbook.restore") ? `<button class="btn primary sm" id="vRestore">Restaurar esta versão</button>` : ""}</div></div>
       <article class="docview">
         <header class="docview-head"><div class="dv-id">${esc(vp.id)} · versão ${esc(v.version)}</div><h1>${esc(vp.name)}</h1><div class="muted">${esc(vp.byline)}</div>
           <div class="gov dv-gov"><div><span>Status na versão</span><b>${esc(g.status)}</b></div><div><span>Aprovador</span><b>${esc(g.approver || "—")}</b></div>

@@ -50,7 +50,7 @@ MAX_THREADS = 32                # requisições processadas ao mesmo tempo; as d
 PBKDF2_ITERS = 310_000
 MIN_PASSWORD = 10
 MAX_BODY = 8 * 1024 * 1024
-APP_VERSION = "2.2.0"
+APP_VERSION = "3.0.0-beta.1"
 LOGIN_RE = re.compile(r"^[a-z0-9._@-]{3,80}$")          # @ e até 80 caracteres: logins vindos do SSO (e-mail)
 NO_PASSWORD = "!sso"                                      # hash impossível: conta só entra pelo SSO
 TRUST_PROXY = os.environ.get("MEDUSA_TRUST_PROXY", "").lower() in ("1", "true", "yes", "sim")
@@ -1661,7 +1661,8 @@ def r_sso_status(h, **_):
 def r_sso_get(h, **_):
     h.require("sso.manage")
     c = sso_cfg(); c["client_secret_set"] = bool(c.pop("client_secret"))
-    h.send_json({"config": c, "redirectUri": sso.redirect_uri(c["public_url"]) if c["public_url"] else ""})
+    h.send_json({"config": c, "redirectUri": sso.redirect_uri(c["public_url"]) if c["public_url"] else "",
+                 "roles": [{"key": r["key"], "name": r["name"]} for r in open_db().roles().values()]})
 
 def r_sso_put(h, **_):
     u = h.require("sso.manage"); b = h.body(); c = sso_cfg()

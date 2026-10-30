@@ -8,7 +8,8 @@ templates e auditoria.
 - Só Python 3 (biblioteca padrão): nada para instalar além do Python, ou uma imagem Docker pronta.
 - White label: nome do workspace e logo configuráveis no painel administrativo; tema claro e escuro.
 - Formatos abertos: cada playbook é um `.md` + um `.drawio`; troca entre instalações em `.medusa.md` (Markdown + Mermaid).
-- Versão atual: **2.2.0** (novidades em [CHANGELOG.md](CHANGELOG.md)): novo visual com menu lateral recolhível,
+- Versão atual: **3.0.0-beta.1** (novidades em [CHANGELOG.md](CHANGELOG.md)): papéis e permissões personalizados e
+  aprovação de Produção por outra pessoa. Na 2.2.0: novo visual com menu lateral recolhível,
   desempenho (cache de documentos, lista leve, busca no servidor, gzip e cache no navegador) e endurecimento (gravação
   atômica, sessão com duração máxima). Na 2.1: imagens na documentação e reset da aplicação. Na 2.0: versionamento,
   logs em JSON com retenção e login único (SSO) por OpenID Connect.
@@ -51,7 +52,7 @@ exibida uma única vez, e precisa trocá-la no primeiro acesso.
 - **Abas:** cada playbook ou página aberta vira uma aba, como num navegador (o X ou o botão do meio fecha; o + abre o início). Ficam salvas no navegador de cada usuário.
 - **Menu lateral:** logo e nome do workspace, busca, Playbooks, Templates e Administração; perfil e tema claro/escuro no rodapé. O botão do menu (ou a tecla `[`) recolhe e expande; a escolha fica salva no navegador. Em telas estreitas vira gaveta (`Esc` fecha).
 - **Busca** (atalho `/`): feita no servidor, sem acento; acha playbooks, passos, ramos, seções e times. `↑` `↓` e `Enter` navegam.
-- **Menu do perfil** (rodapé da barra lateral): Documentação da plataforma (uso, edição, ramos, templates, administração, operação, filtrada pelo perfil; conteúdo em `docs.js`), Templates, Administração, Trocar senha e Sair.
+- **Menu do perfil** (rodapé da barra lateral): Documentação da plataforma (uso, edição, ramos, templates, administração, operação, filtrada pelo papel; conteúdo em `docs.js`), Trocar senha e Sair.
 - **Playbook:** duas visualizações, **Fluxograma** e **Documentação** (fases, passos e ramos ficam na documentação, com índice por seção e subseção), além de **Versões** e dos editores.
 - **Rascunhos:** sair de uma aba de edição sem salvar não perde nada; a aba ganha um ponto e as alterações voltam ao reabrir. Fechar a aba pede confirmação.
 - **Ícones** do [Iconoir](https://iconoir.com) (MIT), embutidos em `icons.js`.
@@ -59,22 +60,37 @@ exibida uma única vez, e precisa trocá-la no primeiro acesso.
 - **Aparência** (só administrador): nome do workspace e logo. O visual é fixo e minimalista (fonte Inter, embutida), com tema claro e escuro por usuário. As cores do fluxograma não mudam: fazem parte do modelo dos playbooks.
 - **Resetar aplicação** (só administrador, botão no topo da Administração): volta ao estado de recém-instalada, com confirmação digitando `RESETAR`. Opcionalmente restaura configurações, remove os demais usuários e apaga a auditoria. Tudo vai para `data/lixeira/reset__<data-hora>/`, com cópia do banco e um `LEIA-ME.txt` de como voltar.
 
-## Perfis
+## Papéis e permissões
 
-| Perfil | Vê | Pode |
+Cada usuário tem um **papel**; cada papel, uma lista de permissões no formato `área.ação`. Os três papéis do sistema
+reproduzem os perfis da 2.x:
+
+| Papel | Vê | Pode |
 | --- | --- | --- |
 | Visualizador | Playbooks em **Homologação** e **Produção** | Ler, buscar, exportar e trocar a própria senha |
-| Editor | Todos, inclusive **Desenvolvimento** | Criar, editar e importar playbooks, mudar status, restaurar versões, editar templates, times e tags |
-| Administrador | Todos | Tudo do editor + usuários, aparência, auditoria, logs, SSO e exclusão de playbooks e templates |
+| Editor | Todos, inclusive **Desenvolvimento** | Criar, editar e importar playbooks, mudar status, aprovar, restaurar versões, editar templates, times e tags |
+| Administrador | Todos | Tudo: usuários, papéis, aparência, auditoria, logs, SSO, exclusões e reset. Não pode ser alterado |
 
-As permissões são verificadas no servidor. O visualizador nem recebe os playbooks em Desenvolvimento.
+Em **Administração → Papéis** o administrador cria outros papéis numa matriz **ação × tipo de documento** (ver, ver
+rascunhos, criar, editar, alterar status, pode aprovar, restaurar, importar, exportar, excluir) mais as permissões da
+plataforma (`templates.view/edit/delete`, `users.manage`, `roles.manage`, `audit.view`, `logs.manage`, `sso.manage`,
+`branding.edit`, `app.reset`). Regras: o Administrador é imutável; Editor e Visualizador podem ser ajustados (e
+restaurados ao padrão), não excluídos; ninguém concede permissões que não tem; papel em uso só é excluído realocando
+os usuários; sempre há pelo menos um administrador ativo; a mudança vale na próxima ação de cada usuário.
+
+As permissões são verificadas no servidor. Quem não pode ver rascunhos nem recebe os playbooks em Desenvolvimento.
+No banco, `users.role_id` guarda o papel e a coluna antiga `users.role` fica como espelho (papel personalizado aparece
+como `viewer`), para que a versão anterior ainda abra o banco num rollback.
 
 ## Ciclo de vida
 
 **Desenvolvimento → Homologação → Produção**, pelo botão "Alterar status" do playbook.
 
 - Playbook novo ou importado começa em Desenvolvimento.
-- Produção exige um **aprovador** (editor ou administrador ativo).
+- Produção exige um **aprovador**: usuário ativo cujo papel pode aprovar e que seja **outra pessoa**, diferente de quem
+  está publicando e de quem gravou a última versão de conteúdo (comparação pelo login). A regra é ligada por padrão e
+  fica em **Administração → Aparência → Governança** (quem tem `app.reset` ou `users.manage` pode desligar).
+  Playbooks que já estavam em Produção não mudam; edições Minor/Major em Produção continuam sem nova aprovação.
 - **Último revisor** e **Data de revisão** são preenchidos a cada gravação. Os quatro campos ficam na tabela
   "Propriedades do playbook" do `.md` e aparecem bloqueados (cadeado) no editor.
 
@@ -310,6 +326,7 @@ python3 tools/bench.py --sizes 10,150,500   # benchmark
 | Arquivo | Função |
 | --- | --- |
 | `server.py` | Servidor HTTP, API, permissões, CLI `adduser` |
+| `perms.py` | Catálogo de permissões e papéis do sistema |
 | `library.py` | Cache dos documentos já interpretados, lista leve e busca |
 | `store.py` | Banco SQLite (usuários, sessões, auditoria, configurações, versões) |
 | `logfwd.py` | Encaminhamento de logs em JSON (HTTP, syslog, arquivo) e retenção |

@@ -1,5 +1,38 @@
 # Changelog
 
+## 3.0.0-beta.1 — 2026-10-30
+
+### Papéis e permissões personalizados
+- **Administração → Papéis:** crie papéis marcando, numa matriz ação × tipo de documento, o que cada um pode fazer
+  (ver, ver rascunhos, criar, editar, alterar status, pode aprovar, restaurar versões, importar, exportar, excluir),
+  além das permissões da plataforma (templates, usuários, papéis, auditoria, logs, SSO, aparência, reset).
+  Duplicar, restaurar padrão (Editor e Visualizador) e excluir realocando os usuários.
+- Os papéis do sistema **Administrador**, **Editor** e **Visualizador** têm exatamente as permissões de antes
+  (verificado por teste que compara rota a rota com a 2.2). O Administrador não pode ser alterado nem excluído.
+- Sem escalada: quem gerencia papéis ou usuários sem ser administrador só concede o que tem e não mexe em
+  usuários ou papéis mais fortes. Mudanças valem na próxima requisição. Auditoria: `papel_criado`,
+  `papel_alterado` (permissões que entraram e saíram), `papel_excluido`, `usuario_alterado` com `papel`.
+- Usuários, SSO e linha de comando aceitam qualquer papel: o mapeamento de grupos do SSO tem um campo por papel
+  (vence o de maior prioridade) e `server.py adduser --role <chave>` valida no banco.
+- A interface mostra menus, abas e botões conforme as permissões; a Administração mostra só as sub-abas permitidas.
+
+### Aprovação por outra pessoa (ligada por padrão)
+- Para ir a **Produção**, o aprovador precisa ser **diferente de quem está publicando** e **de quem fez a última
+  alteração** do conteúdo (pelo login). O diálogo lista só quem pode aprovar e explica quem ficou de fora; sem
+  candidatos, orienta a pedir a um administrador (o administrador conta como aprovador).
+- Chave em **Administração → Aparência → Governança** (`governanca_alterada` na auditoria). Playbooks que já estão em
+  Produção não mudam; a regra vale nas próximas promoções. A auditoria de `status_alterado` ganhou `aprovador_login`.
+
+### Banco de dados (migração v4, automática)
+- Só acrescenta: tabela `roles`, coluna `users.role_id` (preenchida com o perfil atual) e `login_attempts.updated`.
+  A coluna `users.role` continua como espelho: a 2.2 abre o banco migrado (usuário com papel personalizado entra como
+  Visualizador). **Antes de migrar, o app copia o banco** para `data/backups/playbooks.db.pre-v3-v4-<data-hora>`
+  (guarda as 5 cópias mais recentes). Isso não substitui o backup do volume.
+
+### Mudanças de comportamento
+- Importar **substituindo** um playbook exige a permissão de **excluir** (na 2.2, ser administrador).
+- Promover a Produção exige aprovador diferente (veja acima).
+
 ## 2.2.0 — 2026-10-30
 
 ### Desempenho

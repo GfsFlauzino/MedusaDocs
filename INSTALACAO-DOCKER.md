@@ -250,6 +250,10 @@ podman run -d … localhost/medusa-docs:anterior      # mesmas opções do passo
 - Pasta do host em vez de volume: `-v /caminho:/data:Z` (SELinux) e `podman unshare chown -R 10001:10001 /caminho`.
 - Quadlet/systemd: troque a tag no `.container` e rode `systemctl --user restart medusa-docs`.
 - A 2.2.0 não altera o banco: a imagem 2.1 abre o mesmo volume depois (o arquivo `data/cache/biblioteca.json` é ignorado por ela).
+- A 3.0 migra o banco (v3 → v4: papéis) ao iniciar e registra no log `Migração do banco v3 → v4 (cópia anterior em …)`.
+  A migração só acrescenta tabelas e colunas: a imagem 2.2 ainda abre o banco migrado (usuários com papel
+  personalizado entram como Visualizador). Para voltar ao estado exato, restaure o backup do passo 1.
+- Ordem sugerida: 2.2.0 → observar alguns dias → 3.0.
 - Ensaio antes de produção: `podman volume create medusa-teste && podman volume import medusa-teste backup.tar` e suba a
   imagem nova em outra porta (ex.: 8766) com esse volume.
 
