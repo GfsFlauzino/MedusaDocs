@@ -1431,7 +1431,7 @@ const Editor = (() => {
     el.innerHTML = `<div class="wrap"><div class="empty">Carregando templates…</div></div>`;
     let tpls = [], people = [];
     try {
-      [tpls, people] = await Promise.all([api("GET", "api/templates").then(r => r.templates), api("GET", "api/people").then(r => r.people)]);
+      [tpls, people] = await Promise.all([api("GET", "api/templates?kind=playbook").then(r => r.templates), api("GET", "api/people").then(r => r.people)]);
     } catch (e) { el.innerHTML = `<div class="wrap"><div class="err">${esc(e.message)}</div></div>`; return; }
     tpls = tpls.filter(t => !t.error);
     if (!tpls.length) { el.innerHTML = `<div class="wrap"><div class="err">Nenhum template disponível. Crie um em Templates.</div></div>`; return; }

@@ -15,7 +15,7 @@ const pbBy = slug => PBS.find(p => p.slug === slug);
 const norm = s => String(s || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 const TEAM_COLOR = n => (TEAMS[n] && TEAMS[n].color) || "#5B6673";
 const TEAM_ORDER = ["SOC N1", "SOC N2", "CSIRT"];
-/* permissões do papel do usuário ("área.ação", ex.: playbook.edit); o servidor confere de novo em cada chamada */
+/* permissões da role do usuário ("área.ação", ex.: playbook.edit); o servidor confere de novo em cada chamada */
 const can = p => !!App.user && (App.user.permissions || []).includes(p);
 const canAny = (...ps) => ps.some(can);
 const ADMIN_PERMS = ["users.manage", "roles.manage", "audit.view", "logs.manage", "sso.manage", "branding.edit", "app.reset"];
@@ -109,7 +109,10 @@ const Brand = (() => {
     const mark = $("#brandMark");
     mark.className = "brand-mark " + (b.logo ? "has-logo" : "default");
     mark.innerHTML = markHtml(b);
-    document.querySelectorAll(".login-brand").forEach(n => { n.innerHTML = loginBrand(); });
+    /* com logo: a logo sozinha em cima e o nome do workspace embaixo (logos têm proporções variadas e não alinham
+       bem com texto ao lado); sem logo: símbolo padrão e nome na mesma linha */
+    $("#brand").classList.toggle("with-logo", !!b.logo);
+    document.querySelectorAll(".login-brand").forEach(n => { n.innerHTML = loginBrand(); n.classList.toggle("with-logo", !!b.logo); });
   }
   const loginBrand = () => `<span class="brand-mark ${cur.logo ? "has-logo" : "default"}">${markHtml(cur)}</span><span class="bname">${esc(cur.name)}</span>`;
   function apply(b) {
@@ -209,7 +212,7 @@ function linkify(root, pb) {
       const b = document.createElement("button");
       b.className = "ref " + info.kind; b.textContent = tok;
       b.dataset.kind = info.kind; b.dataset.id = info.id;
-      if (info.kind === "pb" && !PBS.some(p => p.id === info.id)) { b.classList.add("dead"); b.title = "Documento não disponível para o seu papel ou ainda não criado"; }
+      if (info.kind === "pb" && !PBS.some(p => p.id === info.id)) { b.classList.add("dead"); b.title = "Documento não disponível para a sua role ou ainda não criado"; }
       frag.append(b); last = off + tok.length; return tok;
     });
     frag.append(txt.slice(last));
@@ -628,7 +631,7 @@ function homeCards(list) {
   return `<div class="cards">${list.map(p => `<a class="card st-${STATUS_CLS[p.gov.status]}" href="#/${p.slug}/fluxo">
       <div class="card-top"><span class="id">${p.id} · v${esc(pbVersion(p))}</span>${statusPill(p.gov.status)}</div><h3>${esc(p.name)}</h3>
       <p>${esc(pbSubtitle(p))}</p>
-      <div class="meta"><span class="chip">${p.ramos} ramos</span><span class="chip">${p.steps} passos</span></div>
+      <div class="meta"><span class="chip">${p.ramos} ramos</span><span class="chip">${p.steps} passos</span>${p.suggestions && can("playbook.edit") ? `<span class="chip sg-chip">${p.suggestions} sugest${p.suggestions > 1 ? "ões" : "ão"}</span>` : ""}</div>
       <div class="govline">${govLine(p.gov)}</div></a>`).join("")}
     ${can("playbook.create") ? addCard() : ""}</div>`;
 }
@@ -716,6 +719,7 @@ function renderPb(pb, tab, extra, rest) {
           <div class="dm-h">Pacote completo</div>
           <a href="api/pb/${pb.id}/export?fmt=medusa" download><b>Medusa</b><small>.medusa.md · ${flowExp ? "documento + fluxograma" : "documento, pasta e campos"}, reimportável</small></a>
         </div></div>
+        ${canAny(`${T}.suggest`, `${T}.edit`) ? `<button class="btn ghost sm" id="sgBtn" title="Sugestões de alteração">${ic("edit")}Sugestões<span class="sg-n">${(PBS.find(p => p.id === pb.id) || {}).suggestions ? " " + PBS.find(p => p.id === pb.id).suggestions : ""}</span></button>` : ""}
         ${ti.folders && can(`${T}.edit`) ? `<button class="btn ghost sm" id="mvBtn">${ic("swap")}Mover</button>` : ""}
         ${can(`${T}.status`) ? `<button class="btn ghost sm" id="stBtn">${ic("swap")}Alterar status</button>` : ""}${can(`${T}.delete`) ? `<button class="btn danger sm" id="delBtn" title="Excluir">${ic("trash")}Excluir</button>` : ""}</div></div>
     ${fieldChips(pb)}${govHtml(pb)}
@@ -726,6 +730,7 @@ function renderPb(pb, tab, extra, rest) {
   $("#expMenu").onclick = e => { const b = e.target.closest("[data-exp]"); $("#expMenu").hidden = true; if (b) Exporter[b.dataset.exp](currentPb()); };
   if ($("#delBtn")) $("#delBtn").onclick = () => deleteDialog(currentPb());
   if ($("#mvBtn")) $("#mvBtn").onclick = () => moveDialog(currentPb());
+  if ($("#sgBtn")) $("#sgBtn").onclick = () => Suggest.panel(currentPb());
   if (can(`${T}.edit`)) lintBadge(pb);
   const tv = $("#tabview");
   if (tab === "editar") return Editor.docEditor(tv, pb);
@@ -919,6 +924,7 @@ function tabDoc(pb, el, focus) {
   };
   if (focus) setTimeout(() => focusInDoc(el, pb, decodeURIComponent(focus)), 30);
   citations(pb, el.querySelector(".doc"));
+  Suggest.bindDoc(pb, el);
 }
 /* "Referenciado por" e "Cita": documentos ligados a este pelo ID no texto (só os que você pode ver) */
 async function citations(pb, box) {
@@ -970,10 +976,10 @@ const Admin = (() => {
   async function users(el) {
     let data;
     try { data = await api("GET", "api/users"); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
-    const roleSel = (u) => `<select class="in sm" data-role="${esc(u.login)}" ${u.login === App.user.login ? "disabled title='Você não pode alterar o próprio papel'" : ""}>${data.roleList.map(r => `<option value="${esc(r.key)}" ${r.key === u.roleId ? "selected" : ""}>${esc(r.name)}</option>`).join("")}${data.roleList.some(r => r.key === u.roleId) ? "" : `<option selected disabled>${esc(u.roleName)}</option>`}</select>`;
+    const roleSel = (u) => `<select class="in sm" data-role="${esc(u.login)}" ${u.login === App.user.login ? "disabled title='Você não pode alterar a própria role'" : ""}>${data.roleList.map(r => `<option value="${esc(r.key)}" ${r.key === u.roleId ? "selected" : ""}>${esc(r.name)}</option>`).join("")}${data.roleList.some(r => r.key === u.roleId) ? "" : `<option selected disabled>${esc(u.roleName)}</option>`}</select>`;
     el.innerHTML = `<div class="admin-grid"><div class="ecard">
         <div class="ecard-h"><b>Usuários</b><span class="muted small">${data.users.length} cadastrados</span></div>
-        <div class="tw"><table class="utable"><thead><tr><th>Usuário</th><th>Papel</th><th>Situação</th><th>Último acesso</th><th>Sessões</th><th></th></tr></thead><tbody>
+        <div class="tw"><table class="utable"><thead><tr><th>Usuário</th><th>Role</th><th>Situação</th><th>Último acesso</th><th>Sessões</th><th></th></tr></thead><tbody>
         ${data.users.map(u => `<tr class="${u.active ? "" : "off"}"><td><b>${esc(u.name)}</b><br><code>${esc(u.login)}</code>${u.mustChange ? ` <span class="tag warn">senha temporária</span>` : ""}
             <br><select class="in xs auth-sel" data-auth="${esc(u.login)}" ${u.login === App.user.login ? "disabled" : ""} title="Forma de autenticação">
               <option value="local" ${u.auth !== "sso" ? "selected" : ""}>Senha local</option><option value="sso" ${u.auth === "sso" ? "selected" : ""}>SSO${u.auth === "sso" && !u.ssoLinked ? " (aguardando 1º login)" : ""}</option></select></td>
@@ -988,14 +994,14 @@ const Admin = (() => {
           <label>Nome<input class="in" name="name" required placeholder="Nome e sobrenome"></label>
           <label>Login<input class="in" name="login" required pattern="[a-z0-9._@\-]{3,80}" placeholder="ex.: maria.souza ou maria@empresa.com"></label>
           <label>Autenticação<select class="in" name="auth"><option value="local">Senha local (senha temporária gerada agora)</option><option value="sso">SSO (entra pelo provedor com este login)</option></select></label>
-          <label>Papel<select class="in" name="role">${data.roleList.map(r => `<option value="${esc(r.key)}" ${r.key === "viewer" ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></label>
-          <p class="muted small">O que cada papel pode fazer está em ${can("roles.manage") ? `<a href="#/admin/papeis">Papéis</a>` : "Papéis"}.</p>
+          <label>Role<select class="in" name="role">${data.roleList.map(r => `<option value="${esc(r.key)}" ${r.key === "viewer" ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></label>
+          <p class="muted small">O que cada role pode fazer está em ${can("roles.manage") ? `<a href="#/admin/roles">Roles</a>` : "Roles"}.</p>
           <div class="err" id="nuerr" hidden></div>
           <div class="create-actions"><button class="btn primary" type="submit">Criar usuário</button></div>
         </form></div></div>`;
     const reload = () => users(el);
     const upd = async (login, body, msg) => { try { await api("PUT", `api/users/${encodeURIComponent(login)}`, body); toast(msg); } catch (e) { toast(e.message, "err"); } reload(); };
-    el.querySelectorAll("[data-role]").forEach(s => s.onchange = () => upd(s.dataset.role, { role: s.value }, "Papel alterado"));
+    el.querySelectorAll("[data-role]").forEach(s => s.onchange = () => upd(s.dataset.role, { role: s.value }, "Role alterada"));
     el.querySelectorAll("[data-auth]").forEach(sel => sel.onchange = async () => {
       const lg = sel.dataset.auth, to = sel.value;
       if (!(await ask(to === "sso" ? `Converter ${lg} para SSO? A senha local deixa de funcionar e as sessões abertas são encerradas. O login precisa ser igual ao enviado pelo provedor.`
@@ -1102,8 +1108,8 @@ const Admin = (() => {
     };
   }
 
-  /* ── papéis: lista à esquerda; à direita, o editor com a matriz ação × tipo de documento e as permissões da
-     plataforma. Permissões que o seu papel não tem aparecem desabilitadas (não dá para conceder o que não se tem). */
+  /* ── roles: lista à esquerda; à direita, o editor com a matriz ação × tipo de documento e as permissões da
+     plataforma. Permissões que a sua role não tem aparecem desabilitadas (não dá para conceder o que não se tem). */
   async function roles(el, key) {
     let d; try { d = await api("GET", "api/roles"); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
     const cat = d.catalog, mine = new Set(d.mine);
@@ -1119,11 +1125,11 @@ const Admin = (() => {
       </tbody></table></div>`;
     const globals = `<div class="perm-global">${cat.global.map(g => `<label class="chk-inline">${box(g.key, g.label)} ${esc(g.label)}</label>`).join("")}</div>`;
     el.innerHTML = `<div class="roles-grid">
-      <aside class="ecard role-list"><div class="ecard-h"><b>Papéis</b><a class="btn ghost xs" href="#/admin/papeis/novo" style="margin-left:auto">${ic("plus")}Novo papel</a></div>
-        ${d.roles.map(r => `<a class="role-item ${cur && r.key === cur.key ? "on" : ""}" href="#/admin/papeis/${esc(r.key)}"><b>${esc(r.name)}</b>${r.system ? `<span class="tag">sistema</span>` : ""}
+      <aside class="ecard role-list"><div class="ecard-h"><b>Roles</b><a class="btn ghost xs" href="#/admin/roles/novo" style="margin-left:auto">${ic("plus")}Nova role</a></div>
+        ${d.roles.map(r => `<a class="role-item ${cur && r.key === cur.key ? "on" : ""}" href="#/admin/roles/${esc(r.key)}"><b>${esc(r.name)}</b>${r.system ? `<span class="tag">sistema</span>` : ""}
           <small>${esc(r.description || "")}</small><span class="role-users">${r.users} usuário${r.users === 1 ? "" : "s"}</span></a>`).join("")}</aside>
       <form class="ecard role-edit" id="roleForm" autocomplete="off">
-        <div class="ecard-h"><b>${isNew ? "Novo papel" : esc(cur.name)}</b>${locked ? `<span class="muted small">não editável: tem todas as permissões, inclusive as futuras</span>` : ""}</div>
+        <div class="ecard-h"><b>${isNew ? "Nova role" : esc(cur.name)}</b>${locked ? `<span class="muted small">não editável: tem todas as permissões, inclusive as futuras</span>` : ""}</div>
         <div class="pp-row"><label>Nome<input class="in" name="name" maxlength="40" required value="${esc(isNew ? "" : cur.name)}" ${locked ? "disabled" : ""}></label>
           <label style="max-width:150px" title="Ordem do mapeamento de grupos do SSO: o de maior prioridade vence">Prioridade<input class="in" type="number" name="priority" min="1" max="99" value="${isNew ? 20 : cur.priority}" ${locked ? "disabled" : ""}></label></div>
         <label>Descrição<input class="in" name="description" maxlength="200" value="${esc(isNew ? "" : cur.description)}" ${locked ? "disabled" : ""}></label>
@@ -1134,7 +1140,7 @@ const Admin = (() => {
           ${!isNew && cur.deletable ? `<button type="button" class="btn danger" id="rlDel" style="margin-right:auto">Excluir</button>` : ""}
           ${!isNew && cur.system && cur.editable ? `<button type="button" class="btn ghost" id="rlReset" style="margin-right:auto">Restaurar padrão</button>` : ""}
           ${!isNew ? `<button type="button" class="btn ghost" id="rlDup">Duplicar</button>` : ""}
-          ${locked ? "" : `<button class="btn primary" type="submit">${isNew ? "Criar papel" : "Salvar"}</button>`}</div></form></div>`;
+          ${locked ? "" : `<button class="btn primary" type="submit">${isNew ? "Criar role" : "Salvar"}</button>`}</div></form></div>`;
     const form = $("#roleForm", el), err = $("#rlErr", el);
     const fail = x => { err.textContent = x.message; err.hidden = false; };
     const boxes = sel => [...form.querySelectorAll(`input[data-perm]${sel}`)].filter(b => !b.disabled);
@@ -1147,31 +1153,31 @@ const Admin = (() => {
       const body = { name: form.name.value.trim(), description: form.description.value.trim(), priority: +form.priority.value, permissions: collect() };
       try {
         const r = isNew ? await api("POST", "api/roles", body) : await api("PUT", `api/roles/${encodeURIComponent(cur.key)}`, body);
-        toast(isNew ? "Papel criado" : "Papel salvo"); location.hash = `#/admin/papeis/${r.role.key}`; if (!isNew) roles(el, r.role.key);
+        toast(isNew ? "Role criada" : "Role salva"); location.hash = `#/admin/roles/${r.role.key}`; if (!isNew) roles(el, r.role.key);
       } catch (x) { fail(x); }
     };
     if ($("#rlDup", el)) $("#rlDup", el).onclick = async () => {
-      try { const r = await api("POST", "api/roles", { name: `${cur.name} (cópia)`.slice(0, 40), description: cur.description, priority: Math.min(99, cur.priority), from: cur.key }); toast("Papel duplicado"); location.hash = `#/admin/papeis/${r.role.key}`; }
+      try { const r = await api("POST", "api/roles", { name: `${cur.name} (cópia)`.slice(0, 40), description: cur.description, priority: Math.min(99, cur.priority), from: cur.key }); toast("Role duplicada"); location.hash = `#/admin/roles/${r.role.key}`; }
       catch (x) { fail(x); }
     };
     if ($("#rlReset", el)) $("#rlReset", el).onclick = async () => {
-      if (!(await ask(`Voltar o papel ${cur.name} às permissões padrão?`, { title: "Restaurar padrão", ok: "Restaurar" }))) return;
+      if (!(await ask(`Voltar a role ${cur.name} às permissões padrão?`, { title: "Restaurar padrão", ok: "Restaurar" }))) return;
       try { await api("PUT", `api/roles/${cur.key}`, { reset: true }); toast("Permissões padrão restauradas"); roles(el, cur.key); } catch (x) { fail(x); }
     };
     if ($("#rlDel", el)) $("#rlDel", el).onclick = () => {
       const others = d.roles.filter(r => r.key !== cur.key && r.key !== "admin");
-      modal({ title: `Excluir o papel ${esc(cur.name)}`, html: `<form class="tform" id="rdForm">
-          ${cur.users ? `<p>${cur.users} usuário${cur.users === 1 ? " usa" : "s usam"} este papel. Para onde ${cur.users === 1 ? "ele vai" : "eles vão"}?</p>
-            <label>Novo papel<select class="in" name="reassign">${others.map(r => `<option value="${esc(r.key)}" ${r.key === "viewer" ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></label>`
-            : `<p>Nenhum usuário usa este papel.</p>`}
+      modal({ title: `Excluir a role ${esc(cur.name)}`, html: `<form class="tform" id="rdForm">
+          ${cur.users ? `<p>${cur.users} usuário${cur.users === 1 ? " usa" : "s usam"} esta role. Para onde ${cur.users === 1 ? "ele vai" : "eles vão"}?</p>
+            <label>Nova role<select class="in" name="reassign">${others.map(r => `<option value="${esc(r.key)}" ${r.key === "viewer" ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></label>`
+            : `<p>Nenhum usuário usa esta role.</p>`}
           <div class="err" id="rdErr" hidden></div>
-          <div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn danger" type="submit">Excluir papel</button></div></form>`,
+          <div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn danger" type="submit">Excluir role</button></div></form>`,
         onMount: (b, close) => {
           const f = $("#rdForm", b);
           f.querySelector("[data-cancel]").onclick = close;
           f.onsubmit = async e => {
             e.preventDefault();
-            try { await api("DELETE", `api/roles/${cur.key}`, cur.users ? { reassign: f.reassign.value } : {}); close(); toast("Papel excluído"); location.hash = "#/admin/papeis"; }
+            try { await api("DELETE", `api/roles/${cur.key}`, cur.users ? { reassign: f.reassign.value } : {}); close(); toast("Role excluída"); location.hash = "#/admin/roles"; }
             catch (x) { $("#rdErr", b).textContent = x.message; $("#rdErr", b).hidden = false; }
           };
         } });
@@ -1290,13 +1296,13 @@ const Admin = (() => {
         <div class="notice small">Cadastre no provedor esta <b>URL de redirecionamento</b>: <code id="ssoRedir">${esc(d.redirectUri || "(informe a URL pública)")}</code></div>
         <div class="pp-row"><label>Escopos<input class="in" name="scopes" value="${esc(c.scopes)}"></label>
           <label>Texto do botão<input class="in" name="label" value="${esc(c.label)}" maxlength="60"></label></div></div>
-      <div class="ecard"><div class="ecard-h"><b>Usuários e papéis</b></div>
+      <div class="ecard"><div class="ecard-h"><b>Usuários e roles</b></div>
         <div class="pp-row"><label>Claim do login<input class="in" name="login_claim" value="${esc(c.login_claim)}" placeholder="preferred_username"></label>
           <label>Claim do nome<input class="in" name="name_claim" value="${esc(c.name_claim)}"></label>
           <label>Claim do e-mail<input class="in" name="email_claim" value="${esc(c.email_claim)}"></label></div>
         <label>Domínios de e-mail permitidos <small>(vírgula; vazio = qualquer)</small><input class="in" name="allowed_domains" value="${esc(c.allowed_domains)}" placeholder="empresa.com, empresa.com.br"></label>
-        <label>Claim de grupos/papéis<input class="in" name="role_claim" value="${esc(c.role_claim)}" placeholder="groups, roles ou realm_access.roles"></label>
-        <div class="pp-lbl">Grupos do provedor → papel <small class="muted">(valores separados por vírgula; verificado a cada login, do papel de maior prioridade para o menor)</small></div>
+        <label>Claim de grupos/roles<input class="in" name="role_claim" value="${esc(c.role_claim)}" placeholder="groups, roles ou realm_access.roles"></label>
+        <div class="pp-lbl">Grupos do provedor → role <small class="muted">(valores separados por vírgula; verificado a cada login, da role de maior prioridade para a de menor)</small></div>
         ${d.roles.map(r => `<label>${esc(r.name)}<input class="in" name="role_map.${esc(r.key)}" value="${esc((c.role_map || {})[r.key] || "")}" placeholder="ex.: ${r.key === "admin" ? "sec-admins" : r.key === "editor" ? "csirt, soc-n2" : r.key === "viewer" ? "soc-n1" : "grupo-do-provedor"}"></label>`).join("")}
         <div class="pp-row"><label>Sem grupo correspondente<select class="in" name="default_role">${d.roles.filter(r => r.key !== "admin").map(r => `<option value="${esc(r.key)}" ${c.default_role === r.key ? "selected" : ""}>Entra como ${esc(r.name)}</option>`).join("")}<option value="" ${!c.default_role ? "selected" : ""}>Acesso negado</option></select></label>
           <label>Usuário novo<select class="in" name="auto_create"><option value="1" ${c.auto_create ? "selected" : ""}>Criar no primeiro login</option><option value="" ${!c.auto_create ? "selected" : ""}>Só pré-cadastrados (Usuários → SSO)</option></select></label></div>
@@ -1322,12 +1328,13 @@ const Admin = (() => {
     };
   }
 
-  /* sub-abas conforme as permissões do papel; a Aparência também aparece para quem pode mudar a governança */
+  /* sub-abas conforme as permissões da role; a Aparência também aparece para quem pode mudar a governança */
   const SUBS = [
-    ["usuarios", "Usuários", () => can("users.manage")], ["papeis", "Papéis", () => can("roles.manage")],
+    ["usuarios", "Usuários", () => can("users.manage")], ["roles", "Roles", () => can("roles.manage")],
     ["aparencia", "Aparência", () => canAny("branding.edit", "app.reset", "users.manage")], ["auditoria", "Auditoria", () => can("audit.view")],
     ["logs", "Logs e retenção", () => can("logs.manage")], ["sso", "SSO", () => can("sso.manage")]];
   function render(root, sub, key) {
+    if (sub === "papeis") { location.replace("#/admin/roles" + (key ? "/" + key : "")); return; }   // endereço antigo (3.0)
     const subs = SUBS.filter(x => x[2]());
     if (!subs.length) return notFound();
     sub = subs.some(x => x[0] === sub) ? sub : subs[0][0];
@@ -1336,7 +1343,7 @@ const Admin = (() => {
       <nav class="tabs">${subs.map(([k, l]) => `<a href="#/admin/${k}" class="${sub === k ? "on" : ""}">${l}</a>`).join("")}</nav></div></div>
       <div class="wrap" id="adminview"><div class="empty">Carregando…</div></div>`;
     if ($("#resetBtn")) $("#resetBtn").onclick = resetDialog;
-    ({ usuarios: users, papeis: el => roles(el, key), aparencia: appearance, auditoria: auditLog, logs, sso: ssoAdmin })[sub]($("#adminview"));
+    ({ usuarios: users, roles: el => roles(el, key), aparencia: appearance, auditoria: auditLog, logs, sso: ssoAdmin })[sub]($("#adminview"));
   }
   return { render };
 })();
@@ -1346,8 +1353,8 @@ const Admin = (() => {
    botão direito abrem as ações). À direita, busca, filtros gerados pelos campos do template (com contagens) e a lista.
    Documentos e pastas podem ser arrastados para outra pasta. Em telas estreitas a árvore vira um painel recolhível. */
 const LibraryPage = (() => {
-  const st = {};                                  // por tipo: { q, facet: {campo: valor}, open: Set(ids), limit }
-  const S = t => st[t] || (st[t] = { q: "", facet: {}, open: new Set(), limit: 100 });
+  const st = {};                                  // por tipo: { q, facet: {campo: valor}, closed: Set(ids), limit, panel }
+  const S = t => st[t] || (st[t] = { q: "", facet: {}, closed: new Set(), limit: 100 });
   const viewKey = t => `medusa-lib-view:${t}:` + (App.user ? App.user.login : "");
   const libView = t => { let v = null; try { v = localStorage.getItem(viewKey(t)); } catch { } return v === "list" ? "list" : "cards"; };
 
@@ -1355,11 +1362,11 @@ const LibraryPage = (() => {
     const kids = {}; d.folders.forEach(f => (kids[f.parentId ?? "root"] = kids[f.parentId ?? "root"] || []).push(f));
     const s = S(t);
     const node = (f, depth) => {
-      const has = !!(kids[f.id] || []).length, open = s.open.has(f.id);
+      const has = !!(kids[f.id] || []).length, open = !s.closed.has(f.id);     // pastas começam expandidas
       return `<li role="treeitem" aria-level="${depth + 1}" ${has ? `aria-expanded="${open}"` : ""} aria-selected="${String(sel) === String(f.id)}">
         <div class="tnode ${String(sel) === String(f.id) ? "on" : ""}" data-f="${f.id}" tabindex="-1" draggable="${d.canManage}" style="padding-left:${8 + depth * 14}px">
           <button class="tw" data-tw="${f.id}" tabindex="-1" aria-hidden="true" ${has ? "" : "style='visibility:hidden'"}>${ic(open ? "down" : "right")}</button>
-          <span class="tname">${esc(f.name)}</span><small>${f.total}</small>
+          ${ic("folder")}<span class="tname">${esc(f.name)}</span><small>${f.total}</small>
           ${d.canManage ? `<button class="tmore" data-more="${f.id}" title="Ações da pasta" aria-label="Ações da pasta ${esc(f.name)}" tabindex="-1">${ic("more")}</button>` : ""}</div>
         ${has && open ? `<ul role="group">${kids[f.id].map(k => node(k, depth + 1)).join("")}</ul>` : ""}</li>`;
     };
@@ -1379,7 +1386,7 @@ const LibraryPage = (() => {
         <span class="pt-rev">${esc(p.reviewed || "—")}</span></a>`).join("")}</div>`;
     return `<div class="cards">${items.map(p => `<a class="card st-${STATUS_CLS[p.status]}" href="#/${p.slug}/doc" draggable="true" data-doc="${p.id}">
         <div class="card-top"><span class="id">${p.id} · v${esc(p.version)}</span>${statusPill(p.status, t)}</div><h3>${esc(p.name)}</h3>
-        <div class="meta">${chips(p)}${p.hasFlow && t !== "doc" ? `<span class="chip">fluxograma</span>` : ""}</div>
+        <div class="meta">${chips(p)}${p.hasFlow && t !== "doc" ? `<span class="chip">fluxograma</span>` : ""}${p.suggestions && can(`${t}.edit`) ? `<span class="chip sg-chip">${p.suggestions} sugest${p.suggestions > 1 ? "ões" : "ão"}</span>` : ""}</div>
         <div class="govline">${govLine(p.gov)}</div></a>`).join("")}</div>`;
   }
 
@@ -1401,7 +1408,7 @@ const LibraryPage = (() => {
         <div class="home-actions">${can(`${t}.create`) && can(`${t}.import`) ? `<button class="btn ghost sm" id="libImp">${ic("upload")}Importar</button>` : ""}
           ${can(`${t}.create`) ? `<a class="btn primary sm" href="#/${TYPE_ROUTE[t]}/novo${sel && sel !== "none" ? "/" + sel : ""}">${ic("plus")}Novo ${esc(ti.label.toLowerCase())}</a>` : ""}</div></header>
       <div class="lib">
-        <details class="lib-side" ${(s.panel ?? !matchMedia("(max-width: 900px)").matches) ? "open" : ""}><summary>${ic("grid")}Pastas${selName ? `: ${esc(selName)}` : ""}</summary>
+        <details class="lib-side" ${!matchMedia("(max-width: 900px)").matches || (s.panel ?? true) ? "open" : ""}><summary>${ic("grid")}Pastas${selName ? `: ${esc(selName)}` : ""}</summary>
           <div class="lib-tree-h">${tree.canManage ? `<button class="btn ghost xs" id="fNew">${ic("plus")}Pasta</button><button class="btn ghost xs" id="fTpl" title="Cria as pastas sugeridas pelo template (o que já existe não é duplicado)">Estrutura do template…</button>` : ""}</div>
           <div id="libTree">${treeHtml(t, tree, sel)}</div></details>
         <section class="lib-main">
@@ -1431,7 +1438,7 @@ const LibraryPage = (() => {
     const box = $("#libTree"), s = S(t);
     const nodes = () => [...box.querySelectorAll(".tnode")];
     box.onclick = e => {
-      const tw = e.target.closest("[data-tw]"); if (tw) { e.preventDefault(); const id = +tw.dataset.tw; s.open.has(id) ? s.open.delete(id) : s.open.add(id); return reload(); }
+      const tw = e.target.closest("[data-tw]"); if (tw) { e.preventDefault(); e.stopPropagation(); const id = +tw.dataset.tw; s.closed.has(id) ? s.closed.delete(id) : s.closed.add(id); return reload(); }
       const more = e.target.closest("[data-more]"); if (more) { e.preventDefault(); return folderMenu(t, tree, +more.dataset.more, more, reload, go); }
       const n = e.target.closest(".tnode"); if (n) go(n.dataset.f);
     };
@@ -1442,8 +1449,8 @@ const LibraryPage = (() => {
       const focus = n => { if (!n) return; list.forEach(x => x.tabIndex = -1); n.tabIndex = 0; n.focus(); };
       if (e.key === "ArrowDown") { e.preventDefault(); focus(list[i + 1]); }
       else if (e.key === "ArrowUp") { e.preventDefault(); focus(list[i - 1]); }
-      else if (e.key === "ArrowRight" && f && tree.folders.some(x => x.parentId === f.id)) { e.preventDefault(); if (!s.open.has(f.id)) { s.open.add(f.id); reload(); } else focus(list[i + 1]); }
-      else if (e.key === "ArrowLeft" && f) { e.preventDefault(); if (s.open.has(f.id)) { s.open.delete(f.id); reload(); } else focus(list.find(x => x.dataset.f === String(f.parentId))); }
+      else if (e.key === "ArrowRight" && f && tree.folders.some(x => x.parentId === f.id)) { e.preventDefault(); if (s.closed.has(f.id)) { s.closed.delete(f.id); reload(); } else focus(list[i + 1]); }
+      else if (e.key === "ArrowLeft" && f) { e.preventDefault(); if (!s.closed.has(f.id) && tree.folders.some(x => x.parentId === f.id)) { s.closed.delete(f.id); s.closed.add(f.id); reload(); } else focus(list.find(x => x.dataset.f === String(f.parentId))); }
       else if (e.key === "Enter") { e.preventDefault(); go(id); }
       else if (e.key === "F2" && f && tree.canManage) { e.preventDefault(); folderName(t, f, f.parentId, reload); }
     };
@@ -1459,7 +1466,7 @@ const LibraryPage = (() => {
         const target = n.dataset.f === "none" ? null : +n.dataset.f;
         const doc = e.dataTransfer.getData("text/medusa-doc"), fol = e.dataTransfer.getData("text/medusa-folder");
         try {
-          if (doc) { if (!can(`${t}.edit`)) return toast("Seu papel não pode mover documentos", "warn"); await api("PUT", `api/doc/${doc}/folder`, { folder_id: target }); toast(`${doc} movido`); }
+          if (doc) { if (!can(`${t}.edit`)) return toast("Sua role não pode mover documentos", "warn"); await api("PUT", `api/doc/${doc}/folder`, { folder_id: target }); toast(`${doc} movido`); }
           else if (fol && fol !== n.dataset.f && tree.canManage) { await api("PUT", `api/folders/${fol}`, { parent_id: target }); toast("Pasta movida"); }
           else return;
           reload();
@@ -1481,7 +1488,7 @@ const LibraryPage = (() => {
     setTimeout(() => document.addEventListener("mousedown", out, true), 0);
     m.onclick = e => {
       const a = (e.target.closest("[data-a]") || {}).dataset; if (!a || !a.a) return; close();
-      if (a.a === "sub") { S(t).open.add(id); return folderName(t, null, id, reload); }
+      if (a.a === "sub") { S(t).closed.delete(id); return folderName(t, null, id, reload); }
       if (a.a === "ren") return folderName(t, f, f.parentId, reload);
       if (a.a === "mov") return folderMove(t, tree, f, reload);
       if (a.a === "del") return folderDelete(t, tree, f, reload, go);
@@ -1500,8 +1507,7 @@ const LibraryPage = (() => {
       } });
   }
   function folderMove(t, tree, f, done) {
-    const bad = new Set([f.id]); let grew = true;
-    while (grew) { grew = false; tree.folders.forEach(x => { if (bad.has(x.parentId) && !bad.has(x.id)) { bad.add(x.id); grew = true; } }); }
+    const bad = subtree(tree, f);
     modal({ title: `Mover a pasta ${esc(f.name)}`, html: `<form class="tform" id="fmForm"><label>Para dentro de<select class="in" name="to">${folderOptions(tree.folders.filter(x => !bad.has(x.id)), f.parentId, "Raiz (nenhuma pasta)")}</select></label>
         <div class="err" id="fmErr" hidden></div><div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn primary" type="submit">Mover</button></div></form>`,
       onMount: (b, close) => {
@@ -1509,11 +1515,17 @@ const LibraryPage = (() => {
         form.onsubmit = async e => { e.preventDefault(); try { await api("PUT", `api/folders/${f.id}`, { parent_id: form.to.value || null }); close(); done(); } catch (x) { $("#fmErr", b).textContent = x.message; $("#fmErr", b).hidden = false; } };
       } });
   }
+  /* a pasta e tudo o que está dentro dela (não servem de destino para mover ou para receber o conteúdo) */
+  function subtree(tree, f) {
+    const out = new Set([f.id]); let grew = true;
+    while (grew) { grew = false; tree.folders.forEach(x => { if (out.has(x.parentId) && !out.has(x.id)) { out.add(x.id); grew = true; } }); }
+    return out;
+  }
   function folderDelete(t, tree, f, done, go) {
-    const busy = f.total || tree.folders.some(x => x.parentId === f.id);
+    const busy = f.total || tree.folders.some(x => x.parentId === f.id), inside = subtree(tree, f);
     modal({ title: `Excluir a pasta ${esc(f.name)}`, html: `<form class="tform" id="fdForm">
         ${busy ? `<p>A pasta tem ${f.total} documento(s)${tree.folders.some(x => x.parentId === f.id) ? " e subpastas" : ""}. Para onde vai o conteúdo?</p>
-          <label>Mover para<select class="in" name="to">${folderOptions(tree.folders.filter(x => x.id !== f.id), f.parentId, "Sem pasta / raiz")}</select></label>` : `<p>A pasta está vazia.</p>`}
+          <label>Mover para<select class="in" name="to">${folderOptions(tree.folders.filter(x => !inside.has(x.id)), f.parentId, "Sem pasta / raiz")}</select></label>` : `<p>A pasta está vazia.</p>`}
         <p class="muted small">Os documentos não são apagados nem ganham versão nova: só mudam de pasta.</p>
         <div class="err" id="fdErr" hidden></div><div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn danger" type="submit">Excluir pasta</button></div></form>`,
       onMount: (b, close) => {
@@ -1585,6 +1597,175 @@ const DocCreate = (() => {
     };
   }
   return { render };
+})();
+
+/* ───────── sugestões de alteração ─────────
+   Quem pode sugerir seleciona um trecho da documentação (aparece "Sugerir alteração") ou usa o botão da seção para
+   propor um acréscimo; dá para só comentar. Quem edita abre o painel de Sugestões e aceita (aplicando no documento,
+   o que gera uma versão) ou recusa; quem sugeriu pode retirar. */
+const Suggest = (() => {
+  const fmt = t => t ? new Date(t).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "";
+  const STATUS = { aberta: "aberta", aceita: "aceita", recusada: "recusada", retirada: "retirada" };
+  let floatBtn = null;
+
+  /* seção (e subseção) onde está o nó: âncora = slug da seção, como no servidor */
+  function where(node) {
+    const el = node && (node.nodeType === 3 ? node.parentElement : node);
+    const sec = el && el.closest(".doc section.md");
+    if (!sec || sec.classList.contains("cites")) return null;
+    if (sec.classList.contains("intro")) return { anchor: "intro", title: "Introdução" };
+    if (!/^sec-/.test(sec.id)) return null;
+    let top = el; while (top && top.parentElement !== sec) top = top.parentElement;
+    let h = top; while (h && !/^H[23]$/.test(h.tagName)) h = h.previousElementSibling;
+    const h2 = sec.querySelector("h2"), own = x => ((x.firstChild && x.firstChild.nodeType === 3 ? x.firstChild.textContent : x.textContent) || "").trim();
+    return { anchor: sec.id.slice(4), title: h && h.tagName === "H3" ? `${own(h2)} › ${own(h)}` : own(h2) };
+  }
+  function hideFloat() { if (floatBtn) { floatBtn.remove(); floatBtn = null; } }
+
+  function dialog(pb, ctx, done) {
+    hideFloat();
+    const quote = ctx.quote || "";
+    modal({ title: "Sugerir alteração", wide: true, html: `<form class="tform" id="sgForm">
+        <div class="sg-where">${ic("page")}<span>${esc(ctx.title)}</span></div>
+        ${quote ? `<div class="pp-lbl">Trecho selecionado</div><blockquote class="sg-quote">${esc(quote)}</blockquote>
+          <div class="radio-row"><label><input type="radio" name="mode" value="replace" checked> Propor um texto no lugar do trecho</label>
+            <label><input type="radio" name="mode" value="comment"> Só comentar</label></div>` : `<p class="muted small" style="margin-top:0">Sem trecho selecionado: o texto sugerido entra no fim desta seção (Markdown: listas, tabelas e código valem). Para trocar um trecho, selecione-o na documentação.</p>`}
+        <label id="sgPropL">${quote ? "Texto sugerido" : "Texto a acrescentar"} <small>(opcional se houver comentário)</small><textarea class="in" name="proposal" rows="${quote ? 3 : 5}" maxlength="4000">${esc(quote)}</textarea></label>
+        <label>Comentário <small>(por que mudar; aparece para quem edita)</small><textarea class="in" name="comment" rows="3" maxlength="2000"></textarea></label>
+        <div class="err" id="sgErr" hidden></div>
+        <div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn primary" type="submit">${ic("send")}Enviar sugestão</button></div></form>`,
+      onMount: (b, close) => {
+        const f = $("#sgForm", b);
+        f.querySelector("[data-cancel]").onclick = close;
+        const sync = () => { const c = f.mode && f.mode.value === "comment"; $("#sgPropL", b).hidden = c; };
+        f.addEventListener("change", sync); sync();
+        (quote ? f.proposal : f.proposal).focus();
+        f.onsubmit = async e => {
+          e.preventDefault();
+          const onlyComment = f.mode && f.mode.value === "comment";
+          const proposal = onlyComment ? null : f.proposal.value;
+          if (quote && proposal !== null && proposal.trim() === quote.trim() && !f.comment.value.trim()) { $("#sgErr", b).textContent = "Mude o texto ou escreva um comentário"; $("#sgErr", b).hidden = false; return; }
+          try {
+            await api("POST", `api/doc/${pb.id}/suggestions`, { anchor: ctx.anchor, anchor_title: ctx.title, quote, proposal: proposal && proposal.trim() ? proposal : null, comment: f.comment.value });
+            close(); toast("Sugestão enviada para quem edita o documento"); done && done();
+          } catch (x) { $("#sgErr", b).textContent = x.message; $("#sgErr", b).hidden = false; }
+        };
+      } });
+  }
+
+  function itemHtml(x, d) {
+    const open = x.status === "aberta";
+    const quote = x.quote ? `<del class="sg-del">${esc(x.quote)}</del>` : "";
+    const prop = x.proposal ? `<ins class="sg-ins">${x.quote ? "" : "+ "}${esc(x.proposal)}</ins>` : "";
+    return `<div class="sg-item ${open ? "" : "closed"}" data-id="${x.id}">
+      <div class="sg-head"><b>${esc(x.author_name)}</b><span class="muted small">${esc(fmt(x.created_at))} · v${esc(x.base_version)} · ${esc(x.anchor_title || "Documento")}</span>
+        ${open ? "" : `<span class="tag ${x.status}">${STATUS[x.status]}${x.applied ? " e aplicada" : ""}</span>`}</div>
+      ${quote || prop ? `<div class="sg-diff">${quote}${prop}</div>` : ""}
+      ${x.comment ? `<p class="sg-comment">${esc(x.comment)}</p>` : ""}
+      ${!open && (x.resolved_name || x.resolution_note) ? `<p class="muted small">${esc(x.resolved_name || "")}${x.resolved_at ? ` em ${esc(fmt(x.resolved_at))}` : ""}${x.resolution_note ? `: ${esc(x.resolution_note)}` : ""}</p>` : ""}
+      ${open ? `<div class="row-btns">${d.canResolve ? `${x.proposal ? `<button class="btn primary xs" data-sg="apply">${ic("check")}Aceitar e aplicar</button>` : ""}
+          <button class="btn ghost xs" data-sg="accept">Marcar como aceita</button><button class="btn ghost xs" data-sg="reject">Recusar</button>` : ""}
+        ${x.mine ? `<button class="btn ghost xs" data-sg="withdraw">Retirar</button>` : ""}</div>` : ""}</div>`;
+  }
+
+  async function panel(pb, anchor, all = false) {
+    let d; try { d = await api("GET", `api/doc/${pb.id}/suggestions${all ? "?status=todas" : ""}`); } catch (e) { return toast(e.message, "err"); }
+    const list = d.suggestions.filter(x => !anchor || x.anchor === anchor);
+    const html = `<div class="sg-tabs"><button class="${all ? "" : "on"}" data-all="0">Abertas</button><button class="${all ? "on" : ""}" data-all="1">Todas</button>
+        ${anchor ? `<button data-clear>Todas as seções</button>` : ""}</div>
+      ${list.length ? list.map(x => itemHtml(x, d)).join("") : `<div class="empty">${all ? "Nenhuma sugestão." : "Nenhuma sugestão aberta."}</div>`}
+      ${d.canSuggest ? `<p class="muted small">Para sugerir, selecione um trecho na aba Documentação ou use o ${ic("plus")} ao lado do título de uma seção.</p>` : ""}`;
+    if (!drawer.hidden) stack.pop();
+    pushView(`${ic("edit")} Sugestões · ${esc(pb.id)}`, html, pb, body => {
+      body.querySelectorAll("[data-all]").forEach(b => b.onclick = () => panel(pb, anchor, b.dataset.all === "1"));
+      const c = body.querySelector("[data-clear]"); if (c) c.onclick = () => panel(pb, null, all);
+      body.querySelectorAll("[data-sg]").forEach(b => b.onclick = () => act(pb, +b.closest(".sg-item").dataset.id, b.dataset.sg, () => panel(pb, anchor, all)));
+    });
+  }
+
+  function noteDialog(title, label, okText, danger) {
+    return new Promise(resolve => modal({ title, html: `<form class="tform" id="snForm"><label>${label}<textarea class="in" name="note" rows="3" maxlength="500"></textarea></label>
+        <div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn ${danger ? "danger" : "primary"}" type="submit">${okText}</button></div></form>`,
+      onClose: () => resolve(null),
+      onMount: (b, close) => { const f = $("#snForm", b); f.note.focus(); f.querySelector("[data-cancel]").onclick = () => { resolve(null); close(); };
+        f.onsubmit = e => { e.preventDefault(); resolve(f.note.value); close(); }; } }));
+  }
+
+  async function act(pb, id, what, done) {
+    try {
+      if (what === "withdraw") {
+        if (!(await ask("Retirar esta sugestão?", { title: "Retirar sugestão", ok: "Retirar" }))) return;
+        await api("POST", `api/doc/${pb.id}/suggestions/${id}/withdraw`, {}); toast("Sugestão retirada");
+      } else if (what === "reject") {
+        const note = await noteDialog("Recusar sugestão", "Motivo <small>(opcional; quem sugeriu vê)</small>", "Recusar", true); if (note === null) return;
+        await api("POST", `api/doc/${pb.id}/suggestions/${id}/reject`, { note }); toast("Sugestão recusada");
+      } else if (what === "accept") {
+        const note = await noteDialog("Marcar como aceita", "Observação <small>(opcional; ex.: aplicado à mão no passo A3)</small>", "Marcar como aceita"); if (note === null) return;
+        await api("POST", `api/doc/${pb.id}/suggestions/${id}/accept`, { note }); toast("Sugestão marcada como aceita");
+      } else if (what === "apply") {
+        const cur = DETAIL.get(pb.id) || pb;
+        if (Editor.dirty || Editor.hasDraft(cur.id.toLowerCase())) return toast("Salve ou descarte as alterações do editor deste documento antes de aplicar", "warn");
+        const change = await Editor.askChange(cur, "a sugestão aceita"); if (change === false) return;
+        const r = await api("POST", `api/doc/${pb.id}/suggestions/${id}/accept`, { apply: true, rev: cur.rev, change: change || undefined });
+        replacePlaybook(r.playbook); toast(`Sugestão aplicada: versão ${r.version}`);
+        if (location.hash.startsWith(`#/${pb.slug}`)) { const keep = stack.slice(); route(); stack = keep; }
+      }
+      await refreshIndex(); done();
+    } catch (x) {
+      if (x.status === 409 && what === "apply") toast(x.message, "warn"); else toast(x.message, "err");
+    }
+  }
+
+  /* leitura: selecionar texto mostra o botão; o título de cada seção ganha "+" e a contagem de sugestões abertas */
+  async function bindDoc(pb, el) {
+    const T = pb.type || "playbook", doc = el.querySelector(".doc");
+    if (!doc) return;
+    const canSg = can(`${T}.suggest`);
+    if (canSg) {
+      doc.querySelectorAll("section.md:not(.cites)").forEach(sec => {
+        const w = where(sec.firstElementChild || sec); if (!w) return;
+        const h = sec.querySelector("h2") || sec.firstElementChild;
+        if (h && h.tagName === "H2") h.insertAdjacentHTML("beforeend", `<button class="sg-add" title="Sugerir nesta seção" aria-label="Sugerir nesta seção">${ic("plus")}</button>`);
+        else sec.insertAdjacentHTML("afterbegin", `<button class="sg-add sg-add-intro" title="Sugerir na introdução" aria-label="Sugerir na introdução">${ic("plus")}</button>`);
+      });
+      doc.addEventListener("click", e => { const b = e.target.closest(".sg-add"); if (!b) return; e.preventDefault(); const w = where(b); if (w) dialog(pb, w, () => decorate(pb, doc)); });
+      const onSel = () => setTimeout(() => {
+        const sel = getSelection(), text = sel ? sel.toString().trim() : "";
+        if (!text || text.length < 3 || !sel.rangeCount || !doc.contains(sel.anchorNode) || !doc.contains(sel.focusNode)) return hideFloat();
+        const a = where(sel.anchorNode), z = where(sel.focusNode);
+        if (!a || !z || a.anchor !== z.anchor) return hideFloat();
+        const r = sel.getRangeAt(0).getBoundingClientRect();
+        hideFloat();
+        floatBtn = document.createElement("button");
+        floatBtn.className = "btn primary xs sg-float"; floatBtn.innerHTML = `${ic("edit")}Sugerir alteração`;
+        floatBtn.style.cssText = `position:fixed;left:${Math.max(8, Math.min(innerWidth - 180, r.left + r.width / 2 - 80))}px;top:${Math.max(8, r.top - 38)}px;z-index:75`;
+        floatBtn.onmousedown = e => e.preventDefault();
+        floatBtn.onclick = () => dialog(pb, { ...a, quote: text.slice(0, 2000) }, () => decorate(pb, doc));
+        document.body.append(floatBtn);
+      }, 0);
+      doc.addEventListener("mouseup", onSel);
+      doc.addEventListener("keyup", e => { if (e.shiftKey) onSel(); });
+    }
+    decorate(pb, doc);
+  }
+  /* contagem de sugestões abertas ao lado do título de cada seção */
+  async function decorate(pb, doc) {
+    let d; try { d = await api("GET", `api/doc/${pb.id}/suggestions`); } catch { return; }
+    if (!document.contains(doc)) return;
+    doc.querySelectorAll(".sg-count").forEach(x => x.remove());
+    const by = {}; d.suggestions.forEach(x => { by[x.anchor] = (by[x.anchor] || 0) + 1; });
+    doc.querySelectorAll("section.md:not(.cites)").forEach(sec => {
+      const w = where(sec.firstElementChild || sec); if (!w || !by[w.anchor]) return;
+      const h = sec.querySelector("h2");
+      const chip = `<button class="sg-count" data-anchor="${esc(w.anchor)}" title="Sugestões abertas nesta seção">${by[w.anchor]} sugest${by[w.anchor] > 1 ? "ões" : "ão"}</button>`;
+      if (h) h.insertAdjacentHTML("beforeend", chip); else sec.insertAdjacentHTML("afterbegin", chip);
+    });
+    doc.querySelectorAll(".sg-count").forEach(b => b.onclick = e => { e.preventDefault(); panel(pb, b.dataset.anchor); });
+    const btn = $("#sgBtn"); if (btn) { const n = d.suggestions.length; btn.querySelector(".sg-n").textContent = n ? ` ${n}` : ""; }
+  }
+  document.addEventListener("mousedown", e => { if (floatBtn && !e.target.closest(".sg-float")) hideFloat(); });
+  window.addEventListener("hashchange", hideFloat);
+  return { panel, bindDoc };
 })();
 
 /* ───────── busca ───────── */

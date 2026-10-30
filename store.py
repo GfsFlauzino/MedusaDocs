@@ -132,6 +132,30 @@ def _m5_folders(c):
 
 
 MIGRATIONS.append(_m5_folders)
+
+
+def _m6_suggestions(c):
+    """v6: sugestões de alteração nos documentos (quem lê propõe, quem edita aceita ou recusa). Os papéis do sistema
+    Editor e Visualizador ganham a permissão nova "sugerir" (<tipo>.suggest); papéis criados pelo administrador não mudam."""
+    c.execute("""CREATE TABLE suggestions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, pid TEXT NOT NULL,
+        anchor TEXT NOT NULL DEFAULT '', anchor_title TEXT NOT NULL DEFAULT '',
+        quote TEXT NOT NULL DEFAULT '', proposal TEXT, comment TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'aberta',
+        author TEXT NOT NULL, author_name TEXT NOT NULL, created_at TEXT NOT NULL, base_version TEXT NOT NULL DEFAULT '',
+        resolved_by TEXT, resolved_name TEXT, resolved_at TEXT, resolution_note TEXT NOT NULL DEFAULT '',
+        applied INTEGER NOT NULL DEFAULT 0)""")
+    c.execute("CREATE INDEX suggestions_pid ON suggestions(pid, status)")
+    for key in ("editor", "viewer"):
+        r = c.execute("SELECT permissions FROM roles WHERE key = ? AND system = 1", (key,)).fetchone()
+        if not r: continue
+        cur = json.loads(r[0] or "[]")
+        add = [f"{t}.suggest" for t in perms.TYPES if f"{t}.suggest" not in cur]
+        if add: c.execute("UPDATE roles SET permissions = ?, updated_at = ? WHERE key = ?", (json.dumps(perms.clean(cur + add)), now_iso(), key))
+
+
+MIGRATIONS.append(_m6_suggestions)
+SUGGESTION_STATUSES = ("aberta", "aceita", "recusada", "retirada")
 MAX_FOLDER_DEPTH = 6
 
 
@@ -258,13 +282,13 @@ class Store:
             with self._tx() as c:
                 c.execute("INSERT INTO roles VALUES (?,?,?,0,?,?,?,?)", (key, name, description, int(priority), json.dumps(permissions), ts, ts))
         except sqlite3.IntegrityError:
-            raise StoreError("Já existe um papel com essa chave")
+            raise StoreError("Já existe uma role com essa chave")
         self._roles_changed()
         return self.role(key)
 
     def update_role(self, key, name=None, description=None, permissions=None, priority=None):
-        if key == "admin": raise StoreError("O papel Administrador não pode ser alterado")
-        if key not in self.roles(): raise StoreError("papel não encontrado")
+        if key == "admin": raise StoreError("A role Administrador não pode ser alterada")
+        if key not in self.roles(): raise StoreError("role não encontrada")
         sets, args = ["updated_at = ?"], [now_iso()]
         for col, val in (("name", name), ("description", description), ("priority", priority),
                          ("permissions", None if permissions is None else json.dumps(permissions))):
@@ -277,18 +301,18 @@ class Store:
     def reset_role(self, key):
         """Papel do sistema (Editor, Visualizador) volta às permissões padrão."""
         d = perms.DEFAULTS.get(key)
-        if key == "admin" or not d: raise StoreError("Só os papéis Editor e Visualizador têm padrão para restaurar")
+        if key == "admin" or not d: raise StoreError("Só as roles Editor e Visualizador têm padrão para restaurar")
         return self.update_role(key, name=d["name"], description=d["description"], permissions=d["permissions"], priority=d["priority"])
 
     def delete_role(self, key, reassign=None):
         r = self.role(key)
-        if not r: raise StoreError("papel não encontrado")
-        if r["system"]: raise StoreError("Papéis do sistema não podem ser excluídos")
-        if reassign is not None and (reassign == key or reassign not in self.roles()): raise StoreError("Papel de destino inválido")
+        if not r: raise StoreError("role não encontrada")
+        if r["system"]: raise StoreError("Roles do sistema não podem ser excluídas")
+        if reassign is not None and (reassign == key or reassign not in self.roles()): raise StoreError("Role de destino inválida")
         with self._tx() as c:
             n = c.execute("SELECT COUNT(*) FROM users WHERE COALESCE(role_id, role) = ?", (key,)).fetchone()[0]
             if n and reassign is None:
-                raise StoreError(f"Papel em uso por {n} usuário(s): escolha para qual papel eles vão")
+                raise StoreError(f"Role em uso por {n} usuário(s): escolha para qual role eles vão")
             if n:
                 c.execute("UPDATE users SET role_id = ?, role = ?, updated_at = ? WHERE COALESCE(role_id, role) = ?",
                           (reassign, perms.legacy_role(reassign), now_iso(), key))
@@ -305,7 +329,7 @@ class Store:
         d["active"], d["must_change"] = bool(d["active"]), bool(d["must_change"])
         d["role_id"] = d.get("role_id") or d["role"]
         r = self.roles().get(d["role_id"])
-        d["role_name"] = r["name"] if r else "(papel removido)"
+        d["role_name"] = r["name"] if r else "(role removida)"
         d["priority"] = r["priority"] if r else 0
         d["perms"] = r["perms"] if r else frozenset()
         return d
@@ -338,7 +362,7 @@ class Store:
 
     def create_user(self, login, name, role, pw_hash, must_change=True, auth="local", sso_subject=None):
         """role = chave do papel (role_id); a coluna antiga role recebe o espelho legado."""
-        if role not in self.roles(): raise StoreError("papel inválido")
+        if role not in self.roles(): raise StoreError("role inválida")
         ts = now_iso()
         try:
             with self._tx() as c:
@@ -351,7 +375,7 @@ class Store:
 
     def upsert_user(self, login, name, role, pw_hash):
         """Usado pela linha de comando: cria ou redefine (ativo, sem troca obrigatória)."""
-        if role not in self.roles(): raise StoreError("papel inválido")
+        if role not in self.roles(): raise StoreError("role inválida")
         ts = now_iso()
         with self._tx() as c:
             c.execute("""INSERT INTO users (login, name, role, role_id, hash, active, must_change, created_at, updated_at) VALUES (?,?,?,?,?,1,0,?,?)
@@ -364,7 +388,7 @@ class Store:
         with self._tx() as c:
             if not c.execute("SELECT 1 FROM users WHERE login = ?", (login,)).fetchone():
                 raise StoreError("usuário não encontrado")
-            if role is not None and role not in self.roles(): raise StoreError("papel inválido")
+            if role is not None and role not in self.roles(): raise StoreError("role inválida")
             if auth is not None and auth not in ("local", "sso"): raise StoreError("tipo de autenticação inválido")
             sets, args = ["updated_at = ?"], [now_iso()]
             for col, val in (("name", name), ("role_id", role), ("role", role and perms.legacy_role(role)),
@@ -665,6 +689,39 @@ class Store:
             parent = r["id"] if r else self.create_folder(dtype, name, parent)["id"]
         return parent
 
+    # ── sugestões de alteração
+    def add_suggestion(self, pid, anchor, anchor_title, quote, proposal, comment, author, author_name, base_version):
+        with self._db() as c:
+            return c.execute("""INSERT INTO suggestions (pid, anchor, anchor_title, quote, proposal, comment, author, author_name, created_at, base_version)
+                                VALUES (?,?,?,?,?,?,?,?,?,?)""", (pid, anchor, anchor_title, quote, proposal, comment, author, author_name, now_iso(),
+                                                                  base_version)).lastrowid
+
+    def suggestions(self, pid, only_open=False):
+        with self._db() as c:
+            q = "SELECT * FROM suggestions WHERE pid = ?" + (" AND status = 'aberta'" if only_open else "") + " ORDER BY status = 'aberta' DESC, id DESC"
+            return [dict(r) for r in c.execute(q, (pid,))]
+
+    def suggestion(self, pid, sid):
+        with self._db() as c:
+            r = c.execute("SELECT * FROM suggestions WHERE pid = ? AND id = ?", (pid, sid)).fetchone()
+            return dict(r) if r else None
+
+    def resolve_suggestion(self, sid, status, login, name, note="", applied=False):
+        """Fecha a sugestão (só se ainda estiver aberta: duas pessoas resolvendo ao mesmo tempo não se sobrepõem)."""
+        if status not in SUGGESTION_STATUSES[1:]: raise StoreError("situação inválida")
+        with self._tx() as c:
+            n = c.execute("""UPDATE suggestions SET status = ?, resolved_by = ?, resolved_name = ?, resolved_at = ?, resolution_note = ?, applied = ?
+                             WHERE id = ? AND status = 'aberta'""", (status, login, name, now_iso(), note[:500], int(applied), sid)).rowcount
+            if not n: raise StoreError("Esta sugestão já foi resolvida")
+
+    def open_suggestion_counts(self):
+        with self._db() as c:
+            return dict(c.execute("SELECT pid, COUNT(*) FROM suggestions WHERE status = 'aberta' GROUP BY pid").fetchall())
+
+    def archive_suggestions(self, pid, suffix):
+        with self._db() as c:
+            c.execute("UPDATE suggestions SET pid = ? WHERE pid = ?", (f"{pid}#{suffix}", pid))
+
     # ── reset da aplicação
     def backup_to(self, path):
         """Cópia consistente do banco (API de backup do SQLite), mesmo com o servidor em uso."""
@@ -683,6 +740,7 @@ class Store:
             c.execute("DELETE FROM sso_states")
             c.execute("DELETE FROM doc_meta")
             c.execute("DELETE FROM folders")
+            c.execute("DELETE FROM suggestions")
             if settings: c.execute("DELETE FROM settings")
             else: c.execute("DELETE FROM settings WHERE key = 'pb_templates'")
             if users:

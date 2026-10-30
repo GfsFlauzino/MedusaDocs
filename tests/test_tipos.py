@@ -161,10 +161,10 @@ class MigracaoV5(unittest.TestCase):
         s5 = store.Store(db)
         self.assertEqual(s5.get_user("ana.teste")["role_id"], "editor")
         c = sqlite3.connect(db)
-        self.assertEqual(c.execute("PRAGMA user_version").fetchone()[0], 5)
+        self.assertEqual(c.execute("PRAGMA user_version").fetchone()[0], len(store.MIGRATIONS))
         self.assertEqual(c.execute("SELECT COUNT(*) FROM folders").fetchone()[0], 0)
         c.close()
-        self.assertTrue(list((d / "backups").glob("playbooks.db.pre-v4-v5-*")))
+        self.assertTrue(list((d / "backups").glob("playbooks.db.pre-v4-v*")))
 
 
 if __name__ == "__main__":

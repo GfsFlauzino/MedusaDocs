@@ -42,6 +42,8 @@ class Migracao(unittest.TestCase):
                 u = app.client().login(login, pw)
                 self.assertEqual(u["role"], self.meta["roles"][login])
                 self.assertEqual(u["roleId"], self.meta["roles"][login])
+                if login != "admin.teste":                 # migração v6: Editor e Visualizador ganham "sugerir"
+                    self.assertIn("playbook.suggest", u["permissions"])
             # papel personalizado, para o teste de rollback (a 2.x deve ver esse usuário como Visualizador)
             admin = app.client(); admin.login(*next((l, p) for l, p in self.meta["logins"].items() if self.meta["roles"][l] == "admin"))
             r = admin.post("/api/roles", {"name": "Analista migrado", "permissions": ["playbook.view", "playbook.view_drafts", "playbook.edit"]})

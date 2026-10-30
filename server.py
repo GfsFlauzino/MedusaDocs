@@ -11,9 +11,9 @@ Variáveis de ambiente (usadas no Docker)
   MEDUSA_ADMIN_LOGIN     cria o primeiro administrador quando não há nenhum (senha temporária no log,
   MEDUSA_ADMIN_NAME      ou MEDUSA_ADMIN_PASSWORD; a troca é obrigatória no primeiro acesso)
 
-Papéis e permissões (perms.py)
-  Cada usuário tem um papel (users.role_id) e cada papel uma lista de permissões "área.ação" (playbook.edit,
-  users.manage…). Os papéis do sistema reproduzem os perfis da 2.x: Visualizador (lê Homologação e Produção),
+Roles e permissões (perms.py)
+  Cada usuário tem uma role (users.role_id) e cada role uma lista de permissões "área.ação" (playbook.edit,
+  users.manage…). As roles do sistema reproduzem os perfis da 2.x: Visualizador (lê Homologação e Produção),
   Editor (lê, cria e edita; muda status; edita templates) e Administrador (tudo). O administrador cria outros.
 
 Usuários, sessões, tentativas de login, auditoria e configurações ficam no banco SQLite data/playbooks.db (store.py).
@@ -51,7 +51,7 @@ MAX_THREADS = 32                # requisições processadas ao mesmo tempo; as d
 PBKDF2_ITERS = 310_000
 MIN_PASSWORD = 10
 MAX_BODY = 8 * 1024 * 1024
-APP_VERSION = "3.1.0"
+APP_VERSION = "3.2.0"
 LOGIN_RE = re.compile(r"^[a-z0-9._@-]{3,80}$")          # @ e até 80 caracteres: logins vindos do SSO (e-mail)
 NO_PASSWORD = "!sso"                                      # hash impossível: conta só entra pelo SSO
 TRUST_PROXY = os.environ.get("MEDUSA_TRUST_PROXY", "").lower() in ("1", "true", "yes", "sim")
@@ -482,6 +482,7 @@ class Handler(BaseHTTPRequestHandler):
             if not path.startswith("/api/templates/import"):
                 key = re.sub(r"^/api/templates/[^/]+", "/api/templates/{t}", key)
             key = re.sub(r"^/api/roles/[^/]+$", "/api/roles/{role}", key)
+            key = re.sub(r"^(/api/pb/\{pb\}/suggestions)/\d+", r"\1/{s}", key)
             route = ROUTES.get((method, key))
             if not route: raise HttpError(404, "não encontrado")
             m = re.search(rf"/({DT.PID_IN_PATH})(?:/|$)", path); u = re.match(r"^/api/users/([^/]+)", path)
@@ -672,11 +673,11 @@ def r_library(h, **_):
     if folder and folder != "none" and not folder.isdigit(): raise HttpError(400, "pasta inválida")
     ffilters = {k[7:]: [x for x in v.split(",") if x] for k, v in q.items() if k.startswith("fields.") and v}
     LIB.scan()
-    etag = '"' + hashlib.sha1(json.dumps([LIB.generation, FOLDER_GEN[0], typ, status, text, sort, limit, offset, folder, q.get("recursive"),
+    etag = '"' + hashlib.sha1(json.dumps([BOOT_ID, LIB.generation, FOLDER_GEN[0], SUGG_GEN[0], typ, status, text, sort, limit, offset, folder, q.get("recursive"),
                                          sorted(ffilters.items()), perms_tag(u)]).encode()).hexdigest()[:20] + '"'
     if h.not_modified(etag): return h.send_json({}, etag=etag)
-    fmap = open_db().doc_folders(typ or None)
-    items = [{**s, "folderId": fmap.get(s["id"])} for s in LIB.summaries(summary_visible(u), dtype=typ or None)]
+    fmap, scount = open_db().doc_folders(typ or None), open_db().open_suggestion_counts()
+    items = [{**s, "folderId": fmap.get(s["id"]), "suggestions": scount.get(s["id"], 0)} for s in LIB.summaries(summary_visible(u), dtype=typ or None)]
     counts = {st: sum(1 for s in items if s["status"] == st) for st in core.STATUSES}
     if status: items = [s for s in items if s["status"] == status]
     if text:
@@ -709,6 +710,165 @@ def r_search(h, **_):
     try: limit = max(1, min(100, int(q.get("limit") or 30)))
     except ValueError: raise HttpError(400, "limite inválido")
     h.send_json({"hits": LIB.search(q.get("q", "")[:200], summary_visible(u), limit)})
+
+# ───────────────────────── sugestões de alteração ─────────────────────────
+# Quem lê (permissão <tipo>.suggest) seleciona um trecho e propõe um texto novo, ou só comenta, ou sugere um acréscimo
+# no fim de uma seção. Quem edita aceita (aplicando no documento, o que gera uma versão) ou recusa. O trecho é procurado
+# no texto da seção mesmo com formatação no meio (negrito, código, links): a seleção na tela vem sem os marcadores.
+
+SUGG_GEN = [0]
+MAX_QUOTE, MAX_PROPOSAL, MAX_COMMENT = 2000, 4000, 2000
+
+def _plain_map(raw):
+    """Texto sem marcadores de Markdown inline + posição de cada caractere no original."""
+    out, idx, i = [], [], 0
+    while i < len(raw):
+        m = core.LINK_RE.match(raw, i)
+        if m:
+            for k in range(len(m.group(1))): out.append(m.group(1)[k]); idx.append(m.start(1) + k)
+            i = m.end(); continue
+        if raw.startswith("**", i): i += 2; continue
+        if raw[i] in "*`": i += 1; continue
+        out.append(" " if raw[i] == "\n" else raw[i]); idx.append(i); i += 1
+    return "".join(out), idx
+
+def _text_slots(blocks):
+    """(get, set) de cada texto editável dos blocos: parágrafos, destaques, itens, células, código e legendas."""
+    for b in blocks:
+        t = b.get("t")
+        if t in ("p", "quote", "code"):
+            yield (lambda b=b: b.get("text", ""), lambda v, b=b: b.__setitem__("text", v), t == "code")
+        elif t in ("ul", "ol"):
+            for i in range(len(b.get("items", []))):
+                yield (lambda b=b, i=i: b["items"][i], lambda v, b=b, i=i: b["items"].__setitem__(i, v.replace("\n", " ")), False)
+        elif t == "table":
+            for i in range(len(b.get("head", []))):
+                yield (lambda b=b, i=i: b["head"][i], lambda v, b=b, i=i: b["head"].__setitem__(i, v.replace("\n", " ")), False)
+            for r in b.get("rows", []):
+                for i in range(len(r)):
+                    yield (lambda r=r, i=i: r[i], lambda v, r=r, i=i: r.__setitem__(i, v.replace("\n", " ")), False)
+        elif t == "img":
+            yield (lambda b=b: b.get("alt", ""), lambda v, b=b: b.__setitem__("alt", v.replace("\n", " ")), False)
+
+def suggestion_scope(doc, anchor):
+    """Blocos onde a sugestão vale: a seção (com as subseções), a introdução ("intro") ou o documento todo ("")."""
+    if anchor == "intro": return [doc.setdefault("intro", [])], None
+    secs = doc.get("sections", [])
+    if anchor:
+        for sec in secs:
+            if core.slug(sec["title"]) == anchor: return [sec["blocks"]] + [x["blocks"] for x in sec.get("subs", [])], sec
+        raise HttpError(409, "A seção desta sugestão não existe mais no documento. Aplique manualmente ou marque como aceita.")
+    return [doc.get("intro") or []] + [bl for sec in secs for bl in [sec["blocks"]] + [x["blocks"] for x in sec.get("subs", [])]], None
+
+def apply_suggestion(doc, s):
+    """Aplica a proposta no doc (altera no lugar). Sem trecho, acrescenta a proposta no fim da seção."""
+    scopes, sec = suggestion_scope(doc, s["anchor"])
+    if not s["quote"]:
+        if sec is None and s["anchor"] != "intro": raise HttpError(400, "Sugestão sem trecho precisa de uma seção")
+        target = scopes[0]
+        target.extend(core.parse_blocks(s["proposal"].replace("\r\n", "\n").split("\n")))
+        return
+    quote = " ".join(s["quote"].split())
+    hits = []
+    for bl in scopes:
+        for get, put, literal in _text_slots(bl):
+            raw = get()
+            if literal:                                      # código: comparação direta, sem tirar marcadores
+                plain, idx = raw.replace("\n", " "), list(range(len(raw)))
+            else:
+                plain, idx = _plain_map(raw)
+            plain = re.sub(r"\s", " ", plain)
+            start = plain.find(quote)
+            while start >= 0:
+                hits.append((get, put, idx[start], idx[start + len(quote) - 1] + 1))
+                start = plain.find(quote, start + 1)
+    if not hits: raise HttpError(409, "O trecho sugerido não foi encontrado: o texto mudou depois da sugestão. Aplique manualmente ou marque como aceita.")
+    if len(hits) > 1: raise HttpError(409, f"O trecho aparece {len(hits)} vezes na seção: aplique manualmente ou marque como aceita.")
+    get, put, a, z = hits[0]
+    raw = get()
+    put(raw[:a] + s["proposal"] + raw[z:])
+
+def public_suggestion(x, u):
+    out = {k: x[k] for k in ("id", "anchor", "anchor_title", "quote", "proposal", "comment", "status", "author_name", "created_at",
+                             "base_version", "resolved_name", "resolved_at", "resolution_note")}
+    out.update(applied=bool(x["applied"]), mine=x["author"] == u["login"])
+    return out
+
+def r_suggestions(h, pid, **_):
+    u = h.require(doc_perm(pid, "view"))
+    pb = load_pb(get_folder(pid))
+    if not visible(pb, u): raise HttpError(404, not_found_msg(pid))
+    xs = open_db().suggestions(pid, only_open=h.query().get("status") != "todas")
+    h.send_json({"suggestions": [public_suggestion(x, u) for x in xs], "canResolve": can(u, doc_perm(pid, "edit")),
+                 "canSuggest": can(u, doc_perm(pid, "suggest"))})
+
+def r_suggestion_create(h, pid, **_):
+    u = h.require(doc_perm(pid, "suggest")); b = h.body()
+    pb = load_pb(get_folder(pid))
+    if not visible(pb, u): raise HttpError(404, not_found_msg(pid))
+    quote, proposal = str(b.get("quote") or "").strip(), b.get("proposal")
+    proposal = None if proposal is None or not str(proposal).strip() else str(proposal).strip()
+    comment, anchor = str(b.get("comment") or "").strip(), str(b.get("anchor") or "")
+    if len(quote) > MAX_QUOTE or (proposal and len(proposal) > MAX_PROPOSAL) or len(comment) > MAX_COMMENT:
+        raise HttpError(400, "Sugestão longa demais (trecho até 2.000 caracteres, texto novo até 4.000, comentário até 2.000)")
+    if not proposal and not comment: raise HttpError(400, "Escreva o texto sugerido ou um comentário")
+    if proposal and not quote and not anchor: raise HttpError(400, "Para acrescentar texto, indique a seção")
+    titles = {"intro": "Introdução", "": "Documento todo"}
+    titles.update({core.slug(s["title"]): s["title"] for s in pb["doc"]["sections"]})
+    if anchor not in titles: raise HttpError(400, "Seção inválida")
+    sub_title = str(b.get("anchor_title") or "")[:200]
+    sid = open_db().add_suggestion(pid, anchor, sub_title if sub_title else titles[anchor], quote, proposal, comment, u["login"], u["name"],
+                                   core.fmt_version(core.get_version(pb["doc"])))
+    SUGG_GEN[0] += 1
+    audit(u["login"], "sugestao_criada", pid, sugestao=sid, secao=titles[anchor], tem_texto="sim" if proposal else "não")
+    h.send_json({"suggestion": public_suggestion(open_db().suggestion(pid, sid), u)})
+
+def suggestion_id(h, pid):
+    m = re.search(r"/suggestions/(\d+)", h.path)
+    x = open_db().suggestion(pid, int(m.group(1))) if m else None
+    if not x: raise HttpError(404, "sugestão não encontrada")
+    if x["status"] != "aberta": raise HttpError(409, "Esta sugestão já foi resolvida")
+    return x
+
+def r_suggestion_accept(h, pid, **_):
+    """Aceita: com "apply" e texto sugerido, aplica no documento (nova versão, tipo "sugestao"); sem, só marca."""
+    u = h.require(doc_perm(pid, "edit")); b = h.body()
+    folder = get_folder(pid)
+    x = suggestion_id(h, pid)
+    applied, ver, note = False, None, str(b.get("note") or "").strip()[:500]
+    if b.get("apply"):
+        if not x["proposal"]: raise HttpError(400, "Esta sugestão é só um comentário: marque como aceita")
+        with LOCK:
+            check_rev(folder, b.get("rev"))
+            old = core.parse_md(core.files_of(folder)[0].read_text("utf-8"))
+            change = prod_change(b, old)
+            doc = core.clone_doc(old)
+            apply_suggestion(doc, x)
+            ver, _ = save_doc(folder, pid, u, doc, old, change, kind="sugestao", note=f"Sugestão #{x['id']} de {x['author_name']}")
+            open_db().resolve_suggestion(x["id"], "aceita", u["login"], u["name"], note, applied=True)
+        applied = True
+    else:
+        open_db().resolve_suggestion(x["id"], "aceita", u["login"], u["name"], note)
+    SUGG_GEN[0] += 1
+    audit(u["login"], "sugestao_aceita", pid, sugestao=x["id"], autor=x["author"], aplicada="sim" if applied else "não", **({"versao": ver} if ver else {}))
+    h.send_json({"ok": True, "applied": applied, "version": ver, "playbook": load_pb(folder)})
+
+def r_suggestion_reject(h, pid, **_):
+    u = h.require(doc_perm(pid, "edit")); b = h.body()
+    x = suggestion_id(h, pid)
+    open_db().resolve_suggestion(x["id"], "recusada", u["login"], u["name"], str(b.get("note") or "").strip()[:500])
+    SUGG_GEN[0] += 1
+    audit(u["login"], "sugestao_recusada", pid, sugestao=x["id"], autor=x["author"])
+    h.send_json({"ok": True})
+
+def r_suggestion_withdraw(h, pid, **_):
+    u = h.require(doc_perm(pid, "view"))
+    x = suggestion_id(h, pid)
+    if x["author"] != u["login"]: raise HttpError(403, "Só quem sugeriu pode retirar a sugestão")
+    open_db().resolve_suggestion(x["id"], "retirada", u["login"], u["name"])
+    SUGG_GEN[0] += 1
+    audit(u["login"], "sugestao_retirada", pid, sugestao=x["id"])
+    h.send_json({"ok": True})
 
 # ───────────────────────── citações e verificação (lint) ─────────────────────────
 
@@ -753,7 +913,7 @@ def r_doc_lint(h, pid, **_):
     u = h.require(doc_perm(pid, "edit"))
     pb = load_pb(get_folder(pid))
     issues = lint(pb)
-    h.send_json({"issues": issues, "count": len(issues)}, etag=doc_etag(pb, u).rstrip('"') + "-lint" + str(LIB.generation) + '"')
+    h.send_json({"issues": issues, "count": len(issues)}, etag=doc_etag(pb, u).rstrip('"') + f"-lint{BOOT_ID}{LIB.generation}" + '"')
 
 # ───────────────────────── versões ─────────────────────────
 # Cada gravação gera uma versão (regras em pbcore.next_version) e guarda o conteúdo completo no banco
@@ -805,23 +965,29 @@ def r_pb_doc(h, pid, **_):
         raise HttpError(400, "documento inválido")
     with LOCK:
         check_rev(folder, b.get("rev"))
-        ensure_baseline(folder, pid)
-        md, dio = core.files_of(folder)
-        old = core.parse_md(md.read_text("utf-8"))
+        old = core.parse_md(core.files_of(folder)[0].read_text("utf-8"))
         change = prod_change(b, old)
-        touch_review(doc, u, old)
-        doc = core.parse_md(core.doc_to_md(doc))          # mesma forma que será lida de volta
-        ver = bump(doc, old, change=change)
-        view = load_pb_fresh(folder)
-        flow, refs = view["flow"], view["refs"]
-        changes = ramos.sync_from_doc(flow, refs, old, doc) if type_info(pid)["ramos"] and view["hasFlow"] else []
-        backup(pid, md, *( (dio, core.MAPPINGS_FILE) if changes else ()))
-        core.atomic_write(md, core.doc_to_md(doc))
-        if changes: write_flow(folder, pid, view["name"], flow, refs)
-        snapshot(folder, pid, u, "documento", change_note(change, "; ".join(changes)))
-        LIB.invalidate(pid)
+        ver, changes = save_doc(folder, pid, u, doc, old, change)
     audit(u["login"], "documento_salvo", pid, versao=ver, **change_audit(change), **({"ramos": "; ".join(changes)} if changes else {}))
     h.send_json({"ok": True, "playbook": load_pb(folder), "sync": changes, "version": ver})
+
+def save_doc(folder, pid, u, doc, old, change, kind="documento", note=""):
+    """Grava o documento (dentro do LOCK, revisão já conferida): revisor, versão, ramos sincronizados com o fluxograma,
+    backup, escrita atômica e versão no histórico. Devolve (versão, mudanças nos ramos)."""
+    ensure_baseline(folder, pid)
+    md, dio = core.files_of(folder)
+    touch_review(doc, u, old)
+    doc = core.parse_md(core.doc_to_md(doc))          # mesma forma que será lida de volta
+    ver = bump(doc, old, change=change)
+    view = load_pb_fresh(folder)
+    flow, refs = view["flow"], view["refs"]
+    changes = ramos.sync_from_doc(flow, refs, old, doc) if type_info(pid)["ramos"] and view["hasFlow"] else []
+    backup(pid, md, *( (dio, core.MAPPINGS_FILE) if changes else ()))
+    core.atomic_write(md, core.doc_to_md(doc))
+    if changes: write_flow(folder, pid, view["name"], flow, refs)
+    snapshot(folder, pid, u, kind, change_note(change, "; ".join(x for x in [note] + changes if x)))
+    LIB.invalidate(pid)
+    return ver, changes
 
 def write_flow(folder, pid, name, flow, refs):
     _, dio = core.files_of(folder)
@@ -938,7 +1104,7 @@ def r_pb_status(h, pid, **_):
 # O aprovador não pode ser quem promove nem quem gravou a última versão de conteúdo (comparação pelo login, não pelo
 # nome do "Último revisor", que não é único). Ligado por padrão; quem tem app.reset ou users.manage pode desligar.
 
-CONTENT_KINDS = ("documento", "fluxograma", "ramo", "restauracao", "importacao", "criacao")
+CONTENT_KINDS = ("documento", "fluxograma", "ramo", "restauracao", "importacao", "criacao", "sugestao")
 
 def governance():
     return {"require_distinct_approver": True, **(open_db().get_setting("governance") or {})}
@@ -1059,6 +1225,7 @@ def r_doc_next_id(h, **_):
     h.send_json({"id": DT.next_id(dtype, used_ids())})
 
 FOLDER_GEN = [0]       # muda quando pastas ou a pasta de um documento mudam (entra no ETag da lista)
+BOOT_ID = secrets.token_hex(4)   # contadores recomeçam a cada boot: o ETag leva este id para não casar com respostas antigas
 
 def r_pb_delete(h, pid, **_):
     u = h.require(doc_perm(pid, "delete"))
@@ -1075,6 +1242,7 @@ def r_pb_delete(h, pid, **_):
         if links().get(pid): (dest / "template.txt").write_text(links()[pid], "utf-8")
         set_link(pid, None)
         open_db().archive_versions(pid, dest.name)
+        open_db().archive_suggestions(pid, dest.name); SUGG_GEN[0] += 1
         open_db().drop_doc_meta(pid); FOLDER_GEN[0] += 1
         LIB.invalidate(pid)
     audit(u["login"], "playbook_excluido" if doc_type(pid) == "playbook" else "documento_excluido", pid, lixeira=dest.name)
@@ -1264,6 +1432,7 @@ def r_import(h, **_):
             backup(pid, core.MAPPINGS_FILE)
             shutil.move(str(existing), str(dest))
             open_db().archive_versions(pid, dest.name)
+            open_db().archive_suggestions(pid, dest.name); SUGG_GEN[0] += 1
         if p["createTeams"]: add_template_teams(tkey, p["createTeams"], union)
         name = p["name"][:100]
         base = f"{pid}-{core.slug(name).title()}"
@@ -1590,9 +1759,9 @@ def r_approvers(h, **_):
 def role_choice(u, key):
     """Papel que este usuário pode atribuir: precisa existir e (fora o Administrador) ter só permissões que ele mesmo tem."""
     r = open_db().role(str(key or ""))
-    if not r: raise HttpError(400, "papel inválido")
+    if not r: raise HttpError(400, "role inválida")
     if not is_admin(u) and not r["perms"] <= u["perms"]:
-        raise HttpError(403, f"Você não pode atribuir o papel {r['name']}: ele tem permissões que o seu papel não tem")
+        raise HttpError(403, f"Você não pode atribuir a role {r['name']}: ela tem permissões que a sua role não tem")
     return r["key"]
 
 def check_manageable(u, target):
@@ -1626,7 +1795,7 @@ def r_user_update(h, login, **_):
     u = h.require("users.manage"); b = h.body()
     new_role = b.get("role_id") or b.get("role")
     if login == u["login"] and (new_role or b.get("active") is False):
-        raise HttpError(400, "Você não pode alterar o próprio papel nem se desativar")
+        raise HttpError(400, "Você não pode alterar a própria role nem se desativar")
     if login == u["login"] and "auth" in b: raise HttpError(400, "Você não pode alterar a própria forma de autenticação")
     auth = b.get("auth") if b.get("auth") in ("local", "sso") else None
     name = str(b["name"]).strip()[:80] or login if "name" in b else None
@@ -1685,10 +1854,10 @@ def public_role(r, users=None):
 
 def role_fields(b, cur=None):
     name = " ".join(str(b.get("name", cur["name"] if cur else "")).split())[:41]
-    if not name: raise HttpError(400, "Informe o nome do papel")
-    if len(name) > 40: raise HttpError(400, "Nome do papel: até 40 caracteres")
+    if not name: raise HttpError(400, "Informe o nome da role")
+    if len(name) > 40: raise HttpError(400, "Nome da role: até 40 caracteres")
     desc = " ".join(str(b.get("description", cur["description"] if cur else "")).split())
-    if len(desc) > 200: raise HttpError(400, "Descrição do papel: até 200 caracteres")
+    if len(desc) > 200: raise HttpError(400, "Descrição da role: até 200 caracteres")
     try: prio = int(b.get("priority", cur["priority"] if cur else 20))
     except (TypeError, ValueError): raise HttpError(400, "Prioridade inválida")
     if not 1 <= prio <= 99: raise HttpError(400, "Prioridade: de 1 a 99 (o Administrador é 100)")
@@ -1698,7 +1867,7 @@ def check_grant(u, new_perms, cur=None):
     """Sem escalada: fora o Administrador, só se concede o que se tem, e só se mexe em papel contido no próprio."""
     if is_admin(u): return
     if cur is not None and not cur["perms"] <= u["perms"]:
-        raise HttpError(403, "Você não pode alterar um papel com permissões que o seu não tem")
+        raise HttpError(403, "Você não pode alterar uma role com permissões que a sua não tem")
     extra = set(new_perms) - set(u["perms"])
     if extra: raise HttpError(403, "Você não pode conceder permissões que não tem: " + ", ".join(sorted(extra)))
 
@@ -1717,7 +1886,7 @@ def r_role_create(h, **_):
     if len(base) < 2: base = f"papel-{base}"
     key, i = base, 2
     while db.role(key) or key in P.SYSTEM_KEYS: key = f"{base[:26]}-{i}"; i += 1
-    if not ROLE_KEY_RE.fullmatch(key): raise HttpError(400, "Nome do papel inválido")
+    if not ROLE_KEY_RE.fullmatch(key): raise HttpError(400, "Nome da role inválido")
     r = db.create_role(key, name, desc, perms, prio)
     audit(u["login"], "papel_criado", f"papel:{key}", nome=name, permissoes=len(perms), **({"copia_de": src["key"]} if src else {}))
     h.send_json({"role": public_role(r, 0)})
@@ -1726,8 +1895,8 @@ def r_role_update(h, **_):
     u = h.require("roles.manage"); b = h.body(); db = open_db()
     key = role_key_from(h.path)
     cur = db.role(key)
-    if not cur: raise HttpError(404, "papel não encontrado")
-    if key == "admin": raise HttpError(400, "O papel Administrador não pode ser alterado")
+    if not cur: raise HttpError(404, "role não encontrada")
+    if key == "admin": raise HttpError(400, "A role Administrador não pode ser alterada")
     if b.get("reset"):
         check_grant(u, P.DEFAULTS.get(key, {}).get("permissions", []), cur)
         new = db.reset_role(key)
@@ -1745,7 +1914,7 @@ def r_role_delete(h, **_):
     u = h.require("roles.manage"); b = h.body(); db = open_db()
     key = role_key_from(h.path)
     cur = db.role(key)
-    if not cur: raise HttpError(404, "papel não encontrado")
+    if not cur: raise HttpError(404, "role não encontrada")
     check_grant(u, [], cur)
     reassign = b.get("reassign") or None
     if reassign: role_choice(u, reassign)
@@ -1974,11 +2143,11 @@ def r_sso_put(h, **_):
              local_login="admins" if b.get("local_login") == "admins" else "all")
     roles = open_db().roles()
     dr = b.get("default_role", c.get("default_role", "viewer"))
-    if dr not in ("", *roles): raise HttpError(400, f"Papel padrão inexistente: {dr}")
+    if dr not in ("", *roles): raise HttpError(400, f"Role padrão inexistente: {dr}")
     c["default_role"] = dr
     rm = b.get("role_map") if isinstance(b.get("role_map"), dict) else {}
     bad = [k for k in rm if k not in roles]
-    if bad: raise HttpError(400, f"Papel inexistente no mapeamento de grupos: {', '.join(bad)}")
+    if bad: raise HttpError(400, f"Role inexistente no mapeamento de grupos: {', '.join(bad)}")
     c["role_map"] = {r: str(rm.get(r, "") or "")[:1000] for r in roles if str(rm.get(r, "") or "").strip()}
     if b.get("client_secret"): c["client_secret"] = str(b["client_secret"])[:2000]
     if b.get("clear_secret"): c["client_secret"] = ""
@@ -2086,7 +2255,7 @@ def r_sso_callback(h, **_):
 # ───────────────────────── rotas: versões ─────────────────────────
 
 KIND_NAMES = {"base": "Registro inicial", "criacao": "Criação", "importacao": "Importação", "documento": "Documento",
-              "fluxograma": "Fluxograma", "ramo": "Ramos", "status": "Status", "restauracao": "Restauração"}
+              "fluxograma": "Fluxograma", "ramo": "Ramos", "status": "Status", "restauracao": "Restauração", "sugestao": "Sugestão aceita"}
 
 def version_id(h):
     m = re.search(r"/versions/(\d+)", h.path.split("?")[0])
@@ -2223,6 +2392,9 @@ ROUTES = {
     ("PUT", "/api/roles/{role}"): r_role_update, ("DELETE", "/api/roles/{role}"): r_role_delete,
     ("GET", "/api/governance"): r_governance_get, ("PUT", "/api/governance"): r_governance_put,
     ("GET", "/api/pb/{pb}/links"): r_doc_links, ("GET", "/api/pb/{pb}/lint"): r_doc_lint,
+    ("GET", "/api/pb/{pb}/suggestions"): r_suggestions, ("POST", "/api/pb/{pb}/suggestions"): r_suggestion_create,
+    ("POST", "/api/pb/{pb}/suggestions/{s}/accept"): r_suggestion_accept, ("POST", "/api/pb/{pb}/suggestions/{s}/reject"): r_suggestion_reject,
+    ("POST", "/api/pb/{pb}/suggestions/{s}/withdraw"): r_suggestion_withdraw,
     ("POST", "/api/doc"): r_doc_create, ("GET", "/api/doc/next-id"): r_doc_next_id, ("PUT", "/api/pb/{pb}/folder"): r_doc_move,
     ("GET", "/api/folders"): r_folders, ("POST", "/api/folders"): r_folder_create, ("POST", "/api/folders/from-template"): r_folders_from_template,
     ("PUT", "/api/folders/{f}"): r_folder_update, ("DELETE", "/api/folders/{f}"): r_folder_delete,
@@ -2238,7 +2410,7 @@ def cmd_adduser(args):
     login = args.login.strip().lower()
     if not LOGIN_RE.fullmatch(login): sys.exit("Login inválido (3 a 80: letras minúsculas, números, . _ - @)")
     if not open_db().role(args.role):
-        sys.exit(f"Papel inexistente: {args.role}. Papéis: {', '.join(open_db().roles())}")
+        sys.exit(f"Role inexistente: {args.role}. Roles: {', '.join(open_db().roles())}")
     pw = getpass.getpass(f"Senha para {login}: ")
     if getpass.getpass("Repita a senha: ") != pw: sys.exit("As senhas não conferem.")
     try: validate_password(pw)
@@ -2247,7 +2419,7 @@ def cmd_adduser(args):
     old = db.get_user(login)
     db.upsert_user(login, args.name or (old and old["name"]) or login, args.role, hash_password(pw))
     audit("cli", "usuario_cli", login, papel=args.role)
-    print(f"Usuário {login} salvo com o papel {db.role(args.role)['name']} em {DB.path}")
+    print(f"Usuário {login} salvo com a role {db.role(args.role)['name']} em {DB.path}")
 
 def bootstrap_admin():
     """Primeira subida (ex.: Docker): cria o administrador indicado em MEDUSA_ADMIN_LOGIN se ainda não há nenhum.
@@ -2277,7 +2449,7 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "adduser":
         p = argparse.ArgumentParser(prog="server.py adduser")
         p.add_argument("cmd"); p.add_argument("login")
-        p.add_argument("--role", default="viewer", help="chave do papel (admin, editor, viewer ou um papel criado)"); p.add_argument("--name")
+        p.add_argument("--role", default="viewer", help="chave da role (admin, editor, viewer ou uma role criada)"); p.add_argument("--name")
         return cmd_adduser(p.parse_args())
     p = argparse.ArgumentParser(description="Servidor da ferramenta de playbooks")
     p.add_argument("port_pos", nargs="?", type=int, help=argparse.SUPPRESS)

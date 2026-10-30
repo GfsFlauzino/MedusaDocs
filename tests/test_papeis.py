@@ -129,7 +129,7 @@ class Papeis(unittest.TestCase):
                                           input=f"{H.USER_PASSWORD}\n{H.USER_PASSWORD}\n", capture_output=True, text=True)
         bad = run("nao-existe")
         self.assertNotEqual(bad.returncode, 0)
-        self.assertIn("Papel inexistente", bad.stderr)
+        self.assertIn("Role inexistente", bad.stderr)
         ok = run(key)
         self.assertEqual(ok.returncode, 0, ok.stderr)
         self.assertEqual(self.app.client().login("cli.teste", H.USER_PASSWORD)["roleId"], key)

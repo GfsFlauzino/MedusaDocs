@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.2.0 — 2026-10-30
+
+### Sugestões de alteração
+- Quem lê seleciona um trecho e clica em **Sugerir alteração** (texto novo ou só comentário), ou usa o **+** do título
+  da seção para propor um acréscimo. Botão **Sugestões** no topo do documento, contagem por seção e nos cartões
+  (para quem edita).
+- Quem edita **aceita e aplica** (nova versão do tipo "Sugestão aceita"; em Produção pede Minor/Major), **marca como
+  aceita** ou **recusa** com motivo; quem sugeriu pode retirar. Se o texto mudou e o trecho não é mais achado (ou
+  aparece mais de uma vez), aplicar é recusado e a sugestão continua aberta.
+- Permissão nova "Sugerir alterações" (`<tipo>.suggest`). **Migração v6** (automática, com cópia do banco): tabela
+  `suggestions` e a permissão entra nas roles do sistema Editor e Visualizador; roles criadas por você não mudam.
+
+### Correções e ajustes
+- **Novo playbook** listava templates de runbook e documento; agora só os de playbook.
+- **Logo**: com logo, ela aparece sozinha em cima e o nome do workspace embaixo, menor (logos de proporções diferentes
+  não ficavam alinhadas com o nome ao lado). No login, o mesmo.
+- **"Papéis" passou a se chamar "Roles"** na interface, na ajuda e nas mensagens (`#/admin/papeis` redireciona para
+  `#/admin/roles`). Os nomes das ações na auditoria (`papel_criado`…) não mudam.
+- **Pastas**: as subpastas começam expandidas (uma pasta recém-criada não "sumia" mais dentro da pai recolhida); em
+  telas estreitas a árvore começa aberta; ícone de pasta; menu ⋯ legível e visível em telas de toque; ao excluir uma
+  pasta, o destino não oferece mais as subpastas dela (o servidor recusava); listas não reaproveitam mais respostas
+  em cache de antes de reiniciar o servidor.
+
 ## 3.1.0 — 2026-10-30
 
 ### Ligações entre documentos

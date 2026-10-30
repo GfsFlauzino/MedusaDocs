@@ -8,7 +8,7 @@ templates e auditoria.
 - Só Python 3 (biblioteca padrão): nada para instalar além do Python, ou uma imagem Docker pronta.
 - White label: nome do workspace e logo configuráveis no painel administrativo; tema claro e escuro.
 - Formatos abertos: cada playbook é um `.md` + um `.drawio`; troca entre instalações em `.medusa.md` (Markdown + Mermaid).
-- Versão atual: **3.1.0** (novidades em [CHANGELOG.md](CHANGELOG.md)): tipos de documento (playbook, runbook,
+- Versão atual: **3.2.0** (novidades em [CHANGELOG.md](CHANGELOG.md)): tipos de documento (playbook, runbook,
   documento) com pastas, campos e templates por tipo; papéis e permissões personalizados; aprovação de Produção por
   outra pessoa; Markdown com blocos de código, listas numeradas, links e introdução. Na 2.2.0: novo visual com menu lateral recolhível,
   desempenho (cache de documentos, lista leve, busca no servidor, gzip e cache no navegador) e endurecimento (gravação
@@ -69,6 +69,16 @@ o ciclo aparece como **Rascunho → Em revisão → Publicado** (os valores grav
 Homologação e Produção). Pastas valem para runbooks e documentos: até 6 níveis, mover não gera versão, a estrutura
 sugerida pelo template é criada sob demanda.
 
+## Sugestões de alteração
+
+Quem lê pode **sugerir**: seleciona um trecho na documentação e propõe o texto novo (ou só comenta), ou acrescenta algo
+no fim de uma seção. Quem edita vê as sugestões (botão **Sugestões** e contagem por seção) e **aceita e aplica** (troca
+o trecho e grava uma versão "Sugestão aceita"; o trecho é achado mesmo com negrito, código ou links no meio), **marca
+como aceita** (sem mexer no texto) ou **recusa** com motivo; quem sugeriu pode retirar. Permissão
+`<tipo>.suggest` ("Sugerir alterações"), dada a Editor e Visualizador. API: `/api/doc/{id}/suggestions`
+(`GET`, `POST`) e `/api/doc/{id}/suggestions/{n}/accept|reject|withdraw`. Ficam na tabela `suggestions` do banco
+(migração v6) e vão para a auditoria (`sugestao_criada`, `sugestao_aceita`, `sugestao_recusada`, `sugestao_retirada`).
+
 ## Ligações e pendências
 
 Escrever o ID de outro documento (`PB-02`, `RB-03`, `DOC-01`) no texto ou numa caixa do fluxograma cria uma ligação:
@@ -86,18 +96,18 @@ teclado ↑ ↓ ← → Enter F2, ações no ⋯ ou no botão direito), busca, *
 Fase NIST…, com contagens) e "Estrutura do template…" para criar as pastas sugeridas. IDs `RB-00` em qualquer texto
 viram links.
 
-## Papéis e permissões
+## Roles e permissões
 
-Cada usuário tem um **papel**; cada papel, uma lista de permissões no formato `área.ação`. Os três papéis do sistema
+Cada usuário tem uma **role**; cada role, uma lista de permissões no formato `área.ação`. As três roles do sistema
 reproduzem os perfis da 2.x:
 
-| Papel | Vê | Pode |
+| Role | Vê | Pode |
 | --- | --- | --- |
 | Visualizador | Playbooks em **Homologação** e **Produção** | Ler, buscar, exportar e trocar a própria senha |
 | Editor | Todos, inclusive **Desenvolvimento** | Criar, editar e importar playbooks, mudar status, aprovar, restaurar versões, editar templates, times e tags |
 | Administrador | Todos | Tudo: usuários, papéis, aparência, auditoria, logs, SSO, exclusões e reset. Não pode ser alterado |
 
-Em **Administração → Papéis** o administrador cria outros papéis numa matriz **ação × tipo de documento** (ver, ver
+Em **Administração → Roles** o administrador cria outras roles numa matriz **ação × tipo de documento** (ver, ver
 rascunhos, criar, editar, alterar status, pode aprovar, restaurar, importar, exportar, excluir) mais as permissões da
 plataforma (`templates.view/edit/delete`, `users.manage`, `roles.manage`, `audit.view`, `logs.manage`, `sso.manage`,
 `branding.edit`, `app.reset`). Regras: o Administrador é imutável; Editor e Visualizador podem ser ajustados (e

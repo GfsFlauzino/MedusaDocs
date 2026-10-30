@@ -16,6 +16,7 @@ FOLDER_TYPES = ("runbook", "doc")
 DOC_ACTIONS = [
     ("view", "Ver", "Documentos em Homologação e Produção, versões dessas fases e imagens"),
     ("view_drafts", "Ver rascunhos", "Também os documentos em Desenvolvimento"),
+    ("suggest", "Sugerir alterações", "Propor mudanças e comentar trechos; quem edita aceita ou recusa"),
     ("create", "Criar", "Criar documentos"),
     ("edit", "Editar", "Documento, fluxograma, ramos e imagens"),
     ("status", "Alterar status", "Mudar o ciclo de vida"),
@@ -64,7 +65,7 @@ def clean(perms):
 
 
 def _viewer():
-    return [p for t in TYPES for p in (f"{t}.view", f"{t}.export")]
+    return [p for t in TYPES for p in (f"{t}.view", f"{t}.suggest", f"{t}.export")]
 
 
 def _editor():

@@ -1065,3 +1065,47 @@ blockquote{border-left:3px solid var(--line2);background:var(--surface2)}
 .lint-badge{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,var(--line))}
 .lint-list{padding-left:18px;margin:4px 0 12px}
 .lint-list li{margin:6px 0}
+
+/* ── marca com logo: logo em cima, nome do workspace embaixo ── */
+.brand.with-logo{flex-direction:column;align-items:flex-start;gap:5px;padding:4px 8px 10px}
+.brand.with-logo .brand-mark.has-logo{height:auto;max-width:100%;display:block}
+.brand.with-logo .brand-mark.has-logo img{height:auto;max-height:40px;max-width:min(190px,100%);object-fit:contain;object-position:left center}
+.brand.with-logo .brand-txt{font-size:12px;font-weight:500;color:var(--muted);letter-spacing:0;max-width:100%}
+.side-top:has(.brand.with-logo){align-items:flex-start}
+.login-brand.with-logo{flex-direction:column;align-items:flex-start;gap:6px}
+.login-brand.with-logo .brand-mark.has-logo,.login-brand.with-logo .brand-mark.has-logo img{height:auto;max-height:44px;max-width:220px;width:auto}
+.login-brand.with-logo .bname{font-size:12.5px;font-weight:500;color:var(--muted)}
+.tnode .ic{color:var(--faint)}
+.tnode.on .ic,.tnode:hover .ic{color:var(--muted)}
+.tnode .tmore{opacity:.35}
+.fmenu{padding:4px}
+.fmenu button{display:flex;align-items:center;gap:9px;width:100%;padding:7px 10px;border:0;background:none;color:var(--text);border-radius:var(--radius-sm);font:inherit;font-size:13.5px;text-align:left;cursor:pointer}
+.fmenu button:hover{background:var(--hover)}
+.fmenu button .ic{width:16px;height:16px;color:var(--muted)}
+@media (hover:none){.tnode .tmore{opacity:1}}
+
+/* ── sugestões de alteração ── */
+.sg-add{border:1px solid transparent;background:none;color:var(--faint);width:24px;height:24px;border-radius:6px;display:inline-grid;place-items:center;vertical-align:middle;margin-left:8px;cursor:pointer;opacity:.0;transition:opacity .12s}
+.sg-add .ic{width:14px;height:14px}
+section.md:hover .sg-add,.sg-add:focus-visible{opacity:1}
+.sg-add:hover{color:var(--text);border-color:var(--line);background:var(--surface2)}
+.sg-add-intro{float:right;margin:0}
+@media (hover:none){.sg-add{opacity:1}}
+.sg-count{border:1px solid color-mix(in srgb,var(--brand) 35%,var(--line));background:color-mix(in srgb,var(--brand) 10%,transparent);color:var(--text);font-size:11.5px;font-weight:500;border-radius:99px;padding:1px 8px;margin-left:8px;vertical-align:middle;cursor:pointer}
+.sg-float{box-shadow:var(--shadow)}
+.sg-where{display:flex;align-items:center;gap:8px;font-weight:500;color:var(--muted)}
+.sg-where .ic{width:16px;height:16px}
+.sg-quote{margin:0;padding:8px 12px;border-left:3px solid var(--line2);background:var(--surface2);border-radius:0 var(--radius-sm) var(--radius-sm) 0;white-space:pre-wrap;font-size:13.5px}
+.sg-tabs{display:flex;gap:6px;margin-bottom:12px}
+.sg-tabs button{border:1px solid var(--line);background:var(--surface);color:var(--muted);border-radius:99px;padding:3px 11px;font-size:12.5px;cursor:pointer}
+.sg-tabs button.on{background:var(--surface2);color:var(--text);font-weight:500}
+.sg-item{border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;margin-bottom:10px;background:var(--surface)}
+.sg-item.closed{opacity:.75}
+.sg-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;margin-bottom:6px}
+.sg-head .tag{margin-left:auto}
+.tag.aceita{color:var(--ok)}.tag.recusada{color:var(--danger)}
+.sg-diff{font-size:13.5px;line-height:1.5;margin:4px 0;white-space:pre-wrap}
+.sg-del{background:var(--danger-soft);color:var(--text);text-decoration:line-through;text-decoration-color:var(--danger);padding:1px 3px;border-radius:3px;display:inline}
+.sg-ins{background:color-mix(in srgb,var(--ok) 16%,transparent);text-decoration:none;padding:1px 3px;border-radius:3px;margin-left:4px;display:inline}
+.sg-comment{margin:6px 0;font-size:13.5px}
+.sg-chip{border-color:color-mix(in srgb,var(--brand) 35%,var(--line))}
