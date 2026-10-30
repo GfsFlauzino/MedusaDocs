@@ -41,10 +41,21 @@ class Migracao(unittest.TestCase):
             for login, pw in self.meta["logins"].items():
                 u = app.client().login(login, pw)
                 self.assertEqual(u["role"], self.meta["roles"][login])
+                self.assertEqual(u["roleId"], self.meta["roles"][login])
+            # papel personalizado, para o teste de rollback (a 2.x deve ver esse usuário como Visualizador)
+            admin = app.client(); admin.login(*next((l, p) for l, p in self.meta["logins"].items() if self.meta["roles"][l] == "admin"))
+            r = admin.post("/api/roles", {"name": "Analista migrado", "permissions": ["playbook.view", "playbook.view_drafts", "playbook.edit"]})
+            self.assertEqual(r.status, 200, r)
+            r = admin.post("/api/users", {"login": "analista.migrado", "name": "Analista", "role": r.json()["role"]["key"]})
+            c = app.client(); c.login("analista.migrado", r.json()["tempPassword"])
+            self.assertEqual(c.post("/api/me/password", {"current": r.json()["tempPassword"], "new": H.USER_PASSWORD}).status, 200)
         finally:
             app.stop()
+        backups = list((self.home / "data" / "backups").glob("playbooks.db.pre-v3-v*"))
+        self.assertEqual(len(backups), 1, "cópia do banco antes da migração")
+        self.assertEqual(oct(backups[0].stat().st_mode & 0o777), "0o600")
         now, before = counts(self.db), self.meta["counts"]
-        self.assertEqual(now["users"], before["users"])
+        self.assertEqual(now["users"], before["users"] + 1)      # + o analista criado acima
         self.assertEqual(now["pb_versions"], before["pb_versions"])
         self.assertEqual(now["settings"], before["settings"])
         self.assertGreaterEqual(now["audit"], before["audit"])
@@ -57,6 +68,7 @@ class Migracao(unittest.TestCase):
             try:
                 for login, pw in self.meta["logins"].items():
                     app.client().login(login, pw)
+                self.assertEqual(app.client().login("analista.migrado", H.USER_PASSWORD)["role"], "viewer")
             finally:
                 app.stop()
         finally:

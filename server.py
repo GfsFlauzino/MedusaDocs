@@ -11,10 +11,10 @@ Variáveis de ambiente (usadas no Docker)
   MEDUSA_ADMIN_LOGIN     cria o primeiro administrador quando não há nenhum (senha temporária no log,
   MEDUSA_ADMIN_NAME      ou MEDUSA_ADMIN_PASSWORD; a troca é obrigatória no primeiro acesso)
 
-Papéis
-  viewer  (Visualizador)  lê playbooks em Homologação e Produção
-  editor  (Editor)        lê, cria e edita todos; muda status; edita templates, times e tags
-  admin   (Administrador) tudo do editor + usuários, exclusão de playbooks e auditoria
+Papéis e permissões (perms.py)
+  Cada usuário tem um papel (users.role_id) e cada papel uma lista de permissões "área.ação" (playbook.edit,
+  users.manage…). Os papéis do sistema reproduzem os perfis da 2.x: Visualizador (lê Homologação e Produção),
+  Editor (lê, cria e edita; muda status; edita templates) e Administrador (tudo). O administrador cria outros.
 
 Usuários, sessões, tentativas de login, auditoria e configurações ficam no banco SQLite data/playbooks.db (store.py).
 Só depende da biblioteca padrão. Para expor na rede, publique atrás de um proxy com HTTPS
@@ -33,6 +33,7 @@ import ramos
 import sso
 import flowdsl
 import pbcore as core
+import perms as P
 import templates as tpl
 from store import Store, StoreError
 
@@ -40,8 +41,7 @@ DATA_DIR = Path(os.environ.get("PB_DATA") or core.HOME / "data")
 TRASH = DATA_DIR / "lixeira"
 BACKUPS = Path(os.environ.get("PB_BACKUPS") or core.HOME / ".backups")
 
-ROLES = {"viewer": 1, "editor": 2, "admin": 3}
-ROLE_NAMES = {"viewer": "Visualizador", "editor": "Editor", "admin": "Administrador"}
+ROLE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}$")
 VIEWER_STATUSES = {"Homologação", "Produção"}
 SESSION_TTL = int(float(os.environ.get("MEDUSA_SESSION_IDLE_HOURS") or 8) * 3600)    # inatividade máxima
 SESSION_MAX = int(float(os.environ.get("MEDUSA_SESSION_MAX_HOURS") or 24) * 3600)    # duração máxima, mesmo em uso
@@ -122,7 +122,9 @@ def temp_password():
         if any(c.isdigit() for c in pw) and any(c.isalpha() for c in pw): return pw
 
 def public_user(u):
-    return {"login": u["login"], "name": u["name"], "role": u["role"], "roleName": ROLE_NAMES[u["role"]],
+    """role: valor legado (viewer/editor/admin), mantido para quem já lê a API; roleId é o papel de verdade."""
+    return {"login": u["login"], "name": u["name"], "role": u["role"], "roleId": u["role_id"], "roleName": u["role_name"],
+            "permissions": sorted(u["perms"]),
             "active": u["active"], "mustChange": u["must_change"], "created": u.get("created_at"),
             "lastLogin": u.get("last_login"), "sessions": u.get("sessions"), "auth": u.get("auth") or "local",
             "ssoLinked": bool(u.get("sso_subject"))}
@@ -186,13 +188,39 @@ def check_rev(folder, rev):
     if rev != core.revision(folder):
         raise HttpError(409, "Este playbook foi salvo por outra pessoa depois que você abriu. Recarregue para ver a versão atual.")
 
+# ───────────────────────── permissões ─────────────────────────
+
+def doc_type(pid):
+    """Tipo do documento pelo prefixo do ID (por enquanto só playbook)."""
+    return "playbook"
+
+def doc_perm(pid, action):
+    return f"{doc_type(pid)}.{action}"
+
+def any_type(action):
+    return tuple(f"{t}.{action}" for t in P.TYPES)
+
+def can(u, perm):
+    return perm in u["perms"]
+
+def is_admin(u):
+    return u["role_id"] == "admin"
+
+def can_view_status(u, t, status):
+    """Ver um documento (ou versão) do tipo t neste status: Homologação/Produção com t.view; Desenvolvimento também com t.view_drafts."""
+    return can(u, f"{t}.view") and (can(u, f"{t}.view_drafts") or status in VIEWER_STATUSES)
+
 def visible(pb, user):
-    return ROLES[user["role"]] >= ROLES["editor"] or pb["gov"]["status"] in VIEWER_STATUSES
+    return can_view_status(user, doc_type(pb["id"]), pb["gov"]["status"])
 
 def for_role(pb, user):
-    if ROLES[user["role"]] < ROLES["editor"]:
+    if not can(user, doc_perm(pb["id"], "edit")):
         pb = {k: v for k, v in pb.items() if k not in ("doc", "folder")}
     return pb
+
+def perms_tag(u):
+    """Identifica o conjunto de permissões (entra no ETag: papéis diferentes veem respostas diferentes)."""
+    return hashlib.sha1(",".join(sorted(u["perms"])).encode()).hexdigest()[:12]
 
 def touch_review(doc, user, current_doc):
     gov = core.get_gov(current_doc)
@@ -380,13 +408,15 @@ class Handler(BaseHTTPRequestHandler):
         return (f"pbsid={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}"
                 + ("; Secure" if SECURE_COOKIES else ""))
 
-    def require(self, role="viewer", allow_must_change=False):
+    def require(self, perm=None, *, any_of=(), allow_must_change=False):
+        """Usuário da sessão; 401 sem sessão, 403 sem a permissão (perm) ou sem nenhuma de any_of."""
         tok = self.cookie_token()
         u = open_db().session_user(tok)
         if not u: raise HttpError(401, "Faça login para continuar")
         self.renew_cookie(tok, u)
         if u["must_change"] and not allow_must_change: raise HttpError(403, "Troque a senha temporária para continuar")
-        if ROLES[u["role"]] < ROLES[role]: raise HttpError(403, "Seu perfil não tem permissão para esta ação")
+        if (perm and perm not in u["perms"]) or (any_of and not any(p in u["perms"] for p in any_of)):
+            raise HttpError(403, "Seu perfil não tem permissão para esta ação")
         return u
 
     def renew_cookie(self, tok, u):
@@ -442,6 +472,7 @@ class Handler(BaseHTTPRequestHandler):
             key = re.sub(r"^(/api/pb/\{pb\}/img)/[^/]+$", r"\1/{f}", key)
             if not path.startswith("/api/templates/import"):
                 key = re.sub(r"^/api/templates/[^/]+", "/api/templates/{t}", key)
+            key = re.sub(r"^/api/roles/[^/]+$", "/api/roles/{role}", key)
             route = ROUTES.get((method, key))
             if not route: raise HttpError(404, "não encontrado")
             m = re.search(r"/(PB-\d{2,3})(?:/|$)", path); u = re.match(r"^/api/users/([^/]+)", path)
@@ -492,7 +523,7 @@ def r_login(h, **_):
         audit(login or "?", "login_falhou", ip=ip)
         raise HttpError(401, "Usuário ou senha inválidos" + (". Contas do SSO entram pelo botão de SSO." if u and u.get("auth") == "sso" else ""))
     cfg = sso_cfg()
-    if cfg["enabled"] and cfg.get("local_login") == "admins" and u["role"] != "admin":
+    if cfg["enabled"] and cfg.get("local_login") == "admins" and u["role_id"] != "admin":
         audit(login, "login_falhou", ip=ip, motivo="login local restrito a administradores")
         raise HttpError(403, "O login por senha está desativado: use o SSO")
     db.clear_fails(key)
@@ -585,7 +616,7 @@ def r_data(h, **_):
 
 def doc_etag(pb, u):
     sig = tpl.file_sig(pb.get("templateKey") or tpl.DEFAULT_KEY)
-    return '"' + hashlib.sha1(json.dumps([pb.get("rev"), sig, u["role"]]).encode()).hexdigest()[:20] + '"'
+    return '"' + hashlib.sha1(json.dumps([pb.get("rev"), sig, perms_tag(u)]).encode()).hexdigest()[:20] + '"'
 
 def r_pb_get(h, pid, **_):
     u = h.require()
@@ -594,7 +625,7 @@ def r_pb_get(h, pid, **_):
     h.send_json({"playbook": for_role(pb, u)}, etag=doc_etag(pb, u))
 
 def summary_visible(u):
-    return lambda s: ROLES[u["role"]] >= ROLES["editor"] or s["status"] in VIEWER_STATUSES
+    return lambda s: can_view_status(u, s["type"], s["status"])
 
 def r_bootstrap(h, **_):
     """Tudo o que o front precisa para abrir, sem a lista de documentos."""
@@ -616,7 +647,7 @@ def r_library(h, **_):
     try: limit, offset = max(1, min(500, int(q.get("limit") or 100))), max(0, int(q.get("cursor") or 0))
     except ValueError: raise HttpError(400, "paginação inválida")
     LIB.scan()
-    etag = '"' + hashlib.sha1(json.dumps([LIB.generation, typ, status, text, sort, limit, offset, u["role"]]).encode()).hexdigest()[:20] + '"'
+    etag = '"' + hashlib.sha1(json.dumps([LIB.generation, typ, status, text, sort, limit, offset, perms_tag(u)]).encode()).hexdigest()[:20] + '"'
     if h.not_modified(etag): return h.send_json({}, etag=etag)
     items = LIB.summaries(summary_visible(u))
     counts = {st: sum(1 for s in items if s["status"] == st) for st in core.STATUSES}
@@ -678,7 +709,7 @@ def change_audit(change):
     return {"tipo_atualizacao": CHANGE_TYPES[change["type"]], "descricao": change["note"]} if change else {}
 
 def r_pb_doc(h, pid, **_):
-    u = h.require("editor")
+    u = h.require(doc_perm(pid, "edit"))
     folder = get_folder(pid); b = h.body()
     doc = b.get("doc")
     if not isinstance(doc, dict) or not str(doc.get("title", "")).strip() or not isinstance(doc.get("sections"), list):
@@ -711,7 +742,7 @@ def write_flow(folder, pid, name, flow, refs):
     save_refs(pid, {k: [str(x) for x in v] for k, v in refs.items() if k in ids and isinstance(v, list) and v})
 
 def r_pb_flow(h, pid, **_):
-    u = h.require("editor")
+    u = h.require(doc_perm(pid, "edit"))
     folder = get_folder(pid); b = h.body()
     flow, refs = b.get("flow") or {}, b.get("refs") or {}
     validate_flow(flow)
@@ -736,7 +767,7 @@ def r_pb_flow(h, pid, **_):
     h.send_json({"ok": True, "playbook": load_pb(folder), "sync": changes, "version": ver})
 
 def r_pb_ramo_add(h, pid, **_):
-    u = h.require("editor")
+    u = h.require(doc_perm(pid, "edit"))
     folder = get_folder(pid); b = h.body()
     name, q = str(b.get("name", "")).strip()[:80], str(b.get("q", "")).strip()[:200]
     if not name: raise HttpError(400, "Informe o nome do ramo")
@@ -760,7 +791,7 @@ def r_pb_ramo_add(h, pid, **_):
     h.send_json({"ok": True, "playbook": load_pb(folder), "ramo": f"R{k}"})
 
 def r_pb_ramo_delete(h, pid, **_):
-    u = h.require("editor")
+    u = h.require(doc_perm(pid, "edit"))
     folder = get_folder(pid); b = h.body()
     k = ramos.ref_key(h.path.split("?")[0].rsplit("/", 1)[-1])
     if not k or k == ramos.PROTO: raise HttpError(404, "ramo não encontrado")
@@ -784,7 +815,7 @@ def r_pb_ramo_delete(h, pid, **_):
     h.send_json({"ok": True, "playbook": load_pb(folder)})
 
 def r_pb_status(h, pid, **_):
-    u = h.require("editor")
+    u = h.require(doc_perm(pid, "status"))
     folder = get_folder(pid); b = h.body()
     status = b.get("status")
     if status not in core.STATUSES: raise HttpError(400, "status inválido")
@@ -795,9 +826,7 @@ def r_pb_status(h, pid, **_):
         gov = core.get_gov(doc); before = gov["status"]
         if status == before: raise HttpError(400, f"O playbook já está em {status}")
         if status == "Produção":
-            ap = open_db().get_user(str(b.get("approver", "")))
-            if not ap or not ap["active"] or ROLES[ap["role"]] < ROLES["editor"]:
-                raise HttpError(400, "Escolha um aprovador (editor ou administrador ativo)")
+            ap = check_approver(pid, u, str(b.get("approver", "")))
             gov["approver"] = ap["name"]
         ensure_baseline(folder, pid)
         gov["status"] = status
@@ -809,8 +838,37 @@ def r_pb_status(h, pid, **_):
         note = str(b.get("note", ""))[:300]
         snapshot(folder, pid, u, "status", f"{before} → {status}" + (f" · aprovado por {gov['approver']}" if status == "Produção" else "") + (f" · {note}" if note else ""))
     audit(u["login"], "status_alterado", pid, de=before, para=status, versao=ver, aprovador=gov.get("approver", "") if status == "Produção" else "",
-          nota=str(b.get("note", ""))[:500])
+          aprovador_login=str(b.get("approver", "")) if status == "Produção" else "", nota=str(b.get("note", ""))[:500])
     h.send_json({"ok": True, "playbook": load_pb(folder)})
+
+# ── aprovação de Produção por outra pessoa (governança)
+# O aprovador não pode ser quem promove nem quem gravou a última versão de conteúdo (comparação pelo login, não pelo
+# nome do "Último revisor", que não é único). Ligado por padrão; quem tem app.reset ou users.manage pode desligar.
+
+CONTENT_KINDS = ("documento", "fluxograma", "ramo", "restauracao", "importacao", "criacao")
+
+def governance():
+    return {"require_distinct_approver": True, **(open_db().get_setting("governance") or {})}
+
+def approval_exclusions(pid, u):
+    """{login: motivo} de quem não pode aprovar este documento agora, e o autor da última alteração."""
+    if not governance()["require_distinct_approver"]: return {}, None
+    last = open_db().last_content_version(pid, CONTENT_KINDS)
+    out = {u["login"]: "é quem está publicando"}
+    if last: out.setdefault(last["author"], "fez a última alteração")
+    return out, last
+
+def check_approver(pid, u, login):
+    ap = open_db().get_user(login)
+    if not ap or not ap["active"] or not can(ap, doc_perm(pid, "approve")):
+        raise HttpError(400, "Escolha um aprovador ativo com permissão de aprovar")
+    if governance()["require_distinct_approver"]:
+        if ap["login"] == u["login"]:
+            raise HttpError(400, "O aprovador precisa ser outra pessoa: quem está publicando não pode aprovar.")
+        last = open_db().last_content_version(pid, CONTENT_KINDS)
+        if last and last["author"] == ap["login"]:
+            raise HttpError(400, f"O aprovador precisa ser diferente de quem fez a última alteração ({last['author_name']}).")
+    return ap
 
 def mitre_text(ids):
     by = {t["id"]: t for t in core.MITRE["tactics"]}
@@ -819,7 +877,7 @@ def mitre_text(ids):
     return " · ".join(f"{i} {by[i]['name']}" for i in ids)
 
 def r_pb_create(h, **_):
-    u = h.require("editor")
+    u = h.require("playbook.create")
     m = h.body()
     pid = str(m.get("id", "")).strip().upper(); name = str(m.get("name", "")).strip()[:100]
     if not core.ID_RE.fullmatch(pid): raise HttpError(400, "ID deve ter o formato PB-00")
@@ -850,7 +908,7 @@ def r_pb_create(h, **_):
     h.send_json({"ok": True, "playbook": load_pb(folder), "teams": core.load_teams()})
 
 def r_pb_delete(h, pid, **_):
-    u = h.require("admin")
+    u = h.require(doc_perm(pid, "delete"))
     folder = get_folder(pid); b = h.body()
     if b.get("confirm") != pid: raise HttpError(400, f"Para confirmar, digite {pid}")
     with LOCK:
@@ -902,7 +960,7 @@ def pb_images(folder, doc):
     return out
 
 def r_pb_img_post(h, pid, **_):
-    u = h.require("editor")
+    u = h.require(doc_perm(pid, "edit"))
     folder = get_folder(pid)
     ext, data = decode_image(h.body().get("dataUrl"))
     with LOCK: name = store_image(folder, ext, data)
@@ -910,12 +968,12 @@ def r_pb_img_post(h, pid, **_):
     h.send_json({"ok": True, "src": f"{core.IMG_DIR}/{name}", "url": f"api/pb/{pid}/img/{name}"})
 
 def r_pb_img_get(h, pid, **_):
-    u = h.require()
+    u = h.require(doc_perm(pid, "view"))
     folder = get_folder(pid)
     name = h.path.split("?")[0].rsplit("/", 1)[-1]
     f = folder / core.IMG_DIR / name
     if not core.IMG_NAME_RE.fullmatch(name) or not f.is_file(): raise HttpError(404, "imagem não encontrada")
-    if ROLES[u["role"]] < ROLES["editor"]:
+    if not can(u, doc_perm(pid, "view_drafts")):
         md, _ = core.files_of(folder)
         if core.get_gov(core.parse_md(md.read_text("utf-8")))["status"] not in VIEWER_STATUSES: raise HttpError(404, "imagem não encontrada")
     h.send_bytes(f.read_bytes(), IMG_MIME[name.rsplit(".", 1)[1]], sandbox=True)
@@ -948,7 +1006,7 @@ def brand():
 EXPORT_FMTS = {"medusa": "pacote", "md": "documento", "drawio": "fluxograma drawio", "mmd": "fluxograma mermaid"}
 
 def r_pb_export(h, pid, **_):
-    u = h.require()
+    u = h.require(doc_perm(pid, "export"))
     folder = get_folder(pid)
     view = load_pb(folder)
     if not visible(view, u): raise HttpError(404, "playbook não encontrado")
@@ -982,6 +1040,7 @@ def r_export_all(h, **_):
     buf, union, name = io.BytesIO(), core.load_teams(), brand()["name"]
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for pid in LIB.pids():
+            if not can(u, doc_perm(pid, "export")): continue
             v, f = LIB.view(pid), core.folder_of(pid)
             if not v or not f or not visible(v, u): continue
             z.writestr(f"{f.name.lower()}.medusa.md", bundle.export(v, {**union, **v["teams"]}, u["name"], name, pb_images(f, v["doc"])))
@@ -989,7 +1048,7 @@ def r_export_all(h, **_):
     h.send_bytes(buf.getvalue(), "application/zip", f"playbooks-{date.today().isoformat()}.zip")
 
 def r_import(h, **_):
-    u = h.require("editor"); b = h.body()
+    u = h.require(any_of=any_type("create")); b = h.body()
     tkey = str(b.get("template") or tpl.DEFAULT_KEY)
     if not tpl.KEY_RE.fullmatch(tkey) or not tpl.path_of(tkey).exists(): raise HttpError(400, "Escolha um template existente")
     union, teams = core.load_teams(), template_teams(tkey)
@@ -1001,6 +1060,8 @@ def r_import(h, **_):
         if n not in p["teamDefs"] and n in union: p["createTeams"][n] = {**union[n], "category": p["createTeams"][n]["category"]}
     pid = str(b.get("id") or p["id"]).strip().upper()
     if not core.ID_RE.fullmatch(pid): raise HttpError(400, "Defina um ID no formato PB-00")
+    for need in (doc_perm(pid, "create"), doc_perm(pid, "import")):
+        if not can(u, need): raise HttpError(403, "Seu perfil não tem permissão para esta ação")
     existing = core.folder_of(pid)
     summary = {"id": pid, "originalId": p["id"], "name": p["name"], "exists": bool(existing),
                "sections": len(p["doc"]["sections"]), "nodes": len(p["flow"]["nodes"]), "edges": len(p["flow"]["edges"]),
@@ -1015,8 +1076,8 @@ def r_import(h, **_):
     if missing: p["warnings"].append(f"{len(missing)} imagem(ns) citada(s) no documento não vieram no arquivo: {', '.join(missing[:5])}")
     summary["images"] = len(images)
     if b.get("dryRun"): return h.send_json({"preview": summary})
-    if existing and b.get("mode") == "replace" and ROLES[u["role"]] < ROLES["admin"]:
-        raise HttpError(403, "Substituir um playbook existente equivale a excluí-lo: só administradores podem. Importe com outro ID.")
+    if existing and b.get("mode") == "replace" and not can(u, doc_perm(pid, "delete")):
+        raise HttpError(403, "Substituir um playbook existente equivale a excluí-lo: exige a permissão de excluir. Importe com outro ID.")
     if existing and b.get("mode") != "replace":
         raise HttpError(409, f"{pid} já existe. Escolha substituir ou importe com outro ID.")
     validate_flow(p["flow"])
@@ -1052,7 +1113,7 @@ MAX_MD = 2 * 1024 * 1024
 def r_md(h, **_):
     """Modo Markdown do editor: {doc} → {md}; {md, pid?} → {doc, sections} (prévia renderizada como na leitura).
     Usa o mesmo parser que lê os arquivos .md, então a prévia é o que será gravado."""
-    h.require("editor"); b = h.body()
+    h.require(any_of=any_type("edit")); b = h.body()
     if "doc" in b:
         doc = b.get("doc")
         if not isinstance(doc, dict) or not isinstance(doc.get("sections"), list): raise HttpError(400, "documento inválido")
@@ -1071,7 +1132,7 @@ def r_md(h, **_):
                                             "subs": [{"title": x["title"], "html": render(x["blocks"])} for x in s["subs"]]} for s in doc["sections"]]})
 
 def r_flow_parse(h, **_):
-    h.require("editor"); b = h.body()
+    h.require(any_of=any_type("edit")); b = h.body()
     try:
         flow, refs, warns = flowdsl.parse(str(b.get("text", ""))[:300_000], core.load_teams())
     except flowdsl.FlowSyntaxError as e:
@@ -1080,7 +1141,7 @@ def r_flow_parse(h, **_):
     h.send_json({"flow": flow, "refs": refs, "warnings": warns})
 
 def r_flow_render(h, **_):
-    h.require("editor"); b = h.body()
+    h.require(any_of=any_type("edit")); b = h.body()
     flow = b.get("flow") or {}
     validate_flow(flow)
     h.send_json({"text": flowdsl.render(flow, b.get("refs") or {}, positions=b.get("positions", True))})
@@ -1092,7 +1153,7 @@ def r_brand_get(h, **_):
     h.send_json({**brand(), "logo": logo["v"] if logo else None, "appVersion": APP_VERSION})
 
 def r_brand_put(h, **_):
-    u = h.require("admin"); b = h.body()
+    u = h.require("branding.edit"); b = h.body()
     cur = brand()
     name = str(b.get("name", cur["name"])).strip()[:40] or DEFAULT_BRAND["name"]
     color = str(b.get("color", cur["color"])).strip().upper() or DEFAULT_BRAND["color"]
@@ -1107,7 +1168,7 @@ def r_brand_put(h, **_):
     r_brand_get(h)
 
 def r_logo_put(h, **_):
-    u = h.require("admin"); b = h.body()
+    u = h.require("branding.edit"); b = h.body()
     m = re.fullmatch(r"data:([\w/+.-]+);base64,([A-Za-z0-9+/=\s]+)", str(b.get("dataUrl", "")))
     if not m or m.group(1) not in LOGO_TYPES: raise HttpError(400, "Envie PNG, JPG, SVG ou WEBP")
     data = base64.b64decode(m.group(2))
@@ -1119,7 +1180,7 @@ def r_logo_put(h, **_):
     r_brand_get(h)
 
 def r_logo_delete(h, **_):
-    u = h.require("admin")
+    u = h.require("branding.edit")
     open_db().set_setting("logo", None)
     audit(u["login"], "logo_removida")
     r_brand_get(h)
@@ -1134,13 +1195,13 @@ def r_logo_get(h, **_):
 # data/lixeira/reset__<data>/ (playbooks, templates, vínculos, backups e uma cópia do banco).
 
 def r_admin_summary(h, **_):
-    h.require("admin")
+    h.require("app.reset")
     db = open_db()
     h.send_json({"playbooks": len(core.all_folders()), "templates": len(tpl._files()), "users": len(db.list_users()),
                  "versions": db.count_all_versions(), "audit": db.count_audit(), "word": RESET_WORD})
 
 def r_admin_reset(h, **_):
-    u = h.require("admin"); b = h.body()
+    u = h.require("app.reset"); b = h.body()
     if str(b.get("confirm", "")).strip().upper() != RESET_WORD: raise HttpError(400, f"Para confirmar, digite {RESET_WORD}")
     opts = {k: bool(b.get(k)) for k in ("settings", "users", "audit")}
     if opts["settings"] and (u.get("auth") or "local") == "sso":
@@ -1173,11 +1234,11 @@ def r_admin_reset(h, **_):
 # ───────────────────────── rotas: templates ─────────────────────────
 
 def r_tpl_list(h, **_):
-    h.require("editor")
+    h.require(any_of=("templates.view",) + any_type("create"))
     h.send_json({"templates": tpl.list_all(core.load_teams()), "variables": tpl.VARIABLES})
 
 def r_tpl_get(h, tkey, **_):
-    h.require("editor")
+    h.require(any_of=("templates.view",) + any_type("create"))
     cat = core.load_teams()
     h.send_json({"template": tpl.view(tpl.load(tkey, cat), cat), "allTeams": cat})
 
@@ -1196,7 +1257,7 @@ def _tpl_check(t, rev):
         raise HttpError(409, "Este template foi salvo por outra pessoa depois que você abriu. Recarregue para ver a versão atual.")
 
 def r_tpl_doc(h, tkey, **_):
-    u = h.require("editor"); b = h.body()
+    u = h.require("templates.edit"); b = h.body()
     doc = b.get("doc")
     if not isinstance(doc, dict) or not str(doc.get("title", "")).strip() or not isinstance(doc.get("sections"), list):
         raise HttpError(400, "documento inválido")
@@ -1206,7 +1267,7 @@ def r_tpl_doc(h, tkey, **_):
     _tpl_save(h, u, tkey, t, "template_documento_salvo", sync=changes)
 
 def r_tpl_flow(h, tkey, **_):
-    u = h.require("editor"); b = h.body()
+    u = h.require("templates.edit"); b = h.body()
     flow, refs = b.get("flow") or {}, b.get("refs") or {}
     validate_flow(flow)
     t = tpl.load(tkey); _tpl_check(t, b.get("rev"))
@@ -1218,14 +1279,14 @@ def r_tpl_flow(h, tkey, **_):
     _tpl_save(h, u, tkey, t, "template_fluxograma_salvo", sync=changes, **({"times_adicionados": ", ".join(added)} if added else {}))
 
 def r_tpl_ramos(h, tkey, **_):
-    u = h.require("editor"); b = h.body()
+    u = h.require("templates.edit"); b = h.body()
     t = tpl.load(tkey); _tpl_check(t, b.get("rev"))
     if tpl.has_ramos(t): raise HttpError(400, "Este template já tem ramos")
     tpl.add_ramos(t)
     _tpl_save(h, u, tkey, t, "template_ramos_adicionados", sync=["ramo-protótipo criado no documento e no fluxograma"])
 
 def r_tpl_meta(h, tkey, **_):
-    u = h.require("editor"); b = h.body()
+    u = h.require("templates.edit"); b = h.body()
     t = tpl.load(tkey); _tpl_check(t, b.get("rev"))
     name = str(b.get("name", t["name"])).strip()[:60]
     if not name: raise HttpError(400, "informe o nome do template")
@@ -1235,7 +1296,7 @@ def r_tpl_meta(h, tkey, **_):
 
 def r_tpl_teams(h, tkey, **_):
     """Times e tags do template (lista completa). Não deixa tirar um time em uso no template ou nos playbooks dele."""
-    u = h.require("editor"); b = h.body()
+    u = h.require("templates.edit"); b = h.body()
     teams = b.get("teams")
     if not isinstance(teams, dict) or not all(isinstance(v, dict) for v in teams.values()): raise HttpError(400, "times inválidos")
     if len(teams) > 80: raise HttpError(400, "no máximo 80 times por template")
@@ -1252,7 +1313,7 @@ def r_tpl_teams(h, tkey, **_):
     _tpl_save(h, u, tkey, t, "template_times_salvos", removidos=", ".join(sorted(removed)))
 
 def r_tpl_create(h, **_):
-    u = h.require("editor"); b = h.body()
+    u = h.require("templates.edit"); b = h.body()
     name = str(b.get("name", "")).strip()[:60]
     if not name: raise HttpError(400, "informe o nome do template")
     base = tpl.load(b["from"]) if b.get("from") else tpl.blank(name)
@@ -1262,7 +1323,7 @@ def r_tpl_create(h, **_):
     _tpl_save(h, u, key, t, "template_criado", base=b.get("from") or "em branco")
 
 def r_tpl_delete(h, tkey, **_):
-    u = h.require("admin")
+    u = h.require("templates.delete")
     f = tpl.path_of(tkey)
     if not f.exists(): raise HttpError(404, "template não encontrado")
     if tkey == tpl.DEFAULT_KEY: raise HttpError(400, "O template Padrão não pode ser excluído (é o template inicial da instalação)")
@@ -1280,14 +1341,14 @@ def r_tpl_delete(h, tkey, **_):
     h.send_json({"ok": True, "moved": moved})
 
 def r_tpl_export(h, tkey, **_):
-    u = h.require("editor")
+    u = h.require(any_of=("templates.view",) + any_type("create"))
     f = tpl.path_of(tkey)
     if not f.exists(): raise HttpError(404, "template não encontrado")
     audit(u["login"], "template_exportado", f"template:{tkey}")
     h.send_bytes(f.read_bytes(), "text/markdown; charset=utf-8", f.name)
 
 def r_tpl_import(h, **_):
-    u = h.require("editor"); b = h.body()
+    u = h.require("templates.edit"); b = h.body()
     try:
         t = tpl.from_text(str(b.get("text", "")), core.load_teams())
     except (bundle.BundleError, tpl.TemplateError) as e:
@@ -1303,57 +1364,86 @@ def r_tpl_import(h, **_):
     _tpl_save(h, u, tpl.key_for(t["name"]), t, "template_importado")
 
 def r_people(h, **_):
-    h.require("editor")
-    h.send_json({"people": [{"login": x["login"], "name": x["name"], "roleName": ROLE_NAMES[x["role"]]}
+    h.require(any_of=any_type("create"))
+    h.send_json({"people": [{"login": x["login"], "name": x["name"], "roleName": x["role_name"]}
                             for x in open_db().list_users() if x["active"]]})
 
 # ───────────────────────── rotas: usuários ─────────────────────────
 
 def r_approvers(h, **_):
-    h.require("editor")
-    h.send_json({"approvers": [{"login": a["login"], "name": a["name"], "roleName": ROLE_NAMES[a["role"]]} for a in open_db().approvers()]})
+    """Candidatos a aprovador (?type=playbook). Com &pid=, aplica a regra do aprovador diferente: quem não pode
+    aprovar este documento agora vem marcado com "excluded" (o motivo), para a tela explicar."""
+    u = h.require(any_of=any_type("status")); q = h.query()
+    t = q.get("type") or "playbook"
+    if t not in P.TYPES: raise HttpError(400, "tipo de documento inválido")
+    pid = str(q.get("pid") or "").upper()
+    excl, last = approval_exclusions(pid, u) if core.ID_RE.fullmatch(pid) else ({}, None)
+    out = [{"login": a["login"], "name": a["name"], "roleName": a["role_name"], **({"excluded": excl[a["login"]]} if a["login"] in excl else {})}
+           for a in open_db().approvers(f"{t}.approve")]
+    h.send_json({"approvers": out, "distinct": governance()["require_distinct_approver"],
+                 "lastAuthor": {"login": last["author"], "name": last["author_name"]} if last else None})
+
+def role_choice(u, key):
+    """Papel que este usuário pode atribuir: precisa existir e (fora o Administrador) ter só permissões que ele mesmo tem."""
+    r = open_db().role(str(key or ""))
+    if not r: raise HttpError(400, "papel inválido")
+    if not is_admin(u) and not r["perms"] <= u["perms"]:
+        raise HttpError(403, f"Você não pode atribuir o papel {r['name']}: ele tem permissões que o seu papel não tem")
+    return r["key"]
+
+def check_manageable(u, target):
+    """Quem não é Administrador só gerencia usuários cujo papel não tem permissões além das dele."""
+    if target and not is_admin(u) and not target["perms"] <= u["perms"]:
+        raise HttpError(403, "Você não pode alterar um usuário com mais permissões que você")
 
 def r_users(h, **_):
-    h.require("admin")
-    h.send_json({"users": [public_user(x) for x in open_db().list_users()], "roles": ROLE_NAMES})
+    h.require("users.manage")
+    db = open_db()
+    roles = db.list_roles()
+    h.send_json({"users": [public_user(x) for x in db.list_users()], "roles": {r["key"]: r["name"] for r in roles},
+                 "roleList": [{"key": r["key"], "name": r["name"], "system": r["system"]} for r in roles]})
 
 def r_user_create(h, **_):
-    u = h.require("admin"); b = h.body()
-    login = str(b.get("login", "")).strip().lower(); role = b.get("role")
+    u = h.require("users.manage"); b = h.body()
+    login = str(b.get("login", "")).strip().lower()
     if not LOGIN_RE.fullmatch(login): raise HttpError(400, "Login: 3 a 80 caracteres (letras minúsculas, números, ponto, hífen, sublinhado ou @)")
-    if role not in ROLES: raise HttpError(400, "perfil inválido")
+    role = role_choice(u, b.get("role_id") or b.get("role"))
     name = str(b.get("name", "")).strip()[:80] or login
     if b.get("auth") == "sso":     # pré-cadastro: o usuário entra pelo SSO com este login (e-mail ou usuário do provedor)
         new = open_db().create_user(login, name, role, NO_PASSWORD, must_change=False, auth="sso")
-        audit(u["login"], "usuario_criado", login, perfil=role, autenticacao="sso")
+        audit(u["login"], "usuario_criado", login, papel=role, autenticacao="sso")
         return h.send_json({"user": public_user(new), "tempPassword": None})
     pw = temp_password()
     new = open_db().create_user(login, name, role, hash_password(pw), must_change=True)
-    audit(u["login"], "usuario_criado", login, perfil=role)
+    audit(u["login"], "usuario_criado", login, papel=role)
     h.send_json({"user": public_user(new), "tempPassword": pw})
 
 def r_user_update(h, login, **_):
-    u = h.require("admin"); b = h.body()
-    if login == u["login"] and ("role" in b or b.get("active") is False):
-        raise HttpError(400, "Você não pode alterar o próprio perfil nem se desativar")
+    u = h.require("users.manage"); b = h.body()
+    new_role = b.get("role_id") or b.get("role")
+    if login == u["login"] and (new_role or b.get("active") is False):
+        raise HttpError(400, "Você não pode alterar o próprio papel nem se desativar")
     if login == u["login"] and "auth" in b: raise HttpError(400, "Você não pode alterar a própria forma de autenticação")
     auth = b.get("auth") if b.get("auth") in ("local", "sso") else None
     name = str(b["name"]).strip()[:80] or login if "name" in b else None
     db = open_db()
     before = db.get_user(login)
-    rec = db.update_user(login, name=name, role=b.get("role"), active=b.get("active"), auth=auth)
+    check_manageable(u, before)
+    role = role_choice(u, new_role) if new_role else None
+    rec = db.update_user(login, name=name, role=role, active=b.get("active"), auth=auth)
     pw = None
     if auth == "sso":
         db.set_password(login, NO_PASSWORD, must_change=False)
     elif auth == "local" and before and before.get("auth") == "sso":   # volta a usar senha: gera uma temporária
         pw = temp_password(); db.set_password(login, hash_password(pw), must_change=True)
-    audit(u["login"], "usuario_alterado", login, **{k: v for k, v in (("perfil", b.get("role")), ("ativo", b.get("active")), ("autenticacao", auth)) if v is not None})
+    audit(u["login"], "usuario_alterado", login, **{k: v for k, v in (("papel", role), ("ativo", b.get("active")), ("autenticacao", auth)) if v is not None})
     h.send_json({"user": public_user(db.get_user(login)), "tempPassword": pw})
 
 def r_user_reset(h, login, **_):
-    u = h.require("admin"); db = open_db()
+    u = h.require("users.manage"); db = open_db()
     target = db.get_user(login)
     if not target: raise HttpError(404, "usuário não encontrado")
+    check_manageable(u, target)
     if target.get("auth") == "sso": raise HttpError(400, "Conta do SSO: a senha é gerenciada pelo provedor")
     pw = temp_password()
     db.set_password(login, hash_password(pw), must_change=True)
@@ -1361,20 +1451,120 @@ def r_user_reset(h, login, **_):
     h.send_json({"user": public_user(db.get_user(login)), "tempPassword": pw})
 
 def r_user_logout(h, login, **_):
-    u = h.require("admin")
+    u = h.require("users.manage")
+    check_manageable(u, open_db().get_user(login))
     n = open_db().delete_user_sessions(login)
     audit(u["login"], "sessoes_encerradas", login, sessoes=n)
     h.send_json({"ok": True, "closed": n})
 
 def r_user_delete(h, login, **_):
-    u = h.require("admin")
+    u = h.require("users.manage")
     if login == u["login"]: raise HttpError(400, "Você não pode excluir o próprio usuário")
+    check_manageable(u, open_db().get_user(login))
     open_db().delete_user(login)
     audit(u["login"], "usuario_excluido", login)
     h.send_json({"ok": True})
 
+# ───────────────────────── rotas: papéis ─────────────────────────
+# Regras: Administrador é imutável e não pode ser excluído; Editor e Visualizador podem ser editados (e voltar ao
+# padrão), não excluídos; ninguém além do Administrador concede permissões que não tem nem mexe em papel com
+# permissões além das suas; papel em uso só sai realocando os usuários; mudanças valem na próxima requisição.
+
+def role_key_from(path):
+    m = re.match(r"^/api/roles/([^/?]+)", path)
+    return urllib.parse.unquote(m.group(1)) if m else ""
+
+def public_role(r, users=None):
+    return {"key": r["key"], "name": r["name"], "description": r["description"], "system": r["system"], "priority": r["priority"],
+            "permissions": "*" if "*" in r["permissions"] else P.clean(r["permissions"]), "users": users if users is not None else r.get("users", 0),
+            "editable": r["key"] != "admin", "deletable": not r["system"]}
+
+def role_fields(b, cur=None):
+    name = " ".join(str(b.get("name", cur["name"] if cur else "")).split())[:41]
+    if not name: raise HttpError(400, "Informe o nome do papel")
+    if len(name) > 40: raise HttpError(400, "Nome do papel: até 40 caracteres")
+    desc = " ".join(str(b.get("description", cur["description"] if cur else "")).split())
+    if len(desc) > 200: raise HttpError(400, "Descrição do papel: até 200 caracteres")
+    try: prio = int(b.get("priority", cur["priority"] if cur else 20))
+    except (TypeError, ValueError): raise HttpError(400, "Prioridade inválida")
+    if not 1 <= prio <= 99: raise HttpError(400, "Prioridade: de 1 a 99 (o Administrador é 100)")
+    return name, desc, prio
+
+def check_grant(u, new_perms, cur=None):
+    """Sem escalada: fora o Administrador, só se concede o que se tem, e só se mexe em papel contido no próprio."""
+    if is_admin(u): return
+    if cur is not None and not cur["perms"] <= u["perms"]:
+        raise HttpError(403, "Você não pode alterar um papel com permissões que o seu não tem")
+    extra = set(new_perms) - set(u["perms"])
+    if extra: raise HttpError(403, "Você não pode conceder permissões que não tem: " + ", ".join(sorted(extra)))
+
+def r_roles(h, **_):
+    u = h.require("roles.manage")
+    h.send_json({"roles": [public_role(r) for r in open_db().list_roles()], "catalog": P.catalog(), "mine": sorted(u["perms"]),
+                 "isAdmin": is_admin(u)})
+
+def r_role_create(h, **_):
+    u = h.require("roles.manage"); b = h.body(); db = open_db()
+    name, desc, prio = role_fields(b)
+    src = db.role(str(b.get("from") or "")) if b.get("from") else None
+    perms = P.clean(b["permissions"] if isinstance(b.get("permissions"), list) else (sorted(src["perms"]) if src else []))
+    check_grant(u, perms)
+    base = core.slug(name)[:28].strip("-") or "papel"
+    if len(base) < 2: base = f"papel-{base}"
+    key, i = base, 2
+    while db.role(key) or key in P.SYSTEM_KEYS: key = f"{base[:26]}-{i}"; i += 1
+    if not ROLE_KEY_RE.fullmatch(key): raise HttpError(400, "Nome do papel inválido")
+    r = db.create_role(key, name, desc, perms, prio)
+    audit(u["login"], "papel_criado", f"papel:{key}", nome=name, permissoes=len(perms), **({"copia_de": src["key"]} if src else {}))
+    h.send_json({"role": public_role(r, 0)})
+
+def r_role_update(h, **_):
+    u = h.require("roles.manage"); b = h.body(); db = open_db()
+    key = role_key_from(h.path)
+    cur = db.role(key)
+    if not cur: raise HttpError(404, "papel não encontrado")
+    if key == "admin": raise HttpError(400, "O papel Administrador não pode ser alterado")
+    if b.get("reset"):
+        check_grant(u, P.DEFAULTS.get(key, {}).get("permissions", []), cur)
+        new = db.reset_role(key)
+    else:
+        name, desc, prio = role_fields(b, cur)
+        perms = P.clean(b["permissions"]) if isinstance(b.get("permissions"), list) else sorted(cur["perms"])
+        check_grant(u, perms, cur)
+        new = db.update_role(key, name=name, description=desc, permissions=perms, priority=prio)
+    added, removed = sorted(new["perms"] - cur["perms"]), sorted(cur["perms"] - new["perms"])
+    audit(u["login"], "papel_alterado", f"papel:{key}", nome=new["name"], adicionadas=", ".join(added), removidas=", ".join(removed),
+          **({"restaurado_padrao": "sim"} if b.get("reset") else {}))
+    h.send_json({"role": public_role(new, len(db.users_with_role(key)))})
+
+def r_role_delete(h, **_):
+    u = h.require("roles.manage"); b = h.body(); db = open_db()
+    key = role_key_from(h.path)
+    cur = db.role(key)
+    if not cur: raise HttpError(404, "papel não encontrado")
+    check_grant(u, [], cur)
+    reassign = b.get("reassign") or None
+    if reassign: role_choice(u, reassign)
+    n = db.delete_role(key, reassign)
+    audit(u["login"], "papel_excluido", f"papel:{key}", nome=cur["name"], usuarios=n, **({"realocados_para": reassign} if n else {}))
+    h.send_json({"ok": True, "moved": n})
+
+# ───────────────────────── rotas: governança ─────────────────────────
+
+def r_governance_get(h, **_):
+    h.require(any_of=("app.reset", "users.manage"))
+    h.send_json({"governance": governance()})
+
+def r_governance_put(h, **_):
+    u = h.require(any_of=("app.reset", "users.manage")); b = h.body()
+    if not isinstance(b.get("require_distinct_approver"), bool): raise HttpError(400, "Valor inválido")
+    g = {**governance(), "require_distinct_approver": b["require_distinct_approver"]}
+    open_db().set_setting("governance", g, by=u["login"])
+    audit(u["login"], "governanca_alterada", aprovador_diferente="sim" if g["require_distinct_approver"] else "não")
+    h.send_json({"governance": g})
+
 def r_audit(h, **_):
-    h.require("admin")
+    h.require("audit.view")
     q = h.query()
     h.send_json({"entries": open_db().read_audit(limit=min(int(q.get("limit", 500) or 500), 5000), q=q.get("q", ""))})
 
@@ -1414,13 +1604,13 @@ def clean_log_cfg(b, cur):
     return c
 
 def r_logs_get(h, **_):
-    h.require("admin")
+    h.require("logs.manage")
     h.send_json({"config": public_log_cfg(log_cfg()), "status": FWD.status(), "logDir": str(DATA_DIR / "logs"),
                  "sample": logfwd.make_event(datetime.now(), "maria.souza", "documento_salvo", "PB-01", {"versao": "0.2"}, "10.0.0.15",
                                              brand()["name"], APP_VERSION)})
 
 def r_logs_put(h, **_):
-    u = h.require("admin"); b = h.body()
+    u = h.require("logs.manage"); b = h.body()
     c = clean_log_cfg(b, open_db().get_setting("logs"))
     open_db().set_setting("logs", c, by=u["login"]); _log_cfg["at"] = 0
     audit(u["login"], "logs_configurados", retencao_dias=c["retention_days"], http=c["http"]["enabled"], syslog=c["syslog"]["enabled"],
@@ -1429,7 +1619,7 @@ def r_logs_put(h, **_):
     r_logs_get(h)
 
 def r_logs_test(h, **_):
-    u = h.require("admin"); b = h.body()
+    u = h.require("logs.manage"); b = h.body()
     dest = b.get("dest")
     if dest not in ("http", "syslog", "file"): raise HttpError(400, "destino inválido")
     cfg = clean_log_cfg({**(b.get("config") or {}), **{dest: {**((b.get("config") or {}).get(dest) or {}), "enabled": True}}},
@@ -1442,7 +1632,7 @@ def r_logs_test(h, **_):
 
 def r_audit_export(h, **_):
     """Auditoria em JSON Lines (mesmo formato do encaminhamento), dos últimos N dias."""
-    u = h.require("admin")
+    u = h.require("audit.view")
     try: days = max(1, min(3650, int(h.query().get("days", 30))))
     except ValueError: raise HttpError(400, "dias inválidos")
     name, lines = brand()["name"], []
@@ -1457,7 +1647,7 @@ def r_audit_export(h, **_):
 
 SSO_DEFAULT = {"enabled": False, "label": "Entrar com SSO", "issuer": "", "client_id": "", "client_secret": "", "scopes": "openid email profile",
                "public_url": "", "login_claim": "preferred_username", "name_claim": "name", "email_claim": "email",
-               "role_claim": "groups", "role_map": {"admin": "", "editor": "", "viewer": ""}, "default_role": "viewer",
+               "role_claim": "groups", "role_map": {}, "default_role": "viewer",
                "auto_create": True, "allowed_domains": "", "local_login": "all"}
 
 def sso_cfg():
@@ -1469,22 +1659,27 @@ def r_sso_status(h, **_):
     h.send_json({"enabled": bool(c["enabled"]), "label": c["label"] or "Entrar com SSO", "localLogin": c["local_login"]})
 
 def r_sso_get(h, **_):
-    h.require("admin")
+    h.require("sso.manage")
     c = sso_cfg(); c["client_secret_set"] = bool(c.pop("client_secret"))
     h.send_json({"config": c, "redirectUri": sso.redirect_uri(c["public_url"]) if c["public_url"] else ""})
 
 def r_sso_put(h, **_):
-    u = h.require("admin"); b = h.body(); c = sso_cfg()
+    u = h.require("sso.manage"); b = h.body(); c = sso_cfg()
     s = lambda k, n=300: str(b.get(k, c[k]) or "").strip()[:n]
     c.update(label=s("label", 60) or "Entrar com SSO", issuer=s("issuer", 500).rstrip("/"), client_id=s("client_id", 300),
              scopes=s("scopes") or "openid email profile", public_url=s("public_url", 500).rstrip("/"),
              login_claim=s("login_claim", 80) or "preferred_username", name_claim=s("name_claim", 80) or "name",
              email_claim=s("email_claim", 80) or "email", role_claim=s("role_claim", 120), allowed_domains=s("allowed_domains", 500).lower(),
              auto_create=bool(b.get("auto_create", c["auto_create"])), enabled=bool(b.get("enabled")),
-             local_login="admins" if b.get("local_login") == "admins" else "all",
-             default_role=b.get("default_role") if b.get("default_role") in ("", "viewer", "editor") else "viewer")
+             local_login="admins" if b.get("local_login") == "admins" else "all")
+    roles = open_db().roles()
+    dr = b.get("default_role", c.get("default_role", "viewer"))
+    if dr not in ("", *roles): raise HttpError(400, f"Papel padrão inexistente: {dr}")
+    c["default_role"] = dr
     rm = b.get("role_map") if isinstance(b.get("role_map"), dict) else {}
-    c["role_map"] = {r: str(rm.get(r, "") or "")[:1000] for r in ("admin", "editor", "viewer")}
+    bad = [k for k in rm if k not in roles]
+    if bad: raise HttpError(400, f"Papel inexistente no mapeamento de grupos: {', '.join(bad)}")
+    c["role_map"] = {r: str(rm.get(r, "") or "")[:1000] for r in roles if str(rm.get(r, "") or "").strip()}
     if b.get("client_secret"): c["client_secret"] = str(b["client_secret"])[:2000]
     if b.get("clear_secret"): c["client_secret"] = ""
     if "openid" not in c["scopes"].split(): raise HttpError(400, "Os escopos precisam incluir openid")
@@ -1500,7 +1695,7 @@ def r_sso_put(h, **_):
     r_sso_get(h)
 
 def r_sso_test(h, **_):
-    h.require("admin"); b = h.body()
+    h.require("sso.manage"); b = h.body()
     try:
         d = sso.discover(str(b.get("issuer", "")).strip().rstrip("/"), force=True)
     except sso.SSOError as e:
@@ -1532,7 +1727,9 @@ def sso_user(c, claims):
     name = str(sso.claim(claims, c["name_claim"]) or raw or login).strip()[:80]
     domains = [d.strip().lstrip("@") for d in c["allowed_domains"].split(",") if d.strip()]
     if domains and not any(email.endswith("@" + d) for d in domains): raise sso.SSOError(f"Domínio de e-mail não autorizado ({email or 'sem e-mail'})")
-    mapped = sso.map_role(claims, c) if c["role_claim"] else None
+    roles = db.roles()
+    mapped = sso.map_role(claims, c, roles) if c["role_claim"] else None
+    if c["default_role"] and c["default_role"] not in roles: c["default_role"] = "viewer"
     has_rules = bool(c["role_claim"]) and any(str(v).strip() for v in c["role_map"].values())
     u = db.user_by_subject(subject)
     if not u:
@@ -1548,14 +1745,14 @@ def sso_user(c, claims):
             if not c["auto_create"]: raise sso.SSOError("Usuário não cadastrado. Peça acesso a um administrador")
             if not role: raise sso.SSOError("Seu usuário não pertence a nenhum grupo autorizado")
             u = db.create_user(login, name, role, NO_PASSWORD, must_change=False, auth="sso", sso_subject=subject)
-            audit("sistema", "usuario_criado", login, perfil=role, autenticacao="sso")
+            audit("sistema", "usuario_criado", login, papel=role, autenticacao="sso")
     if not u["active"]: raise sso.SSOError("Usuário desativado")
     if has_rules:
         role = mapped or c["default_role"]
         if not role: raise sso.SSOError("Seu usuário não pertence a nenhum grupo autorizado")
-        if role != u["role"]:
+        if role != u["role_id"]:
             try:
-                db.update_user(u["login"], role=role); audit("sistema", "usuario_alterado", u["login"], perfil=role, origem="grupos do SSO")
+                db.update_user(u["login"], role=role); audit("sistema", "usuario_alterado", u["login"], papel=role, origem="grupos do SSO")
             except StoreError:
                 pass    # não rebaixa o último administrador ativo
     return db.get_user(u["login"])
@@ -1597,7 +1794,7 @@ def version_id(h):
     return int(m.group(1))
 
 def can_see_version(v, u):
-    return ROLES[u["role"]] >= ROLES["editor"] or v["status"] in VIEWER_STATUSES
+    return can_view_status(u, doc_type(v["pid"].split("#")[0]), v["status"])
 
 def version_meta(v):
     return {k: v[k] for k in ("id", "version", "status", "created_at", "author", "author_name", "kind", "note", "template")} | \
@@ -1613,7 +1810,7 @@ def version_view(folder, pid, v):
     return view
 
 def r_versions(h, pid, **_):
-    u = h.require()
+    u = h.require(doc_perm(pid, "view"))
     folder = get_folder(pid)
     cur = load_pb(folder)
     if not visible(cur, u): raise HttpError(404, "playbook não encontrado")
@@ -1627,7 +1824,7 @@ def _version(h, pid, u, vid):
     return folder, v
 
 def r_version_get(h, pid, **_):
-    u = h.require()
+    u = h.require(doc_perm(pid, "view"))
     folder, v = _version(h, pid, u, version_id(h))
     h.send_json({"version": version_meta(v), "playbook": for_role(version_view(folder, pid, v), u)})
 
@@ -1654,7 +1851,7 @@ def _diff(a, b):
 
 def r_version_diff(h, pid, **_):
     """Compara a versão {v} com outra (?with=<id>) ou com a atual (?with=atual)."""
-    u = h.require()
+    u = h.require(doc_perm(pid, "view"))
     folder, v = _version(h, pid, u, version_id(h))
     w = h.query().get("with", "atual")
     if w == "atual":
@@ -1677,7 +1874,7 @@ def r_version_diff(h, pid, **_):
 def r_version_restore(h, pid, **_):
     """Volta o conteúdo (documento, fluxograma e vínculos) ao da versão escolhida. Status, aprovador e
     o próprio histórico não mudam: a restauração vira uma nova versão."""
-    u = h.require("editor"); b = h.body()
+    u = h.require(doc_perm(pid, "restore")); b = h.body()
     folder, v = _version(h, pid, u, version_id(h))
     with LOCK:
         check_rev(folder, b.get("rev"))
@@ -1722,6 +1919,9 @@ ROUTES = {
     ("GET", "/api/templates/{t}"): r_tpl_get, ("DELETE", "/api/templates/{t}"): r_tpl_delete, ("GET", "/api/templates/{t}/export"): r_tpl_export,
     ("PUT", "/api/templates/{t}/doc"): r_tpl_doc, ("PUT", "/api/templates/{t}/flow"): r_tpl_flow, ("PUT", "/api/templates/{t}/meta"): r_tpl_meta,
     ("GET", "/api/people"): r_people,
+    ("GET", "/api/roles"): r_roles, ("POST", "/api/roles"): r_role_create,
+    ("PUT", "/api/roles/{role}"): r_role_update, ("DELETE", "/api/roles/{role}"): r_role_delete,
+    ("GET", "/api/governance"): r_governance_get, ("PUT", "/api/governance"): r_governance_put,
     ("GET", "/api/pb/{pb}/export"): r_pb_export, ("GET", "/api/export"): r_export_all, ("POST", "/api/import"): r_import,
     ("POST", "/api/flow/parse"): r_flow_parse, ("POST", "/api/md"): r_md, ("POST", "/api/flow/render"): r_flow_render,
     ("GET", "/api/branding"): r_brand_get, ("PUT", "/api/branding"): r_brand_put,
@@ -1733,6 +1933,8 @@ ROUTES = {
 def cmd_adduser(args):
     login = args.login.strip().lower()
     if not LOGIN_RE.fullmatch(login): sys.exit("Login inválido (3 a 80: letras minúsculas, números, . _ - @)")
+    if not open_db().role(args.role):
+        sys.exit(f"Papel inexistente: {args.role}. Papéis: {', '.join(open_db().roles())}")
     pw = getpass.getpass(f"Senha para {login}: ")
     if getpass.getpass("Repita a senha: ") != pw: sys.exit("As senhas não conferem.")
     try: validate_password(pw)
@@ -1740,8 +1942,8 @@ def cmd_adduser(args):
     db = open_db()
     old = db.get_user(login)
     db.upsert_user(login, args.name or (old and old["name"]) or login, args.role, hash_password(pw))
-    audit("cli", "usuario_cli", login, perfil=args.role)
-    print(f"Usuário {login} salvo com perfil {ROLE_NAMES[args.role]} em {DB.path}")
+    audit("cli", "usuario_cli", login, papel=args.role)
+    print(f"Usuário {login} salvo com o papel {db.role(args.role)['name']} em {DB.path}")
 
 def bootstrap_admin():
     """Primeira subida (ex.: Docker): cria o administrador indicado em MEDUSA_ADMIN_LOGIN se ainda não há nenhum.
@@ -1771,7 +1973,7 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "adduser":
         p = argparse.ArgumentParser(prog="server.py adduser")
         p.add_argument("cmd"); p.add_argument("login")
-        p.add_argument("--role", choices=list(ROLES), default="viewer"); p.add_argument("--name")
+        p.add_argument("--role", default="viewer", help="chave do papel (admin, editor, viewer ou um papel criado)"); p.add_argument("--name")
         return cmd_adduser(p.parse_args())
     p = argparse.ArgumentParser(description="Servidor da ferramenta de playbooks")
     p.add_argument("port_pos", nargs="?", type=int, help=argparse.SUPPRESS)

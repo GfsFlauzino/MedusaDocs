@@ -159,11 +159,13 @@ def claim(claims, path):
     return cur
 
 
-def map_role(claims, cfg):
-    """Perfil pelos grupos/papéis do provedor. None = sem regra que se aplique."""
+def map_role(claims, cfg, roles=None):
+    """Papel pelos grupos do provedor: o primeiro, em ordem de prioridade (maior primeiro), cujo grupo mapeado o
+    usuário tem. roles = {chave: {"priority": n}} (sem ele, a ordem fixa da 2.x). None = nenhuma regra se aplica."""
     vals = claim(claims, cfg.get("role_claim"))
     vals = set(map(str, vals if isinstance(vals, list) else [vals] if vals else []))
-    for role in ("admin", "editor", "viewer"):
+    order = sorted(roles, key=lambda k: -int(roles[k].get("priority", 0))) if roles else ("admin", "editor", "viewer")
+    for role in order:
         wanted = {x.strip() for x in str((cfg.get("role_map") or {}).get(role, "")).split(",") if x.strip()}
         if wanted & vals: return role
     return None

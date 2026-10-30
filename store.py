@@ -6,12 +6,14 @@ synchronous=NORMAL); operações que precisam de várias leituras e escritas usa
 A sessão validada fica 15 s em memória (cache invalidado em logout, troca de senha e alteração de usuário).
 O esquema é versionado por PRAGMA user_version; novas versões entram em MIGRATIONS.
 """
-import hashlib, json, os, secrets, sqlite3, threading, time
+import hashlib, json, os, secrets, sqlite3, sys, threading, time
 from contextlib import closing, contextmanager
 from datetime import datetime
 from pathlib import Path
 
-ROLES = ("viewer", "editor", "admin")
+import perms
+
+KEEP_DB_BACKUPS = 5             # cópias pré-migração guardadas em data/backups/
 SESSION_CACHE_TTL = 15          # segundos que uma sessão validada fica em memória
 MAX_LOGIN_ATTEMPTS_ROWS = 10_000
 
@@ -95,6 +97,26 @@ MIGRATIONS = [
 ]
 
 
+def _m4_roles(c):
+    """v4: papéis personalizados. Só acrescenta (tabela roles, users.role_id, login_attempts.updated): a coluna
+    users.role continua como espelho legado, então a versão 2.x ainda abre este banco (rollback)."""
+    ts = now_iso()
+    c.execute("""CREATE TABLE roles (
+        key TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+        system INTEGER NOT NULL DEFAULT 0, priority INTEGER NOT NULL DEFAULT 20,
+        permissions TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+    c.execute("ALTER TABLE users ADD COLUMN role_id TEXT")
+    c.execute("UPDATE users SET role_id = role")            # viewer/editor/admin → mesmas chaves dos papéis semente
+    c.execute("CREATE INDEX users_role_id ON users(role_id)")
+    c.execute("ALTER TABLE login_attempts ADD COLUMN updated REAL NOT NULL DEFAULT 0")
+    for r in perms.SEED_ROLES:
+        c.execute("INSERT INTO roles VALUES (?,?,?,1,?,?,?,?)",
+                  (r["key"], r["name"], r["description"], r["priority"], json.dumps(r["permissions"]), ts, ts))
+
+
+MIGRATIONS.append(_m4_roles)
+
+
 def now_iso():
     return datetime.now().isoformat(timespec="seconds")
 
@@ -115,6 +137,7 @@ class Store:
         os.chmod(self.path.parent, 0o700)           # pasta de dados só para o dono
         self._local = threading.local()
         self._sessions, self._sessions_lock = {}, threading.Lock()
+        self._roles = None
         self._migrate()
 
     # ── conexão
@@ -151,18 +174,122 @@ class Store:
         with self._sessions_lock: self._sessions.clear()
 
     def _migrate(self):
+        """Aplica as migrações pendentes, cada uma numa transação junto com o PRAGMA user_version (uma falha no meio
+        não deixa o banco pela metade). Antes de migrar um banco existente, guarda uma cópia em data/backups/."""
         with closing(self._connect()) as c:
-            c.execute("PRAGMA journal_mode = WAL")
-            v = c.execute("PRAGMA user_version").fetchone()[0]
-            for i, sql in enumerate(MIGRATIONS[v:], start=v + 1):
-                c.executescript("BEGIN;" + sql + f"PRAGMA user_version = {i}; COMMIT;")
+            v, n = c.execute("PRAGMA user_version").fetchone()[0], len(MIGRATIONS)
+            if v >= n: return
+            if v > 0:
+                dest = self._backup_before_migration(c, v, n)
+                sys.stderr.write(f"Migração do banco v{v} → v{n} (cópia anterior em {dest})\n")
+            for i, m in enumerate(MIGRATIONS[v:], start=v + 1):
+                if callable(m):
+                    c.execute("BEGIN IMMEDIATE")
+                    try:
+                        m(c)
+                        c.execute(f"PRAGMA user_version = {i}")
+                        c.execute("COMMIT")
+                    except BaseException:
+                        c.execute("ROLLBACK")
+                        raise
+                else:
+                    c.executescript("BEGIN;" + m + f"PRAGMA user_version = {i}; COMMIT;")
+
+    def _backup_before_migration(self, c, v, n):
+        d = self.path.parent / "backups"
+        d.mkdir(exist_ok=True); os.chmod(d, 0o700)
+        dest = d / f"{self.path.name}.pre-v{v}-v{n}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        dst = sqlite3.connect(dest)
+        try: c.backup(dst)
+        finally: dst.close()
+        os.chmod(dest, 0o600)
+        old = sorted(d.glob(f"{self.path.name}.pre-v*"), key=lambda f: f.stat().st_mtime, reverse=True)
+        for f in old[KEEP_DB_BACKUPS:]: f.unlink()
+        return dest
+
+    # ── papéis (cache em memória, recarregado a cada alteração)
+    def roles(self):
+        """{chave: papel} com "perms" (conjunto efetivo) e "permissions" (lista gravada)."""
+        r = self._roles
+        if r is None:
+            with self._db() as c:
+                rows = c.execute("SELECT * FROM roles ORDER BY priority DESC, name").fetchall()
+            r = {}
+            for row in rows:
+                d = dict(row); d["system"] = bool(d["system"])
+                d["permissions"] = json.loads(d["permissions"] or "[]"); d["perms"] = perms.expand(d["permissions"])
+                r[d["key"]] = d
+            self._roles = r
+        return r
+
+    def _roles_changed(self):
+        self._roles = None
+        self._forget_sessions()
+
+    def role(self, key):
+        return self.roles().get(key)
+
+    def list_roles(self):
+        with self._db() as c:
+            used = dict(c.execute("SELECT COALESCE(role_id, role), COUNT(*) FROM users GROUP BY 1").fetchall())
+        return [{**{k: v for k, v in r.items() if k != "perms"}, "users": used.get(r["key"], 0)} for r in self.roles().values()]
+
+    def create_role(self, key, name, description, permissions, priority=20):
+        ts = now_iso()
+        try:
+            with self._tx() as c:
+                c.execute("INSERT INTO roles VALUES (?,?,?,0,?,?,?,?)", (key, name, description, int(priority), json.dumps(permissions), ts, ts))
+        except sqlite3.IntegrityError:
+            raise StoreError("Já existe um papel com essa chave")
+        self._roles_changed()
+        return self.role(key)
+
+    def update_role(self, key, name=None, description=None, permissions=None, priority=None):
+        if key == "admin": raise StoreError("O papel Administrador não pode ser alterado")
+        if key not in self.roles(): raise StoreError("papel não encontrado")
+        sets, args = ["updated_at = ?"], [now_iso()]
+        for col, val in (("name", name), ("description", description), ("priority", priority),
+                         ("permissions", None if permissions is None else json.dumps(permissions))):
+            if val is not None: sets.append(f"{col} = ?"); args.append(val)
+        with self._tx() as c:
+            c.execute(f"UPDATE roles SET {', '.join(sets)} WHERE key = ?", (*args, key))
+        self._roles_changed()
+        return self.role(key)
+
+    def reset_role(self, key):
+        """Papel do sistema (Editor, Visualizador) volta às permissões padrão."""
+        d = perms.DEFAULTS.get(key)
+        if key == "admin" or not d: raise StoreError("Só os papéis Editor e Visualizador têm padrão para restaurar")
+        return self.update_role(key, name=d["name"], description=d["description"], permissions=d["permissions"], priority=d["priority"])
+
+    def delete_role(self, key, reassign=None):
+        r = self.role(key)
+        if not r: raise StoreError("papel não encontrado")
+        if r["system"]: raise StoreError("Papéis do sistema não podem ser excluídos")
+        if reassign is not None and (reassign == key or reassign not in self.roles()): raise StoreError("Papel de destino inválido")
+        with self._tx() as c:
+            n = c.execute("SELECT COUNT(*) FROM users WHERE COALESCE(role_id, role) = ?", (key,)).fetchone()[0]
+            if n and reassign is None:
+                raise StoreError(f"Papel em uso por {n} usuário(s): escolha para qual papel eles vão")
+            if n:
+                c.execute("UPDATE users SET role_id = ?, role = ?, updated_at = ? WHERE COALESCE(role_id, role) = ?",
+                          (reassign, perms.legacy_role(reassign), now_iso(), key))
+            c.execute("DELETE FROM roles WHERE key = ?", (key,))
+        self._roles_changed()
+        return n
 
     # ── usuários
-    @staticmethod
-    def _user(row):
+    def _user(self, row):
+        """Registro do usuário com o papel resolvido: role_id, role_name, priority e perms (conjunto efetivo).
+        Papel inexistente (excluído por fora, ou usuário criado pela 2.x num rollback) → sem permissões."""
         if not row: return None
         d = dict(row)
         d["active"], d["must_change"] = bool(d["active"]), bool(d["must_change"])
+        d["role_id"] = d.get("role_id") or d["role"]
+        r = self.roles().get(d["role_id"])
+        d["role_name"] = r["name"] if r else "(papel removido)"
+        d["priority"] = r["priority"] if r else 0
+        d["perms"] = r["perms"] if r else frozenset()
         return d
 
     def get_user(self, login):
@@ -175,35 +302,43 @@ class Store:
                                 FROM users u ORDER BY u.login""", (time.time() - self.ttl,)).fetchall()
             return [self._user(r) for r in rows]
 
-    def approvers(self):
+    def users_with_role(self, key):
         with self._db() as c:
-            return [dict(r) for r in c.execute(
-                "SELECT login, name, role FROM users WHERE active = 1 AND role IN ('editor','admin') ORDER BY name").fetchall()]
+            rows = c.execute("SELECT * FROM users WHERE COALESCE(role_id, role) = ? ORDER BY login", (key,)).fetchall()
+            return [self._user(r) for r in rows]
+
+    def approvers(self, perm):
+        """Usuários ativos cujo papel tem a permissão (ex.: playbook.approve)."""
+        with self._db() as c:
+            rows = c.execute("SELECT * FROM users WHERE active = 1 ORDER BY name").fetchall()
+        return [u for u in map(self._user, rows) if perm in u["perms"]]
 
     def count_active_admins(self, c=None):
-        q = "SELECT COUNT(*) FROM users WHERE role = 'admin' AND active = 1"
+        q = "SELECT COUNT(*) FROM users WHERE COALESCE(role_id, role) = 'admin' AND active = 1"
         if c: return c.execute(q).fetchone()[0]
         with self._db() as c2: return c2.execute(q).fetchone()[0]
 
     def create_user(self, login, name, role, pw_hash, must_change=True, auth="local", sso_subject=None):
-        if role not in ROLES: raise StoreError("perfil inválido")
+        """role = chave do papel (role_id); a coluna antiga role recebe o espelho legado."""
+        if role not in self.roles(): raise StoreError("papel inválido")
         ts = now_iso()
         try:
             with self._tx() as c:
-                c.execute("""INSERT INTO users (login, name, role, hash, active, must_change, created_at, updated_at, auth, sso_subject)
-                             VALUES (?,?,?,?,1,?,?,?,?,?)""",
-                          (login, name, role, pw_hash, int(must_change), ts, ts, auth, sso_subject))
+                c.execute("""INSERT INTO users (login, name, role, role_id, hash, active, must_change, created_at, updated_at, auth, sso_subject)
+                             VALUES (?,?,?,?,?,1,?,?,?,?,?)""",
+                          (login, name, perms.legacy_role(role), role, pw_hash, int(must_change), ts, ts, auth, sso_subject))
         except sqlite3.IntegrityError:
             raise StoreError("Já existe um usuário com esse login")
         return self.get_user(login)
 
     def upsert_user(self, login, name, role, pw_hash):
         """Usado pela linha de comando: cria ou redefine (ativo, sem troca obrigatória)."""
+        if role not in self.roles(): raise StoreError("papel inválido")
         ts = now_iso()
         with self._tx() as c:
-            c.execute("""INSERT INTO users (login, name, role, hash, active, must_change, created_at, updated_at) VALUES (?,?,?,?,1,0,?,?)
-                         ON CONFLICT(login) DO UPDATE SET name=excluded.name, role=excluded.role, hash=excluded.hash,
-                         active=1, must_change=0, updated_at=excluded.updated_at""", (login, name, role, pw_hash, ts, ts))
+            c.execute("""INSERT INTO users (login, name, role, role_id, hash, active, must_change, created_at, updated_at) VALUES (?,?,?,?,?,1,0,?,?)
+                         ON CONFLICT(login) DO UPDATE SET name=excluded.name, role=excluded.role, role_id=excluded.role_id, hash=excluded.hash,
+                         active=1, must_change=0, updated_at=excluded.updated_at""", (login, name, perms.legacy_role(role), role, pw_hash, ts, ts))
         self._forget_sessions()
         return self.get_user(login)
 
@@ -211,10 +346,11 @@ class Store:
         with self._tx() as c:
             if not c.execute("SELECT 1 FROM users WHERE login = ?", (login,)).fetchone():
                 raise StoreError("usuário não encontrado")
-            if role is not None and role not in ROLES: raise StoreError("perfil inválido")
+            if role is not None and role not in self.roles(): raise StoreError("papel inválido")
             if auth is not None and auth not in ("local", "sso"): raise StoreError("tipo de autenticação inválido")
             sets, args = ["updated_at = ?"], [now_iso()]
-            for col, val in (("name", name), ("role", role), ("active", None if active is None else int(bool(active))), ("auth", auth)):
+            for col, val in (("name", name), ("role_id", role), ("role", role and perms.legacy_role(role)),
+                             ("active", None if active is None else int(bool(active))), ("auth", auth)):
                 if val is not None: sets.append(f"{col} = ?"); args.append(val)
             c.execute(f"UPDATE users SET {', '.join(sets)} WHERE login = ?", (*args, login))
             if self.count_active_admins(c) < 1:
@@ -319,7 +455,8 @@ class Store:
 
     def register_fail(self, key):
         with self._tx() as c:
-            c.execute("INSERT INTO login_attempts (key, fails) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET fails = fails + 1", (key,))
+            c.execute("""INSERT INTO login_attempts (key, fails, updated) VALUES (?, 1, ?)
+                         ON CONFLICT(key) DO UPDATE SET fails = fails + 1, updated = excluded.updated""", (key, time.time()))
             if c.execute("SELECT fails FROM login_attempts WHERE key = ?", (key,)).fetchone()[0] >= self.max_fails:
                 c.execute("UPDATE login_attempts SET fails = 0, locked_until = ? WHERE key = ?", (time.time() + self.lock_seconds, key))
 
@@ -340,8 +477,10 @@ class Store:
             n = c.execute("DELETE FROM audit WHERE ts < ?", (cutoff,)).rowcount
             c.execute("DELETE FROM sso_states WHERE created < ?", (time.time() - 600,))
             c.execute("DELETE FROM login_attempts WHERE locked_until < ? AND fails = 0", (time.time(),))
+            # falhas soltas (sem bloqueio) sem atividade há mais de 1 h
+            c.execute("DELETE FROM login_attempts WHERE locked_until < ? AND updated < ?", (time.time(), time.time() - 3600))
             if c.execute("SELECT COUNT(*) FROM login_attempts").fetchone()[0] > MAX_LOGIN_ATTEMPTS_ROWS:
-                c.execute("DELETE FROM login_attempts WHERE locked_until = 0")      # falhas soltas, sem bloqueio
+                c.execute("DELETE FROM login_attempts WHERE locked_until = 0")
             c.execute("DELETE FROM sessions WHERE seen_at < ?", (time.time() - self.ttl,))
         return n
 
@@ -371,6 +510,13 @@ class Store:
             if not r: return None
             d = dict(r); d["refs"] = json.loads(d["refs"] or "{}")
             return d
+
+    def last_content_version(self, pid, kinds):
+        """Última versão de conteúdo (não de status) do documento: quem a gravou não pode aprovar a publicação."""
+        with self._db() as c:
+            r = c.execute(f"""SELECT author, author_name, kind, created_at FROM pb_versions
+                              WHERE pid = ? AND kind IN ({",".join("?" * len(kinds))}) ORDER BY id DESC LIMIT 1""", (pid, *kinds)).fetchone()
+            return dict(r) if r else None
 
     def count_versions(self, pid):
         with self._db() as c:
