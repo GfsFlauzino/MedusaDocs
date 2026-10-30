@@ -22,7 +22,7 @@ from pathlib import Path
 PID_RE = re.compile(r"^((?:PB|RB|DOC)-\d+)-")
 SCAN_EVERY = 1.0
 VIEW_CACHE = 256
-PERSIST_FORMAT = 2              # 2: resumos com tipo, campos e fluxograma opcional
+PERSIST_FORMAT = 3              # 3: + documentos citados (links)
 PERSIST_EVERY = 30              # segundos entre gravações do cache em disco (só se algo mudou)
 
 
@@ -45,11 +45,24 @@ def strip_html(h):
     return re.sub(r"<[^>]+>", " ", h or "")
 
 
-class Entry:
-    __slots__ = ("pid", "type", "sig", "summary", "search_docs")
+MENTION_RE = re.compile(r"(?<![\w-])((?:PB|RB|DOC)-\d{2,4})(?!\w)")
 
-    def __init__(self, pid, sig, summary, search_docs):
+
+class Entry:
+    __slots__ = ("pid", "type", "sig", "summary", "search_docs", "links")
+
+    def __init__(self, pid, sig, summary, search_docs, links=()):
         self.pid, self.type, self.sig, self.summary, self.search_docs = pid, DT.type_of(pid) or "playbook", sig, summary, search_docs
+        self.links = tuple(links)                       # IDs de outros documentos citados (texto e caixas do fluxograma)
+
+
+def links_of(v):
+    """Documentos citados: PB-00, RB-00 e DOC-00 no texto (introdução, seções) e nas caixas do fluxograma."""
+    parts = [v.get("intro") or ""]
+    for s in v["sections"]:
+        parts.append(s["html"]); parts += [x["html"] for x in s["subs"]]
+    parts += [l.get("t", "") for n in v["flow"].get("nodes", []) for l in n.get("lines", [])]
+    return sorted({m for m in MENTION_RE.findall(" ".join(parts)) if m != v["id"]}, key=DT.sort_key)
 
 
 def summary_of(v, fields_schema=None, core=None):
@@ -182,12 +195,12 @@ class Library:
             folder, sig = f
             p = self._persisted.pop(pid, None)
             if p and tup(p["sig"]) == sig:            # mesmo arquivo de antes do reinício: não precisa interpretar
-                e = Entry(pid, sig, p["summary"], [tuple(d) for d in p["search"]])
+                e = Entry(pid, sig, p["summary"], [tuple(d) for d in p["search"]], p.get("links", []))
                 with self._lock:
                     if self._found.get(pid, (None, None))[1] == sig: self._entries[pid] = e
                 return e, None
             v = self._build(pid, folder, sig)
-            e = Entry(pid, sig, summary_of(v, self.tpl.fields_for(sig[3]), self.core), search_docs_of(v))
+            e = Entry(pid, sig, summary_of(v, self.tpl.fields_for(sig[3]), self.core), search_docs_of(v), links_of(v))
             with self._lock:
                 if self._found.get(pid, (None, None))[1] == sig:
                     self._entries[pid] = e
@@ -235,6 +248,18 @@ class Library:
                           and (not status or e.summary["status"] == status)]
         return [e.summary for e in self.entries() if (visible is None or visible(e.summary)) and (not status or e.summary["status"] == status)]
 
+    def citations(self, pid, visible=None):
+        """{out: citados por pid, in: quem cita pid}; só documentos que a pessoa pode ver (citação a documento que não
+        existe vem com missing=True, sem revelar nada)."""
+        es = {e.pid: e for e in self.entries()}
+        me = es.get(pid)
+        if not me: return {"out": [], "in": []}
+        ok = lambda e: visible is None or visible(e.summary)
+        brief = lambda e: {"id": e.pid, "type": e.type, "name": e.summary["name"], "slug": e.summary["slug"], "status": e.summary["status"]}
+        out = [brief(es[x]) if x in es else {"id": x, "missing": True} for x in me.links if x not in es or ok(es[x])]
+        inc = [brief(e) for e in es.values() if pid in e.links and ok(e)]
+        return {"out": out, "in": sorted(inc, key=lambda x: DT.sort_key(x["id"]))}
+
     def search(self, q, visible=None, limit=30):
         words = norm(q).split()
         if not words: return []
@@ -262,7 +287,7 @@ class Library:
         if not self.cache_file or self._persisted_gen == self.generation: return
         with self._lock:
             gen = self.generation
-            entries = {pid: {"sig": e.sig, "summary": e.summary, "search": e.search_docs} for pid, e in self._entries.items()}
+            entries = {pid: {"sig": e.sig, "summary": e.summary, "search": e.search_docs, "links": list(e.links)} for pid, e in self._entries.items()}
         try:
             self.cache_file.parent.mkdir(parents=True, exist_ok=True)
             self.core.atomic_write(self.cache_file, json.dumps({"format": PERSIST_FORMAT, "entries": entries}, ensure_ascii=False))

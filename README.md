@@ -8,7 +8,7 @@ templates e auditoria.
 - Só Python 3 (biblioteca padrão): nada para instalar além do Python, ou uma imagem Docker pronta.
 - White label: nome do workspace e logo configuráveis no painel administrativo; tema claro e escuro.
 - Formatos abertos: cada playbook é um `.md` + um `.drawio`; troca entre instalações em `.medusa.md` (Markdown + Mermaid).
-- Versão atual: **3.0.0** (novidades em [CHANGELOG.md](CHANGELOG.md)): tipos de documento (playbook, runbook,
+- Versão atual: **3.1.0** (novidades em [CHANGELOG.md](CHANGELOG.md)): tipos de documento (playbook, runbook,
   documento) com pastas, campos e templates por tipo; papéis e permissões personalizados; aprovação de Produção por
   outra pessoa; Markdown com blocos de código, listas numeradas, links e introdução. Na 2.2.0: novo visual com menu lateral recolhível,
   desempenho (cache de documentos, lista leve, busca no servidor, gzip e cache no navegador) e endurecimento (gravação
@@ -68,6 +68,14 @@ biblioteca com pastas e filtros por campo (Categoria e Público no template padr
 o ciclo aparece como **Rascunho → Em revisão → Publicado** (os valores gravados continuam Desenvolvimento,
 Homologação e Produção). Pastas valem para runbooks e documentos: até 6 níveis, mover não gera versão, a estrutura
 sugerida pelo template é criada sob demanda.
+
+## Ligações e pendências
+
+Escrever o ID de outro documento (`PB-02`, `RB-03`, `DOC-01`) no texto ou numa caixa do fluxograma cria uma ligação:
+o fim da documentação mostra **Ligações** (quem o documento cita e por quem é referenciado, filtrado pela
+visibilidade de cada um; `GET /api/doc/{id}/links`). Para quem pode editar, um selo de **pendências**
+(`GET /api/doc/{id}/lint`) aponta citações a documentos inexistentes e, nos playbooks, caixas sem "ao clicar", passos
+sem caixa, IDs de passo repetidos e ramos só no documento ou só no fluxograma.
 
 ## Runbooks
 

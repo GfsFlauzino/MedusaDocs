@@ -51,7 +51,7 @@ MAX_THREADS = 32                # requisições processadas ao mesmo tempo; as d
 PBKDF2_ITERS = 310_000
 MIN_PASSWORD = 10
 MAX_BODY = 8 * 1024 * 1024
-APP_VERSION = "3.0.0"
+APP_VERSION = "3.1.0"
 LOGIN_RE = re.compile(r"^[a-z0-9._@-]{3,80}$")          # @ e até 80 caracteres: logins vindos do SSO (e-mail)
 NO_PASSWORD = "!sso"                                      # hash impossível: conta só entra pelo SSO
 TRUST_PROXY = os.environ.get("MEDUSA_TRUST_PROXY", "").lower() in ("1", "true", "yes", "sim")
@@ -709,6 +709,51 @@ def r_search(h, **_):
     try: limit = max(1, min(100, int(q.get("limit") or 30)))
     except ValueError: raise HttpError(400, "limite inválido")
     h.send_json({"hits": LIB.search(q.get("q", "")[:200], summary_visible(u), limit)})
+
+# ───────────────────────── citações e verificação (lint) ─────────────────────────
+
+def r_doc_links(h, pid, **_):
+    """Quem este documento cita e quem cita ele (painel "Referenciado por")."""
+    u = h.require(doc_perm(pid, "view"))
+    pb = load_pb(get_folder(pid))
+    if not visible(pb, u): raise HttpError(404, not_found_msg(pid))
+    h.send_json(LIB.citations(pid, summary_visible(u)))
+
+def lint(pb):
+    """Pendências de um documento: referências a documentos inexistentes e, nos playbooks, caixas sem "ao clicar",
+    passos sem caixa, IDs de passo repetidos e ramos só no documento ou só no fluxograma."""
+    issues = []
+    existing = set(LIB.pids())
+    e = LIB.entry(pb["id"])
+    for x in (e.links if e else ()):
+        if x not in existing: issues.append({"kind": "ref", "ref": x, "message": f"Cita {x}, que não existe"})
+    if pb.get("type", "playbook") != "playbook": return issues
+    flow, refs = pb["flow"], pb["refs"]
+    step_ids = [s["id"] for s in pb["steps"]]
+    for sid in sorted({x for x in step_ids if step_ids.count(x) > 1}):
+        issues.append({"kind": "step-dup", "ref": sid, "message": f"O passo {sid} aparece mais de uma vez"})
+    linked = {r for v in refs.values() for r in v}
+    for n in flow["nodes"]:
+        label = " / ".join(l["t"] for l in n.get("lines", []))
+        if n["type"] in ("support", "start") or MENTION_FALLBACK.search(label): continue
+        if not refs.get(n["id"]):
+            issues.append({"kind": "node-norefs", "ref": n["id"], "message": f"Caixa sem \"ao clicar\": {label[:80]}"})
+    for sid in dict.fromkeys(step_ids):
+        if sid not in linked: issues.append({"kind": "step-nonode", "ref": sid, "message": f"O passo {sid} não está em nenhuma caixa do fluxograma"})
+    dr, fr = ramos.doc_ramos(pb["doc"]), ramos.flow_ramos(flow, refs)
+    for k in sorted(set(dr) - set(fr), key=ramos.sort_key):
+        issues.append({"kind": "ramo-nobox", "ref": f"R{k}", "message": f"O ramo R{k} não tem caixa no fluxograma"})
+    for k in sorted(set(fr) - set(dr), key=ramos.sort_key):
+        issues.append({"kind": "ramo-nosub", "ref": f"R{k}", "message": f"O ramo R{k} não tem subseção no documento"})
+    return issues
+
+MENTION_FALLBACK = re.compile(r"(?<![\w-])(?:PB|RB|DOC)-\d{2,4}(?!\w)")
+
+def r_doc_lint(h, pid, **_):
+    u = h.require(doc_perm(pid, "edit"))
+    pb = load_pb(get_folder(pid))
+    issues = lint(pb)
+    h.send_json({"issues": issues, "count": len(issues)}, etag=doc_etag(pb, u).rstrip('"') + "-lint" + str(LIB.generation) + '"')
 
 # ───────────────────────── versões ─────────────────────────
 # Cada gravação gera uma versão (regras em pbcore.next_version) e guarda o conteúdo completo no banco
@@ -2177,6 +2222,7 @@ ROUTES = {
     ("GET", "/api/roles"): r_roles, ("POST", "/api/roles"): r_role_create,
     ("PUT", "/api/roles/{role}"): r_role_update, ("DELETE", "/api/roles/{role}"): r_role_delete,
     ("GET", "/api/governance"): r_governance_get, ("PUT", "/api/governance"): r_governance_put,
+    ("GET", "/api/pb/{pb}/links"): r_doc_links, ("GET", "/api/pb/{pb}/lint"): r_doc_lint,
     ("POST", "/api/doc"): r_doc_create, ("GET", "/api/doc/next-id"): r_doc_next_id, ("PUT", "/api/pb/{pb}/folder"): r_doc_move,
     ("GET", "/api/folders"): r_folders, ("POST", "/api/folders"): r_folder_create, ("POST", "/api/folders/from-template"): r_folders_from_template,
     ("PUT", "/api/folders/{f}"): r_folder_update, ("DELETE", "/api/folders/{f}"): r_folder_delete,

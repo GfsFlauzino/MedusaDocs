@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.1.0 — 2026-10-30
+
+### Ligações entre documentos
+- O ID de outro documento no texto ou numa caixa do fluxograma vira uma ligação. No fim da documentação, o painel
+  **Ligações** mostra quem o documento **cita** e por quem é **referenciado por**, só com o que você pode ver
+  (`GET /api/doc/{id}/links`). As ligações ficam no cache (e no cache em disco), sem custo extra na leitura.
+
+### Verificação de pendências
+- Selo de **pendências** no topo do documento, para quem pode editar (`GET /api/doc/{id}/lint`): citação a documento
+  inexistente e, nos playbooks, caixa sem "ao clicar", passo sem caixa, ID de passo repetido e ramo só no documento
+  ou só no fluxograma. A lista leva ao trecho; não impede salvar nem publicar.
+
 ## 3.0.0 — 2026-10-30
 
 Reúne as betas 3.0.0-beta.1 a beta.4 (abaixo) e fecha a versão:

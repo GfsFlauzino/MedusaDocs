@@ -1056,3 +1056,12 @@ blockquote{border-left:3px solid var(--line2);background:var(--surface2)}
   .lib-side > summary{display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:500;padding:4px 4px}
   .lib-side[open] > summary{margin-bottom:8px}
 }
+
+/* ── ligações entre documentos e pendências ── */
+.md.cites .cite-list{list-style:none;padding:0;margin:6px 0 14px;display:flex;flex-direction:column;gap:6px}
+.md.cites .cite-list li{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.md.cites .cite-list a{text-decoration:none;color:var(--text)}
+.md.cites .cite-list a:hover{text-decoration:underline}
+.lint-badge{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,var(--line))}
+.lint-list{padding-left:18px;margin:4px 0 12px}
+.lint-list li{margin:6px 0}

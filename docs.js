@@ -49,6 +49,9 @@ const Docs = (() => {
         <li>Pasta com conteúdo só é excluída escolhendo para onde vão os documentos e subpastas (outra pasta ou "Sem pasta").</li>
         <li>O template pode sugerir uma estrutura (aba <b>Pastas</b> do template); na biblioteca, <b>Estrutura do template…</b> cria só o que falta.</li>
         <li>Exportar leva o caminho da pasta; importar recria o caminho se você puder gerenciar pastas (senão o documento vai para "Sem pasta").</li></ul>` },
+    { id: "ligacoes", role: "viewer", title: "Ligações e pendências", html: `
+      <ul><li><b>Ligações:</b> escrever o ID de outro documento (<code>PB-02</code>, <code>RB-03</code>, <code>DOC-01</code>) no texto ou numa caixa do fluxograma cria a ligação. No fim da documentação, <b>Ligações</b> mostra quem este documento <b>cita</b> e por quem ele é <b>referenciado</b> (só documentos que você pode ver).</li>
+        <li><b>Pendências</b> (para quem pode editar): o selo ${ic("warn")} no topo aparece quando a verificação automática encontra algo: citação a documento que não existe e, nos playbooks, caixa sem "ao clicar", passo que não está em nenhuma caixa, ID de passo repetido ou ramo só no documento ou só no fluxograma. Clique no selo para ver a lista e ir ao trecho. Não impede salvar nem publicar.</li></ul>` },
     { id: "leitura", role: "viewer", title: "Lendo um playbook", html: `
       <ul><li><b>Fluxograma:</b> clique em uma caixa para ler o trecho da documentação vinculado a ela (passos, ramo, seção). Clique no nome de um time (raia ou caixa de apoio) para ver as responsabilidades e o que ele não faz. A etiqueta no canto da caixa mostra o ID do passo.</li>
         <li><b>Documentação:</b> o documento completo, com índice lateral por seção e subseção: fases e passos (ID, ação, critério de saída), ramos R1, R2…, critérios e o restante. Clique numa imagem para ampliar (${K("Esc")} fecha).</li>

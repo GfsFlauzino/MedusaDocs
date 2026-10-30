@@ -726,6 +726,7 @@ function renderPb(pb, tab, extra, rest) {
   $("#expMenu").onclick = e => { const b = e.target.closest("[data-exp]"); $("#expMenu").hidden = true; if (b) Exporter[b.dataset.exp](currentPb()); };
   if ($("#delBtn")) $("#delBtn").onclick = () => deleteDialog(currentPb());
   if ($("#mvBtn")) $("#mvBtn").onclick = () => moveDialog(currentPb());
+  if (can(`${T}.edit`)) lintBadge(pb);
   const tv = $("#tabview");
   if (tab === "editar") return Editor.docEditor(tv, pb);
   if (tab === "editar-fluxo") {
@@ -802,6 +803,19 @@ async function statusDialog(pb) {
       };
     }
   });
+}
+/* pendências do documento (referências quebradas; no playbook, caixas sem "ao clicar", passos sem caixa, IDs de passo
+   repetidos e ramos só de um lado): selo no topo, para quem pode editar; o clique lista e leva ao trecho */
+async function lintBadge(pb) {
+  let d; try { d = await api("GET", `api/doc/${pb.id}/lint`); } catch { return; }
+  const acts = $(".pbhead .pbactions");
+  if (!d.count || !acts || !location.hash.toLowerCase().startsWith(`#/${pb.slug}`)) return;
+  acts.insertAdjacentHTML("afterbegin", `<button class="btn ghost sm lint-badge" id="lintBtn" title="Pendências encontradas na verificação">${ic("warn")}${d.count} pendência${d.count > 1 ? "s" : ""}</button>`);
+  $("#lintBtn").onclick = () => {
+    const go = i => i.kind === "node-norefs" ? `#/${pb.slug}/editar-fluxo` : /^(step|ramo)/.test(i.kind) ? `#/${pb.slug}/doc/${encodeURIComponent(i.ref)}` : "";
+    pushView(`${ic("warn")} Pendências de ${esc(pb.id)}`, `<ul class="lint-list">${d.issues.map(i => `<li>${go(i) ? `<a href="${go(i)}">${esc(i.message)}</a>` : esc(i.message)}</li>`).join("")}</ul>
+      <p class="muted small">Verificação automática: não impede salvar nem publicar.</p>`, pb);
+  };
 }
 /* mover para outra pasta (runbook e documento): só muda a organização, sem gerar versão */
 async function moveDialog(pb) {
@@ -904,6 +918,17 @@ function tabDoc(pb, el, focus) {
     e.preventDefault(); document.getElementById(a.dataset.go ? "sec-" + a.dataset.go : "sub-" + a.dataset.sub).scrollIntoView();
   };
   if (focus) setTimeout(() => focusInDoc(el, pb, decodeURIComponent(focus)), 30);
+  citations(pb, el.querySelector(".doc"));
+}
+/* "Referenciado por" e "Cita": documentos ligados a este pelo ID no texto (só os que você pode ver) */
+async function citations(pb, box) {
+  let d; try { d = await api("GET", `api/doc/${pb.id}/links`); } catch { return; }
+  if (!document.contains(box) || (!d.in.length && !d.out.length)) return;
+  const item = x => x.missing ? `<li class="muted">${esc(x.id)} <small>(não existe)</small></li>`
+    : `<li><a href="#/${esc(x.slug)}/${x.type === "playbook" ? "fluxo" : "doc"}"><b>${esc(x.id)}</b> ${esc(x.name)}</a> ${statusPill(x.status, x.type)}</li>`;
+  box.insertAdjacentHTML("beforeend", `<section class="md cites"><h2>Ligações</h2>
+    ${d.in.length ? `<h3>Referenciado por</h3><ul class="cite-list">${d.in.map(item).join("")}</ul>` : ""}
+    ${d.out.length ? `<h3>Cita</h3><ul class="cite-list">${d.out.map(item).join("")}</ul>` : ""}</section>`);
 }
 /* leva ao trecho: R2 → subseção do ramo; T3, A1, E4… → linha da tabela que começa com o ID */
 function focusInDoc(el, pb, id) {
