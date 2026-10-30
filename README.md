@@ -61,6 +61,15 @@ exibida uma única vez, e precisa trocá-la no primeiro acesso.
 - **Aparência** (só administrador): nome do workspace e logo. O visual é fixo e minimalista (fonte Inter, embutida), com tema claro e escuro por usuário. As cores do fluxograma não mudam: fazem parte do modelo dos playbooks.
 - **Resetar aplicação** (só administrador, botão no topo da Administração): volta ao estado de recém-instalada, com confirmação digitando `RESETAR`. Opcionalmente restaura configurações, remove os demais usuários e apaga a auditoria. Tudo vai para `data/lixeira/reset__<data-hora>/`, com cópia do banco e um `LEIA-ME.txt` de como voltar.
 
+## Runbooks
+
+**Runbooks** (`RB-00`, menu lateral) são procedimentos técnicos: pré-requisitos, comandos (blocos de código com botão
+Copiar), validação e rollback. Usam o mesmo editor, ciclo de vida, versões e exportações dos playbooks; o fluxograma
+é opcional ("Adicionar fluxograma"). A página de runbooks tem a **árvore de pastas** (arrastar documentos e pastas,
+teclado ↑ ↓ ← → Enter F2, ações no ⋯ ou no botão direito), busca, **filtros pelos campos** do template (Ferramenta,
+Fase NIST…, com contagens) e "Estrutura do template…" para criar as pastas sugeridas. IDs `RB-00` em qualquer texto
+viram links.
+
 ## Papéis e permissões
 
 Cada usuário tem um **papel**; cada papel, uma lista de permissões no formato `área.ação`. Os três papéis do sistema

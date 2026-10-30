@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.0.0-beta.4 — 2026-10-30
+
+### Runbooks na interface
+- Item **Runbooks** no menu lateral (para quem pode ver runbooks), com a biblioteca: árvore de pastas (contagens,
+  "Todos" e "Sem pasta", ações por pasta, arrastar documentos e pastas, navegação por teclado), busca, filtros
+  gerados pelos campos do template com contagens, cartões ou lista e "Carregar mais". Em telas estreitas a árvore
+  vira um painel recolhível.
+- **Novo runbook**: template, nome, ID sugerido, pasta e campos do template. Os campos aparecem como etiquetas no
+  topo do runbook.
+- Página do runbook: Documentação · Fluxograma (se houver) · Versões; **Adicionar fluxograma** cria o `.drawio` ao
+  salvar; **Mover** troca a pasta. Exportação sem fluxograma esconde draw.io, Mermaid, SVG e JPEG; a comparação de
+  versões esconde o bloco do fluxograma quando não há.
+- `RB-00` e `DOC-00` em qualquer texto viram links (riscados quando o documento não existe para o seu papel).
+- Importar runbooks e documentos pela página de cada tipo.
+
 ## 3.0.0-beta.3 — 2026-10-30
 
 ### Tipos de documento, pastas, campos e templates por tipo (base)

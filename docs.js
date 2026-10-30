@@ -29,6 +29,14 @@ const Docs = (() => {
         <li>Excluir um papel em uso pede para qual papel os usuários vão.</li>
         <li>Ninguém concede o que não tem: quem gerencia papéis sem ser administrador vê desabilitadas as permissões que não possui e não mexe em papéis mais fortes que o seu.</li>
         <li>As mudanças valem na hora (na próxima ação de cada usuário) e vão para a auditoria (<code>papel_criado</code>, <code>papel_alterado</code> com o que entrou e saiu, <code>papel_excluido</code>).</li></ul>` },
+    { id: "runbooks", role: "viewer", title: "Runbooks", html: `
+      <p><b>${ic("pageEdit")}Runbooks</b> (menu lateral) são procedimentos técnicos passo a passo: pré-requisitos, comandos, validação e rollback. Cada um tem ID <code>RB-00</code>, o mesmo ciclo de vida, versões e exportações dos playbooks, e o fluxograma é <b>opcional</b> ("Adicionar fluxograma" no próprio runbook).</p>
+      <ul><li><b>Pastas</b> à esquerda: "Todos", "Sem pasta" e a árvore. Clique para filtrar (a pasta mostra também o que está nas subpastas). ${K("↑")} ${K("↓")} andam, ${K("←")} ${K("→")} recolhem e expandem, ${K("Enter")} abre, ${K("F2")} renomeia. O ${ic("more")} (ou o botão direito) traz nova subpasta, renomear, mover e excluir.</li>
+        <li><b>Arraste</b> um runbook (ou uma pasta) para outra pasta, ou para "Sem pasta". Mover não gera versão nova. O botão <b>Mover</b> do runbook faz o mesmo.</li>
+        <li><b>Filtros</b>: busca por nome ou ID e um seletor por campo do template marcado como filtro (ex.: Ferramenta, Fase NIST), com a quantidade de cada valor.</li>
+        <li><b>Novo runbook</b>: template, nome, ID sugerido, pasta e os campos do template. Os campos aparecem como etiquetas no topo do runbook e ficam na tabela de propriedades do documento.</li>
+        <li><b>Estrutura do template…</b> cria as pastas sugeridas pelo template (só as que faltam).</li>
+        <li>Para citar um runbook em qualquer texto, escreva o ID (<code>RB-03</code>): vira um link.</li></ul>` },
     { id: "leitura", role: "viewer", title: "Lendo um playbook", html: `
       <ul><li><b>Fluxograma:</b> clique em uma caixa para ler o trecho da documentação vinculado a ela (passos, ramo, seção). Clique no nome de um time (raia ou caixa de apoio) para ver as responsabilidades e o que ele não faz. A etiqueta no canto da caixa mostra o ID do passo.</li>
         <li><b>Documentação:</b> o documento completo, com índice lateral por seção e subseção: fases e passos (ID, ação, critério de saída), ramos R1, R2…, critérios e o restante. Clique numa imagem para ampliar (${K("Esc")} fecha).</li>
@@ -230,7 +238,7 @@ python3 server.py --host 0.0.0.0 --port 8765 --secure-cookies      # rede, atrá
   const ROLE_LBL = { viewer: "todos", editor: "editores", admin: "administradores" };
   /* quem vê cada tópico: pelo público (role) e, nos de administração, pela permissão específica */
   const AUD = { viewer: () => true, editor: () => canAny("playbook.edit", "playbook.create", "templates.view"), admin: () => canAdmin() };
-  const VIS = { papeis: () => can("roles.manage"), usuarios: () => can("users.manage"), logs: () => can("logs.manage"), sso: () => can("sso.manage"),
+  const VIS = { runbooks: () => can("runbook.view"), papeis: () => can("roles.manage"), usuarios: () => can("users.manage"), logs: () => can("logs.manage"), sso: () => can("sso.manage"),
     aparencia: () => can("branding.edit"), reset: () => can("app.reset"), auditoria: () => can("audit.view"), templates: () => can("templates.view"),
     times: () => can("templates.view"), importar: () => can("playbook.import"), criar: () => can("playbook.create"), ciclo: () => can("playbook.status") };
   const visible = s => (VIS[s.id] || AUD[s.role])();
