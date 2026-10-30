@@ -3,10 +3,49 @@
    Tudo grava pelo server.py, que guarda backup antes de sobrescrever. */
 const Editor = (() => {
   const clone = o => JSON.parse(JSON.stringify(o));
-  let cleanup = null;
+  let cleanup = null, current = null;
   const E = { dirty: false };
 
-  E.unmount = () => { if (cleanup) cleanup(); cleanup = null; };
+  E.unmount = () => { if (cleanup) cleanup(); cleanup = null; current = null; };
+
+  /* Rascunhos: trocar de aba ou de página não perde o que está sendo editado. O editor montado se registra
+     em "current" (chave "pb-01:doc", "templates/padrao:flow"); route() chama stash() antes de desmontar e o
+     editor, ao abrir de novo, recomeça do rascunho. Só salvar, descartar ou fechar a aba apagam o rascunho. */
+  const drafts = new Map();
+  let preferMd = false;                  // o editor de documento reabre no último modo usado (Visual ou Markdown)
+  const matches = (k, prefix) => prefix === undefined || k === prefix || k.startsWith(prefix + ":") || k.startsWith(prefix + "/");
+  E.stash = () => { if (E.dirty && current) drafts.set(current.key, current.get()); E.dirty = false; };
+  E.hasDraft = prefix => [...drafts.keys()].some(k => matches(k, prefix));
+  E.dropDrafts = prefix => { for (const k of [...drafts.keys()]) if (matches(k, prefix)) drafts.delete(k); };
+  const dropCurrent = () => { if (current) drafts.delete(current.key); };
+
+  /* Playbook em Produção: toda gravação pede o tipo da atualização e a descrição, que vão para o histórico.
+     Minor soma 1 depois do ponto (2.3 → 2.4); Major soma 1 antes do ponto e zera o resto (2.3 → 3.0). */
+  E.askChange = (pb, what) => new Promise(resolve => {
+    if (pb.template || pb.gov.status !== "Produção") return resolve(null);
+    const m = String(pb.props["Versão"] || "").match(/(\d+)\.(\d+)/), M = m ? +m[1] : 1, n = m ? +m[2] : 0;
+    modal({ title: "Alteração em Produção", html: `<form id="chForm" class="tform">
+        <div class="notice prod">O <b>${esc(pb.id)}</b> está em Produção: ${what} fica visível na hora para todos os perfis e entra no histórico com a descrição abaixo.</div>
+        <div class="pp-lbl">Tipo de atualização</div>
+        <div class="bg-opts">
+          <label class="bg-opt"><input type="radio" name="type" value="minor" checked><span><b>Minor <em class="vchg">v${M}.${n} → v${M}.${n + 1}</em></b><small>Ajuste, correção ou complemento que não muda a forma de operar.</small></span></label>
+          <label class="bg-opt"><input type="radio" name="type" value="major"><span><b>Major <em class="vchg">v${M}.${n} → v${M + 1}.0</em></b><small>Mudança no fluxo, nas responsabilidades ou nos critérios de decisão.</small></span></label>
+        </div>
+        <label>Descreva as alterações<textarea class="in" name="note" rows="4" maxlength="500" placeholder="ex.: incluído o passo A4 (bloqueio no proxy); ajustado o critério de escalonamento ao CSIRT"></textarea></label>
+        <div class="err" id="chErr" hidden></div>
+        <div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn primary" type="submit">${ic("check")}Salvar alteração</button></div></form>`,
+      onMount: (b, close) => {
+        const f = $("#chForm", b);
+        f.querySelector("[data-cancel]").onclick = () => { close(); resolve(false); };
+        f.onsubmit = e => {
+          e.preventDefault();
+          const note = f.note.value.trim();
+          if (note.length < 5) { $("#chErr", b).textContent = "Descreva as alterações (pelo menos 5 caracteres)."; $("#chErr", b).hidden = false; return f.note.focus(); }
+          close(); resolve({ type: f.type.value, note });
+        };
+        setTimeout(() => f.note.focus(), 40);
+      } });
+  });
 
   /* Cada editor montado registra seus ouvintes num AbortController; remontar (salvar, descartar,
      trocar de aba) aborta os anteriores. Antes, ouvintes antigos sobreviviam presos ao documento
@@ -20,7 +59,7 @@ const Editor = (() => {
   const normTxt = s => (s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
   const GOV_ROWS = ["status", "aprovador", "ultimo revisor", "data de revisao", "versao"];
   const prodBanner = pb => pb.gov.status === "Produção"
-    ? `<div class="notice prod">Este playbook está em <b>Produção</b>: ao salvar, as alterações ficam visíveis na hora para todos os perfis. Para uma revisão maior, volte-o antes para Homologação.</div>` : "";
+    ? `<div class="notice prod">Em <b>Produção</b>: ao salvar, a alteração fica visível para todos.</div>` : "";
 
   /* Adaptador: o que muda entre editar um playbook e editar um template (onde salvar, de onde recarregar,
      o que atualizar depois). Os editores de documento e de fluxograma são os mesmos. */
@@ -31,8 +70,9 @@ const Editor = (() => {
     toast(s.length ? `${what} · ramos sincronizados: ${s.join(", ")}` : what);
   };
   E.playbookAdapter = pb => ({
-    saveDoc: (doc, rev) => api("PUT", `api/pb/${pb.id}/doc`, { doc, rev }).then(E.withSync),
-    saveFlow: (flow, refs, rev) => api("PUT", `api/pb/${pb.id}/flow`, { flow, refs, rev }).then(E.withSync),
+    saveDoc: (doc, rev, change) => api("PUT", `api/pb/${pb.id}/doc`, { doc, rev, change }).then(E.withSync),
+    saveFlow: (flow, refs, rev, change) => api("PUT", `api/pb/${pb.id}/flow`, { flow, refs, rev, change }).then(E.withSync),
+    pid: pb.id, draftKey: pb.id.toLowerCase(),
     reload: () => api("GET", `api/pb/${pb.id}`).then(r => r.playbook),
     uploadImage: dataUrl => api("POST", `api/pb/${pb.id}/img`, { dataUrl }),
     imgUrl: src => `api/pb/${pb.id}/img/${String(src).replace(/^imagens\//, "")}`,
@@ -41,10 +81,10 @@ const Editor = (() => {
     banner: prodBanner(pb), fileBase: pb.id.toLowerCase(),
   });
   async function discard(el, pb, mountFn, what, ad) {
-    if (E.dirty && !confirm(`Descartar todas as alterações ${what}?`)) return;
+    if (E.dirty && !(await ask(`Descartar todas as alterações ${what}? O conteúdo volta ao que está salvo.`, { title: "Descartar alterações", ok: "Descartar", danger: true }))) return;
     try {
       const v = await ad.reload();      // recarrega do servidor: a tela volta a refletir o arquivo
-      E.dirty = false; ad.after(v);
+      E.dirty = false; dropCurrent(); ad.after(v);
       mountFn(el, v); toast("Alterações descartadas");
     } catch (e) { toast(e.message, "err"); }
   }
@@ -55,7 +95,7 @@ const Editor = (() => {
       onMount: (b, close) => {
         b.querySelector("[data-k]").onclick = close;
         b.querySelector("[data-r]").onclick = async () => {
-          close(); E.dirty = false;
+          close(); E.dirty = false; dropCurrent();
           const v = await ad.reload(); ad.after(v); mountFn(el, v);
         };
       } });
@@ -80,7 +120,12 @@ const Editor = (() => {
     mkAd = mkAd || E.playbookAdapter;
     const ad = mkAd(pb), remount = (e2, v) => E.docEditor(e2, v, mkAd);
     const sig = mount();
-    const doc = clone(pb.doc);
+    const dkey = (ad.draftKey || ad.fileBase) + ":doc", dr = drafts.get(dkey);
+    let doc = clone(dr ? dr.doc : pb.doc);
+    const baseRev = dr ? dr.rev : pb.rev;                // rascunho: grava contra a revisão em que começou
+    let mdMode = !!(dr && dr.md != null), mdText = mdMode ? dr.md : "", mdTimer = null, mdSeq = 0;
+    current = { key: dkey, get: () => ({ doc: clone(doc), rev: baseRev, md: mdMode ? mdText : null }) };
+    if (dr) E.dirty = true;
     let lastTa = null;
 
     const ownerOf = path => {            // "s3" | "s3u1"
@@ -92,8 +137,8 @@ const Editor = (() => {
 
     function blockHtml(b, owner, k, n) {
       const ctl = `<div class="blk-ctl"><span class="blk-type">${BLOCK_NAMES[b.t]}</span>
-        <button data-act="blk-up" title="Subir" ${k === 0 ? "disabled" : ""}>↑</button><button data-act="blk-down" title="Descer" ${k === n - 1 ? "disabled" : ""}>↓</button>
-        <button data-act="blk-del" title="Remover bloco" class="del">✕</button></div>`;
+        <button data-act="blk-up" title="Subir" aria-label="Subir" ${k === 0 ? "disabled" : ""}>${ic("up")}</button><button data-act="blk-down" title="Descer" aria-label="Descer" ${k === n - 1 ? "disabled" : ""}>${ic("down")}</button>
+        <button data-act="blk-del" title="Remover bloco" aria-label="Remover bloco" class="del">${ic("close")}</button></div>`;
       const at = `data-o="${owner}" data-k="${k}"`;
       let body = "";
       const govSec = /^Propriedades/.test(ownerOf(owner).title || "");
@@ -109,38 +154,45 @@ const Editor = (() => {
           const m = it.match(/^\[( |x)\] (.*)$/s);
           return `<li>${m ? `<input type="checkbox" data-act="li-toggle" data-i="${i}" ${m[1] === "x" ? "checked" : ""} title="Marcar como concluído">` : `<span class="dot">•</span>`}
             <textarea class="ta" data-f="item" data-i="${i}" rows="1" placeholder="Item da lista">${esc(m ? m[2] : it)}</textarea>
-            <button data-act="li-del" data-i="${i}" title="Remover item" class="x">✕</button></li>`;
-        }).join("")}</ul><div class="row-btns"><button class="btn ghost xs" data-act="li-add">＋ Item</button><button class="btn ghost xs" data-act="li-check" title="Transforma a lista em checklist (ou desfaz)">☑ Checklist</button></div>`;
+            <button data-act="li-del" data-i="${i}" title="Remover item" aria-label="Remover item" class="x">${ic("close")}</button></li>`;
+        }).join("")}</ul><div class="row-btns"><button class="btn ghost xs" data-act="li-add">${ic("plus")}Item</button><button class="btn ghost xs" data-act="li-check" title="Transforma a lista em checklist (ou desfaz)">${ic("checklist")}Checklist</button></div>`;
       else if (b.t === "table") {
         const nc = b.head.length;
         body = `<div class="ed-tw"><table class="ed-table"><thead>
-          <tr class="colctl">${b.head.map((_, c) => `<th><button data-act="col-del" data-c="${c}" title="Remover coluna" ${nc < 2 ? "disabled" : ""}>✕</button></th>`).join("")}<th></th></tr>
-          <tr>${b.head.map((h, c) => `<th><textarea class="ta th" data-f="head" data-c="${c}" rows="1">${esc(h)}</textarea></th>`).join("")}<th class="addcol"><button data-act="col-add" title="Adicionar coluna">＋</button></th></tr></thead>
+          <tr class="colctl">${b.head.map((_, c) => `<th><button data-act="col-del" data-c="${c}" title="Remover coluna" aria-label="Remover coluna" ${nc < 2 ? "disabled" : ""}>${ic("close")}</button></th>`).join("")}<th></th></tr>
+          <tr>${b.head.map((h, c) => `<th><textarea class="ta th" data-f="head" data-c="${c}" rows="1">${esc(h)}</textarea></th>`).join("")}<th class="addcol"><button data-act="col-add" title="Adicionar coluna" aria-label="Adicionar coluna">${ic("plus")}</button></th></tr></thead>
           <tbody>${b.rows.map((r, ri) => `<tr class="${locked(ri) ? "locked" : ""}">${b.head.map((_, c) => `<td><textarea class="ta" data-f="cell" data-r="${ri}" data-c="${c}" rows="1" ${locked(ri) ? `readonly title="Controlado pelo ciclo de vida: muda com “Alterar status” e ao salvar (a versão é automática)"` : ""}>${esc(r[c] ?? "")}</textarea></td>`).join("")}
-            <td class="rowctl">${mitreRow(ri) ? `<button data-act="mitre" data-r="${ri}" title="Escolher táticas do MITRE ATT&CK">🎯</button>` : ""}${locked(ri) ? `<span class="lock" title="Campo controlado pelo ciclo de vida">🔒</span>` : `<button data-act="row-up" data-r="${ri}" title="Subir linha" ${ri === 0 ? "disabled" : ""}>↑</button><button data-act="row-del" data-r="${ri}" title="Remover linha" class="x">✕</button>`}</td></tr>`).join("")}</tbody></table></div>
-          <div class="row-btns"><button class="btn ghost xs" data-act="row-add">＋ Linha</button></div>`;
+            <td class="rowctl">${mitreRow(ri) ? `<button data-act="mitre" data-r="${ri}" title="Escolher táticas do MITRE ATT&CK" aria-label="Escolher táticas do MITRE ATT&CK">${ic("mitre")}</button>` : ""}${locked(ri) ? `<span class="lock" title="Campo controlado pelo ciclo de vida">${ic("lock")}</span>` : `<button data-act="row-up" data-r="${ri}" title="Subir linha" aria-label="Subir linha" ${ri === 0 ? "disabled" : ""}>${ic("up")}</button><button data-act="row-del" data-r="${ri}" title="Remover linha" aria-label="Remover linha" class="x">${ic("close")}</button>`}</td></tr>`).join("")}</tbody></table></div>
+          <div class="row-btns"><button class="btn ghost xs" data-act="row-add">${ic("plus")}Linha</button></div>`;
       }
       return `<div class="blk blk-${b.t}" ${at}>${ctl}${body}</div>`;
     }
 
     function addBar(owner, ctx) {
       let extra = "";
-      if (ctx === "ramos") extra = `<button class="btn soft xs" data-act="ramo-add" data-o="${owner}">＋ Novo ramo</button><small class="muted sync-hint" title="Ao salvar, ramos criados, renomeados ou removidos aqui são aplicados no fluxograma e na aba Ramos">⇄ sincroniza com o fluxograma</small>`;
-      if (ctx === "fases") extra = `<button class="btn soft xs" data-act="fase-add" data-o="${owner}">＋ Nova fase</button>`;
-      return `<div class="addbar" data-o="${owner}"><span>Adicionar:</span>${Object.entries(BLOCK_NAMES).filter(([t]) => t !== "img").map(([t, n]) => `<button class="btn ghost xs" data-act="blk-add" data-t="${t}" data-o="${owner}">＋ ${n}</button>`).join("")}
-        ${ad.uploadImage ? `<button class="btn ghost xs" data-act="img-add" data-o="${owner}" title="PNG, JPG, WEBP ou GIF até 3 MB. Também dá para colar (Ctrl+V) ou arrastar a imagem para a seção">＋ Imagem</button>` : ""}
-        ${ctx !== "sub" ? `<button class="btn ghost xs" data-act="sub-add" data-o="${owner}">＋ Subseção</button>` : ""}${extra}</div>`;
+      if (ctx === "ramos") extra = `<button class="btn soft xs" data-act="ramo-add" data-o="${owner}">${ic("plus")}Novo ramo</button><small class="muted sync-hint" title="Ao salvar, ramos criados, renomeados ou removidos aqui são aplicados no fluxograma">${ic("sync")}sincroniza com o fluxograma</small>`;
+      if (ctx === "fases") extra = `<button class="btn soft xs" data-act="fase-add" data-o="${owner}">${ic("plus")}Nova fase</button>`;
+      return `<div class="addbar" data-o="${owner}"><span>Adicionar:</span>${Object.entries(BLOCK_NAMES).filter(([t]) => t !== "img").map(([t, n]) => `<button class="btn ghost xs" data-act="blk-add" data-t="${t}" data-o="${owner}">${ic("plus")}${n}</button>`).join("")}
+        ${ad.uploadImage ? `<button class="btn ghost xs" data-act="img-add" data-o="${owner}" title="PNG, JPG, WEBP ou GIF até 3 MB. Também dá para colar (Ctrl+V) ou arrastar a imagem para a seção">${ic("image")}Imagem</button>` : ""}
+        ${ctx !== "sub" ? `<button class="btn ghost xs" data-act="sub-add" data-o="${owner}">${ic("plus")}Subseção</button>` : ""}${extra}</div>`;
     }
 
+    const bar = () => `<div class="ed-bar" id="edbar"><div class="ed-title">${ad.docBar || `<b>Documento</b>`}</div>
+        <div class="ed-actions"><div class="seg-tabs" role="tablist" aria-label="Modo de edição">
+            <button role="tab" data-mode="visual" class="${mdMode ? "" : "on"}" aria-selected="${!mdMode}" title="Edição por blocos">${ic("pageEdit")}Visual</button>
+            <button role="tab" data-mode="md" class="${mdMode ? "on" : ""}" aria-selected="${mdMode}" title="Editar o documento inteiro em Markdown, com prévia">${ic("code")}Markdown</button></div>
+          <span class="dirty-dot" title="Alterações não salvas"></span>
+          ${mdMode ? "" : `<button class="btn ghost" id="bold" title="Negrito na seleção (Ctrl+B)">${ic("bold")}Negrito</button>`}
+          <button class="btn ghost" id="discard">Descartar</button><button class="btn primary" id="save">${ic("check")}Salvar documento</button></div></div>
+        ${ad.banner}`;
+
     function render() {
+      if (mdMode) return renderMd();
       const y = window.scrollY;
-      el.innerHTML = `<div class="ed-bar" id="edbar"><div>${ad.docBar || `<b>Editando documento</b><span class="muted"> · as alterações viram o arquivo <code>.md</code> (backup automático a cada gravação)</span>`}</div>
-          <div class="ed-actions"><span class="dirty-dot" title="Alterações não salvas"></span><button class="btn ghost" id="bold" title="Negrito na seleção (Ctrl+B)"><b>N</b> negrito</button>
-          <button class="btn ghost" id="discard">Descartar</button><button class="btn primary" id="save">Salvar documento</button></div></div>
-        ${ad.banner}
+      el.innerHTML = `${bar()}
         <div class="ed-grid"><nav class="toc ed-toc">${doc.sections.map((s, i) => `<a href="#" data-go="${i}">${esc(s.title || "(sem título)")}</a>`).join("")}
-          <button class="btn ghost xs" data-act="sec-add" data-i="${doc.sections.length - 1}" style="margin-top:8px">＋ Seção</button>
-          ${doc.sections.some(isRamoSec) ? "" : `<button class="btn soft xs" data-act="ramos-sec" style="margin-top:6px" title="Cria a seção “Ramos em detalhe” com o primeiro ramo">＋ Seção de ramos</button>`}</nav>
+          <button class="btn ghost xs" data-act="sec-add" data-i="${doc.sections.length - 1}" style="margin-top:8px">${ic("plus")}Seção</button>
+          ${doc.sections.some(isRamoSec) ? "" : `<button class="btn soft xs" data-act="ramos-sec" style="margin-top:6px" title="Cria a seção “Ramos em detalhe” com o primeiro ramo">${ic("plus")}Seção de ramos</button>`}</nav>
         <div class="ed-doc">
           <div class="ecard head"><label>Título do playbook<input class="in big" data-f="title" value="${esc(doc.title)}"></label>
             <label>Linha de versão / autor<input class="in" data-f="byline" value="${esc(doc.byline)}"></label></div>
@@ -148,15 +200,15 @@ const Editor = (() => {
             const ctx = isRamoSec(s) ? "ramos" : /^Fluxo de resposta/.test(s.title) ? "fases" : "sec";
             return `<div class="ecard sec" id="esec-${i}" data-o="s${i}">
               <div class="sec-head"><input class="in h2" data-f="stitle" data-o="s${i}" value="${esc(s.title)}" placeholder="Título da seção">
-                <div class="blk-ctl"><button data-act="sec-up" data-i="${i}" ${i === 0 ? "disabled" : ""} title="Subir seção">↑</button><button data-act="sec-down" data-i="${i}" ${i === doc.sections.length - 1 ? "disabled" : ""} title="Descer seção">↓</button>
-                <button data-act="sec-del" data-i="${i}" class="del" title="Remover seção">✕</button></div></div>
+                <div class="blk-ctl"><button data-act="sec-up" data-i="${i}" ${i === 0 ? "disabled" : ""} title="Subir seção" aria-label="Subir seção">${ic("up")}</button><button data-act="sec-down" data-i="${i}" ${i === doc.sections.length - 1 ? "disabled" : ""} title="Descer seção" aria-label="Descer seção">${ic("down")}</button>
+                <button data-act="sec-del" data-i="${i}" class="del" title="Remover seção" aria-label="Remover seção">${ic("close")}</button></div></div>
               ${s.blocks.map((b, k) => blockHtml(b, `s${i}`, k, s.blocks.length)).join("")}
               ${addBar(`s${i}`, ctx)}
               ${s.subs.map((u, j) => `<div class="sub" data-o="s${i}u${j}"><div class="sec-head"><input class="in h3" data-f="stitle" data-o="s${i}u${j}" value="${esc(u.title)}" placeholder="Título da subseção">
-                <div class="blk-ctl"><button data-act="sub-up" data-o="s${i}u${j}" ${j === 0 ? "disabled" : ""}>↑</button><button data-act="sub-down" data-o="s${i}u${j}" ${j === s.subs.length - 1 ? "disabled" : ""}>↓</button>
-                <button data-act="sub-del" data-o="s${i}u${j}" class="del" title="Remover subseção">✕</button></div></div>
+                <div class="blk-ctl"><button data-act="sub-up" data-o="s${i}u${j}" ${j === 0 ? "disabled" : ""} title="Subir subseção" aria-label="Subir subseção">${ic("up")}</button><button data-act="sub-down" data-o="s${i}u${j}" ${j === s.subs.length - 1 ? "disabled" : ""} title="Descer subseção" aria-label="Descer subseção">${ic("down")}</button>
+                <button data-act="sub-del" data-o="s${i}u${j}" class="del" title="Remover subseção" aria-label="Remover subseção">${ic("close")}</button></div></div>
                 ${u.blocks.map((b, k) => blockHtml(b, `s${i}u${j}`, k, u.blocks.length)).join("")}${addBar(`s${i}u${j}`, "sub")}</div>`).join("")}
-              <div class="sec-after"><button class="btn ghost xs" data-act="sec-add" data-i="${i}">＋ Seção abaixo</button></div></div>`;
+              <div class="sec-after"><button class="btn ghost xs" data-act="sec-add" data-i="${i}">${ic("plus")}Seção abaixo</button></div></div>`;
           }).join("")}
         </div></div>`;
       el.querySelectorAll("textarea").forEach(autosize);
@@ -188,7 +240,7 @@ const Editor = (() => {
       return "";
     };
 
-    function act(btn) {
+    async function act(btn) {
       const a = btn.dataset.act, blk = btn.closest(".blk");
       const owner = btn.dataset.o || (blk && blk.dataset.o);
       const k = blk ? +blk.dataset.k : -1;
@@ -199,13 +251,13 @@ const Editor = (() => {
         case "sec-add": doc.sections.splice(i + 1, 0, { title: "Nova seção", blocks: [{ t: "p", text: "" }], subs: [] }); break;
         case "sec-up": swap(doc.sections, i, i - 1); break;
         case "sec-down": swap(doc.sections, i, i + 1); break;
-        case "sec-del": if (!confirm(`Remover a seção "${doc.sections[i].title}" e todo o conteúdo dela?`)) return; doc.sections.splice(i, 1); break;
+        case "sec-del": if (!(await ask(`Remover a seção "${doc.sections[i].title}" e todo o conteúdo dela?`, { title: "Remover seção", ok: "Remover", danger: true }))) return; doc.sections.splice(i, 1); break;
         case "sub-add": ownerOf(owner).subs.push({ title: "Nova subseção", blocks: [{ t: "p", text: "" }] }); break;
         case "sub-up": case "sub-down": case "sub-del": {
           const m = owner.match(/^s(\d+)u(\d+)$/), subs = doc.sections[+m[1]].subs, j = +m[2];
           if (a === "sub-del") {
             const rm = subs[j].title.trim().match(RAMO_SUB);
-            if (!confirm(rm ? `Remover o ramo "${subs[j].title}"?\n\nAo salvar, a caixa R${ramoKey(rm[1])} também sai do fluxograma.` : `Remover a subseção "${subs[j].title}"?`)) return;
+            if (!(await ask(rm ? `Remover o ramo "${subs[j].title}"?\n\nAo salvar, a caixa R${ramoKey(rm[1])} também sai do fluxograma.` : `Remover a subseção "${subs[j].title}"?`, { title: rm ? "Remover ramo" : "Remover subseção", ok: "Remover", danger: true }))) return;
             subs.splice(j, 1);
           }
           else swap(subs, j, a === "sub-up" ? j - 1 : j + 1);
@@ -228,7 +280,7 @@ const Editor = (() => {
         case "img-add": return pickImage(owner, ownerOf(owner).blocks.length);
         case "blk-up": swap(ownerOf(owner).blocks, k, k - 1); break;
         case "blk-down": swap(ownerOf(owner).blocks, k, k + 1); break;
-        case "blk-del": if (!confirm("Remover este bloco?")) return; ownerOf(owner).blocks.splice(k, 1); break;
+        case "blk-del": if (!(await ask("Remover este bloco?", { title: "Remover bloco", ok: "Remover", danger: true }))) return; ownerOf(owner).blocks.splice(k, 1); break;
         case "li-add": b.items.push(b.items.some(x => /^\[( |x)\] /.test(x)) ? "[ ] " : ""); break;
         case "li-del": b.items.splice(+btn.dataset.i, 1); if (!b.items.length) b.items.push(""); break;
         case "li-check": {
@@ -243,10 +295,10 @@ const Editor = (() => {
           return;
         }
         case "row-add": b.rows.push(b.head.map((_, c) => c === 0 && b.head[0] === "ID" ? nextId(b.rows) : "")); break;
-        case "row-del": if (b.rows.length > 1 || confirm("Remover a última linha?")) b.rows.splice(+btn.dataset.r, 1); break;
+        case "row-del": if (b.rows.length > 1 || await ask("Remover a última linha da tabela?", { title: "Remover linha", ok: "Remover", danger: true })) b.rows.splice(+btn.dataset.r, 1); else return; break;
         case "row-up": swap(b.rows, +btn.dataset.r, +btn.dataset.r - 1); break;
         case "col-add": b.head.push("Nova coluna"); b.rows.forEach(r => r.push("")); break;
-        case "col-del": { const c = +btn.dataset.c; if (!confirm(`Remover a coluna "${b.head[c]}"?`)) return; b.head.splice(c, 1); b.rows.forEach(r => r.splice(c, 1)); break; }
+        case "col-del": { const c = +btn.dataset.c; if (!(await ask(`Remover a coluna "${b.head[c]}"?`, { title: "Remover coluna", ok: "Remover", danger: true }))) return; b.head.splice(c, 1); b.rows.forEach(r => r.splice(c, 1)); break; }
         default: return;
       }
       markDirty($("#edbar")); render();
@@ -313,25 +365,143 @@ const Editor = (() => {
       return box ? [box.dataset.o, ownerOf(box.dataset.o).blocks.length] : null;
     }
 
+    /* ── modo Markdown: o documento inteiro como texto, com prévia ao lado. O servidor converte nos dois
+       sentidos (mesmo parser que lê o .md), então o que a prévia mostra é o que será gravado. */
+    const MD_TOOLS = [["bold", "bold", "Negrito (Ctrl+B)"], ["italic", "italic", "Itálico (Ctrl+I)"], ["h2", "H2", "Seção (##)"], ["h3", "H3", "Subseção (###)"],
+      ["list", "list", "Lista"], ["check", "checklist", "Checklist"], ["quote", "quote", "Destaque (>)"], ["table", "table", "Tabela"], ["code", "code", "Código"],
+      ...(ad.uploadImage ? [["image", "image", "Imagem (também dá para colar ou arrastar)"]] : [])];
+    const MD_HELP = `<table><tbody>
+        <tr><td><code># Título</code></td><td>título do playbook (1ª linha)</td></tr>
+        <tr><td><code>## Seção</code> · <code>### Subseção</code></td><td>seções e subseções (ramos: <code>### R3 · Nome</code>)</td></tr>
+        <tr><td><code>**negrito**</code> · <code>*itálico*</code> · <code>\`código\`</code></td><td>no texto</td></tr>
+        <tr><td><code>- item</code> · <code>- [ ] tarefa</code></td><td>lista e checklist (<code>- [x]</code> = concluído)</td></tr>
+        <tr><td><code>&gt; texto</code></td><td>destaque</td></tr>
+        <tr><td><code>| A | B |</code> + <code>| --- | --- |</code></td><td>tabela (passos: colunas ID, Ação, Critério de saída)</td></tr>
+        <tr><td><code>![legenda](imagens/…)</code></td><td>imagem, numa linha própria</td></tr></tbody></table>
+      <p>Status, aprovador, revisor, data e versão nas propriedades são do ciclo de vida: o servidor os mantém ao salvar.</p>`;
+    function renderMd() {
+      el.innerHTML = `${bar()}
+        <div class="md-wrap">
+          <section class="md-edit"><div class="md-tools" role="toolbar" aria-label="Formatação">${MD_TOOLS.map(([k, i, t]) =>
+            `<button type="button" data-md="${k}" title="${t}" aria-label="${t}">${Icons[i] ? ic(i) : `<b>${i}</b>`}</button>`).join("")}</div>
+            <textarea id="mdText" class="md-ta" spellcheck="false" autocapitalize="off" aria-label="Documento em Markdown"></textarea>
+            <details class="md-help"><summary>${ic("info")}Sintaxe aceita</summary>${MD_HELP}</details></section>
+          <section class="md-prev"><div class="md-prev-h">${ic("eye")}Prévia <span class="muted small" id="mdState"></span></div>
+            <div class="err" id="mdErr" hidden></div><div class="doc" id="mdPrev"></div></section></div>`;
+      const ta = $("#mdText", el);
+      ta.value = mdText;
+      if (E.dirty) $("#edbar").classList.add("dirty");
+      preview(true);
+    }
+    async function parseMd() {
+      const r = await api("POST", "api/md", { md: mdText, pid: ad.pid || null });
+      return r;
+    }
+    function preview(now) {
+      clearTimeout(mdTimer);
+      mdTimer = setTimeout(async () => {
+        const seq = ++mdSeq, st = $("#mdState", el), err = $("#mdErr", el), box = $("#mdPrev", el);
+        if (!box) return;
+        st.textContent = "atualizando…";
+        try {
+          const r = await parseMd();
+          if (seq !== mdSeq || !document.contains(box)) return;
+          err.hidden = true; st.textContent = "";
+          box.innerHTML = `<h1 class="md-h1">${esc(r.doc.title)}</h1>` + r.sections.map(x => `<section class="md"><h2>${esc(x.title)}</h2>${x.html}${x.subs.map(u => `<h3>${esc(u.title)}</h3>${u.html}`).join("")}</section>`).join("");
+        } catch (x) { if (seq !== mdSeq) return; st.textContent = ""; err.textContent = x.message; err.hidden = false; }
+      }, now ? 0 : 350);
+    }
+    function mdEdit(fn) {
+      const ta = $("#mdText", el); if (!ta) return;
+      const a = ta.selectionStart, b = ta.selectionEnd, v = ta.value;
+      const [text, s0, s1] = fn(v, a, b);
+      ta.value = text; ta.focus(); ta.setSelectionRange(s0, s1);
+      mdText = text; markDirty($("#edbar")); preview();
+    }
+    const wrapSel = (pre, post, ph) => mdEdit((v, a, b) => {
+      const sel = v.slice(a, b) || ph;
+      if (v.slice(a - pre.length, a) === pre && v.slice(b, b + post.length) === post) return [v.slice(0, a - pre.length) + sel + v.slice(b + post.length), a - pre.length, a - pre.length + sel.length];
+      return [v.slice(0, a) + pre + sel + post + v.slice(b), a + pre.length, a + pre.length + sel.length];
+    });
+    const prefixLines = pre => mdEdit((v, a, b) => {
+      const ls = v.lastIndexOf("\n", a - 1) + 1, le = v.indexOf("\n", b); const end = le < 0 ? v.length : le;
+      const block = v.slice(ls, end).split("\n").map(l => l.startsWith(pre) ? l.slice(pre.length) : pre + l.replace(/^(#{2,3} |- \[[ x]\] |- |> )/, "")).join("\n");
+      return [v.slice(0, ls) + block + v.slice(end), ls, ls + block.length];
+    });
+    const insertBlock = txt => mdEdit((v, a) => {
+      const before = v.slice(0, a), nl = before && !before.endsWith("\n\n") ? (before.endsWith("\n") ? "\n" : "\n\n") : "";
+      const out = before + nl + txt + "\n\n" + v.slice(a).replace(/^\n+/, "");
+      const pos = before.length + nl.length + txt.length;
+      return [out, pos, pos];
+    });
+    async function mdImages(files) {
+      files = [...files].filter(f => f && f.type.startsWith("image/"));
+      for (const f of files) {
+        if (!IMG_OK.includes(f.type)) { toast(`${f.name || "Imagem"}: use PNG, JPG, WEBP ou GIF`, "err"); continue; }
+        if (f.size > IMG_MAX) { toast(`${f.name || "Imagem"} grande demais (máx. 3 MB)`, "err"); continue; }
+        toast("Enviando imagem…");
+        try {
+          const dataUrl = await new Promise((ok, bad) => { const rd = new FileReader(); rd.onload = () => ok(rd.result); rd.onerror = bad; rd.readAsDataURL(f); });
+          const r = await ad.uploadImage(dataUrl);
+          insertBlock(`![](${r.src})`);
+        } catch (e) { toast(e.message || "Falha ao enviar a imagem", "err"); }
+      }
+    }
+    function mdTool(k) {
+      if (k === "bold") return wrapSel("**", "**", "texto");
+      if (k === "italic") return wrapSel("*", "*", "texto");
+      if (k === "code") return wrapSel("`", "`", "código");
+      if (k === "h2") return prefixLines("## ");
+      if (k === "h3") return prefixLines("### ");
+      if (k === "list") return prefixLines("- ");
+      if (k === "check") return prefixLines("- [ ] ");
+      if (k === "quote") return prefixLines("> ");
+      if (k === "table") return insertBlock("| Coluna 1 | Coluna 2 |\n| --- | --- |\n|  |  |");
+      if (k === "image") { const inp = document.createElement("input"); inp.type = "file"; inp.accept = IMG_OK.join(","); inp.multiple = true; inp.onchange = () => mdImages(inp.files); inp.click(); }
+    }
+    async function setMode(md) {
+      if (md === mdMode) return;
+      if (md) {
+        try { mdText = (await api("POST", "api/md", { doc })).md; } catch (x) { return toast(x.message, "err"); }
+        mdMode = true; preferMd = true; render(); $("#mdText", el).focus();
+      } else {
+        try { doc = (await parseMd()).doc; } catch (x) { $("#mdErr", el).textContent = x.message; $("#mdErr", el).hidden = false; return toast("Corrija o Markdown antes de voltar ao modo visual", "warn"); }
+        mdMode = false; preferMd = false; render();
+      }
+    }
+
     async function save() {
+      if (mdMode) {
+        try { doc = (await parseMd()).doc; }
+        catch (x) { $("#mdErr", el).textContent = x.message; $("#mdErr", el).hidden = false; return toast(x.message, "err"); }
+      }
       if (!doc.title.trim()) return toast("O título não pode ficar vazio", "err");
+      const change = await E.askChange(pb, "a alteração do documento");
+      if (change === false) return;
       const btn = $("#save"); btn.disabled = true; btn.textContent = "Salvando…";
       try {
-        const v = await ad.saveDoc(doc, pb.rev);
-        E.dirty = false; savedToast(v, "Documento salvo");
+        const v = await ad.saveDoc(doc, baseRev, change || undefined);
+        E.dirty = false; dropCurrent(); savedToast(v, change ? `Documento salvo · versão ${(v.props || {})["Versão"] || ""}` : "Documento salvo");
         ad.after(v); remount(el, v);
-      } catch (err) { saveError(err, el, pb, remount, ad); btn.disabled = false; btn.textContent = "Salvar documento"; }
+      } catch (err) { saveError(err, el, pb, remount, ad); btn.disabled = false; btn.innerHTML = `${ic("check")}Salvar documento`; }
     }
 
     render();
-    el.addEventListener("input", onInput, sig);
+    if (dr) toast("Rascunho restaurado: as alterações que você deixou nesta aba continuam aqui");
+    else if (preferMd) setMode(true);
+    el.addEventListener("input", e => {
+      if (e.target.id === "mdText") { mdText = e.target.value; markDirty($("#edbar")); return preview(); }
+      onInput(e);
+    }, sig);
     el.addEventListener("focusin", e => { if (e.target.tagName === "TEXTAREA") lastTa = e.target; }, sig);
     el.addEventListener("click", e => {
       const go = e.target.closest("[data-go]");
       if (go) { e.preventDefault(); document.getElementById("esec-" + go.dataset.go).scrollIntoView({ block: "start" }); return; }
-      if (e.target.id === "save") return save();
+      const mb = e.target.closest("[data-mode]"); if (mb) return setMode(mb.dataset.mode === "md");
+      const tb = e.target.closest("[data-md]"); if (tb) return mdTool(tb.dataset.md);
+      if (e.target.closest("#save")) return save();
       if (e.target.closest("#bold")) return bold();
-      if (e.target.id === "discard") return discard(el, pb, remount, "do documento", ad);
+      if (e.target.closest("#discard")) return discard(el, pb, remount, "do documento", ad);
       const btn = e.target.closest("[data-act]");
       if (btn && btn.dataset.act !== "li-toggle") act(btn);
     }, sig);
@@ -339,6 +509,7 @@ const Editor = (() => {
     if (ad.uploadImage) {
       el.addEventListener("paste", e => {
         const files = [...(e.clipboardData ? e.clipboardData.files : [])].filter(f => f.type.startsWith("image/"));
+        if (mdMode) { if (files.length && e.target.id === "mdText") { e.preventDefault(); mdImages(files); } return; }
         const tg = dropTarget(e.target);
         if (!files.length || !tg) return;
         e.preventDefault(); addImages(files, ...tg);
@@ -351,14 +522,23 @@ const Editor = (() => {
       el.addEventListener("dragleave", e => { const box = e.target.closest(".img-over"); if (box && !box.contains(e.relatedTarget)) box.classList.remove("img-over"); }, sig);
       el.addEventListener("drop", e => {
         el.querySelectorAll(".img-over").forEach(x => x.classList.remove("img-over"));
+        if (mdMode) { if (e.target.id === "mdText" && e.dataTransfer.files.length) { e.preventDefault(); mdImages(e.dataTransfer.files); } return; }
         const tg = dropTarget(e.target);
         if (!tg || !e.dataTransfer.files.length) return;
         e.preventDefault(); addImages(e.dataTransfer.files, ...tg);
       }, sig);
     }
     const key = e => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b" && document.activeElement.tagName === "TEXTAREA") { e.preventDefault(); bold(); }
+      if (document.querySelector(".modal-bg")) return;
+      const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
+      if (mod && k === "s") { e.preventDefault(); save(); }
+      if (mdMode && document.activeElement.id === "mdText") {
+        if (mod && k === "b") { e.preventDefault(); mdTool("bold"); }
+        else if (mod && k === "i") { e.preventDefault(); mdTool("italic"); }
+        else if (e.key === "Tab") { e.preventDefault(); mdEdit((v, a, b) => [v.slice(0, a) + "  " + v.slice(b), a + 2, a + 2]); }
+        return;
+      }
+      if (mod && k === "b" && document.activeElement.tagName === "TEXTAREA") { e.preventDefault(); bold(); }
     };
     document.addEventListener("keydown", key, sig);
   };
@@ -396,7 +576,11 @@ const Editor = (() => {
     const ad = mkAd(pb), remount = (e2, v) => E.flowEditor(e2, v, mkAd);
     const sig = mount();
     const CAT = App.data.catalog;
-    let flow = clone(pb.flow), refs = clone(pb.refs || {});
+    const dkey = (ad.draftKey || ad.fileBase) + ":flow", dr = drafts.get(dkey);
+    let flow = clone(dr ? dr.flow : pb.flow), refs = clone(dr ? dr.refs : (pb.refs || {}));
+    const baseRev = dr ? dr.rev : pb.rev;
+    current = { key: dkey, get: () => ({ flow: clone(flow), refs: clone(refs), rev: baseRev }) };
+    if (dr) E.dirty = true;
     let sel = null, mode = null, zoomF = 1, drag = null, autoFit = true;
     let multi = new Set();               // seleção múltipla (Shift/Ctrl+clique, laço, Ctrl+A)
     /* times oferecidos: os do template (do playbook ou o próprio template em edição); os de outros
@@ -454,20 +638,20 @@ const Editor = (() => {
       return prefix + i;
     }
 
-    el.innerHTML = `<div class="ed-bar fe-bar" id="fbar"><div>${ad.flowBar || `<b>Editando fluxograma</b><span class="muted"> · formas, cores e raias seguem o modelo dos playbooks; grava o <code>.drawio</code> (página 2 preservada)</span>`}</div>
+    el.innerHTML = `<div class="ed-bar fe-bar" id="fbar"><div class="ed-title">${ad.flowBar || `<b>Fluxograma</b>`}</div>
       <div class="ed-actions"><span class="dirty-dot" title="Alterações não salvas"></span>
-        <button class="btn ghost" id="fundo" title="Desfazer (Ctrl+Z)">↶</button><button class="btn ghost" id="fredo" title="Refazer (Ctrl+Shift+Z)">↷</button>
-        <button class="btn ghost" id="fall" title="Selecionar todas as caixas (Ctrl+A) para mover ou redimensionar juntas">⬚ Tudo</button>
-        <span class="sep"></span><button class="btn ghost" data-z="-1">−</button><button class="btn ghost" data-z="0" title="Ajustar">⤢</button><button class="btn ghost" data-z="1">+</button>
-        <span class="sep"></span><button class="btn ghost" id="fdiscard">Descartar</button><button class="btn primary" id="fsave">Salvar fluxograma</button></div></div>
+        <button class="btn ghost icon" id="fundo" title="Desfazer (Ctrl+Z)" aria-label="Desfazer">${ic("undo")}</button><button class="btn ghost icon" id="fredo" title="Refazer (Ctrl+Shift+Z)" aria-label="Refazer">${ic("redo")}</button>
+        <button class="btn ghost" id="fall" title="Selecionar todas as caixas (Ctrl+A) para mover ou redimensionar juntas">${ic("selectAll")}Tudo</button>
+        <span class="sep"></span><button class="btn ghost icon" data-z="-1" title="Diminuir" aria-label="Diminuir">${ic("zoomOut")}</button><button class="btn ghost icon" data-z="0" title="Ajustar" aria-label="Ajustar">${ic("fit")}</button><button class="btn ghost icon" data-z="1" title="Aumentar" aria-label="Aumentar">${ic("zoomIn")}</button>
+        <span class="sep"></span><button class="btn ghost" id="fdiscard">Descartar</button><button class="btn primary" id="fsave">${ic("check")}Salvar fluxograma</button></div></div>
       <div class="fe-grid">
         <aside class="fe-pal"><div class="pal-title">Formas do modelo</div>
           ${PRESETS.map(p => `<div class="pal-item" data-preset="${p.key}" title="Clique e depois clique no fluxograma, ou arraste até a raia">${presetSvg(p)}<div><b>${p.name}</b><small>${p.desc}</small></div></div>`).join("")}
           <div class="pal-title" style="margin-top:14px">Setas</div>
-          <div class="pal-help">Selecione uma caixa e arraste o círculo <b>→</b> até a caixa de destino. O tipo da seta é sugerido pelas raias (handoff, escalonamento, apoio).</div>
+          <div class="pal-help">Selecione uma caixa e arraste o círculo ao lado dela até a caixa de destino. O tipo da seta é sugerido pelas raias (handoff, escalonamento, apoio).</div>
           ${Object.values(CAT.edgeTypes).map(t => `<div class="pal-edge"><i style="border-top:${t.sw + .5}px ${t.dashed ? "dashed" : "solid"} ${t.color}"></i>${t.label}</div>`).join("")}
         </aside>
-        <div class="fe-main"><div class="fe-modes"><button class="on" data-mode="visual">◧ Visual</button><button data-mode="code" title="Editar o fluxo como texto (Mermaid)">&lt;/&gt; Código</button></div>
+        <div class="fe-main"><div class="fe-modes seg-tabs"><button class="on" data-mode="visual">${ic("eye")}Visual</button><button data-mode="code" title="Editar o fluxo como texto (Mermaid)">${ic("code")}Código</button></div>
           <div class="fe-status" id="fstatus"></div><div class="flowbox fe-canvas" id="fcanvas"></div></div>
         <aside class="fe-props" id="fprops"></aside>
       </div>`;
@@ -581,16 +765,40 @@ const Editor = (() => {
       selectEdge(id);
       draw(); props();
     }
+    /* Rota fixa (e.lock): a seta guarda lados de saída/entrada e pontos de dobra quando as caixas se movem.
+       Liga sozinha quando o usuário escolhe um lado ou mexe nos pontos; sem ela, a rota se refaz automaticamente. */
     function freeEdges(nodeId) {
-      for (const e of flow.edges) if (e.from === nodeId || e.to === nodeId) { e.wps = []; e.exit = null; e.entry = null; }
+      for (const e of flow.edges) if ((e.from === nodeId || e.to === nodeId) && !e.lock) { e.wps = []; e.exit = null; e.entry = null; }
     }
-    function deleteSel() {
+    /* pontos de dobra: em que posição da lista entra um ponto criado no trecho i do desenho */
+    function wpIndexForSegment(e, seg) {
+      const le = lay.edges.find(x => x.id === e.id); if (!le) return (e.wps || []).length;
+      let from = 0, n = 0;
+      (e.wps || []).forEach(w => {
+        const ln = lay.byKey[w.lane]; if (!ln) return;
+        const ax = ln.x + w.x, ay = ln.y + w.y;
+        const k = le.pts.findIndex((p, i) => i >= from && Math.abs(p[0] - ax) < .01 && Math.abs(p[1] - ay) < .01);
+        if (k >= 0) { from = k + 1; if (k <= seg) n++; }
+      });
+      return n;
+    }
+    function addWaypoint(e, seg, at) {
+      const le = lay.edges.find(x => x.id === e.id);
+      const p = at || (le ? { x: (le.pts[seg][0] + le.pts[seg + 1][0]) / 2, y: (le.pts[seg][1] + le.pts[seg + 1][1]) / 2 } : null);
+      if (!p) return -1;
+      const lane = laneAt(p.y), i = wpIndexForSegment(e, seg);
+      e.wps = e.wps || [];
+      e.wps.splice(i, 0, { lane: lane.key, x: snap(p.x - lane.x), y: snap(p.y - lane.y) });
+      e.lock = true;
+      return i;
+    }
+    async function deleteSel() {
       if (!sel) return;
       if (sel.kind === "edge") { snapUndo(); flow.edges = flow.edges.filter(e => e.id !== sel.id); clearSel(); draw(); props(); return; }
       const ids = sel.kind === "multi" ? [...multi] : [sel.id];
       const rs = ids.map(id => ramoOf(nodeById(id))).filter(Boolean).map(k => "R" + k);
       const msg = (ids.length > 1 ? `Excluir ${ids.length} caixas?` : "") + (rs.length ? `${ids.length > 1 ? "\n\n" : ""}${rs.join(", ")} ${rs.length > 1 ? "são ramos e também saem" : "é ramo e também sai"} da documentação (subseção de detalhe) ao salvar. Excluir?` : "");
-      if (msg && !confirm(msg)) return;
+      if (msg && !(await ask(msg, { title: "Excluir", ok: "Excluir", danger: true }))) return;
       snapUndo();
       const S = new Set(ids);
       flow.nodes = flow.nodes.filter(n => !S.has(n.id));
@@ -608,7 +816,7 @@ const Editor = (() => {
     /* ── propriedades ── */
     function refOptions(current) {
       const opt = (v, l) => current.includes(v) ? "" : `<option value="${esc(v)}">${esc(l)}</option>`;
-      let h = `<option value="">＋ Vincular ao documento…</option>`;
+      let h = `<option value="">Vincular ao documento…</option>`;
       const phases = [...new Set(pb.steps.map(s => s.phase))];
       for (const ph of phases) h += `<optgroup label="${esc(ph)}">${pb.steps.filter(s => s.phase === ph).map(s => opt(s.id, `${s.id} · ${s.action.slice(0, 60)}`)).join("")}</optgroup>`;
       if (pb.ramos.length) h += `<optgroup label="Ramos">${pb.ramos.map(r => opt(r.id, r.title)).join("")}</optgroup>`;
@@ -633,17 +841,18 @@ const Editor = (() => {
           <div class="lanes-list">${flow.lanes.map((l, i) => {
             const cnt = flow.nodes.filter(n => n.lane === l.key).length;
             return `<div class="lane-row"><i style="background:${esc(l.color)}"></i><b title="${esc(l.label)}">${esc(l.label)}</b><small>${cnt}</small>
-              <button data-lup="${i}" ${i === 0 ? "disabled" : ""} title="Subir">↑</button><button data-ldown="${i}" ${i === flow.lanes.length - 1 ? "disabled" : ""} title="Descer">↓</button>
-              <button class="del" data-ldel="${i}" title="${cnt ? "Mova ou exclua as caixas antes" : "Remover raia"}">✕</button></div>`;
+              <button data-lup="${i}" ${i === 0 ? "disabled" : ""} title="Subir" aria-label="Subir">${ic("up")}</button><button data-ldown="${i}" ${i === flow.lanes.length - 1 ? "disabled" : ""} title="Descer" aria-label="Descer">${ic("down")}</button>
+              <button class="del" data-ldel="${i}" title="${cnt ? "Mova ou exclua as caixas antes" : "Remover raia"}" aria-label="Remover raia">${ic("close")}</button></div>`;
           }).join("")}</div>
-          <select class="in" data-addlane><option value="">＋ Adicionar raia…</option>${addable.map(t => `<option value="team:${esc(t)}">${esc(t)}</option>`).join("")}${more.length ? `<optgroup label="De outros templates (entra no template ao salvar)">${more.map(t => `<option value="team:${esc(t)}">${esc(t)}</option>`).join("")}</optgroup>` : ""}${hasSupport ? "" : `<option value="support">${esc(CAT.supportLaneLabel)}</option>`}<option value="new">Novo time central…</option></select>
+          <select class="in" data-addlane><option value="">Adicionar raia…</option>${addable.map(t => `<option value="team:${esc(t)}">${esc(t)}</option>`).join("")}${more.length ? `<optgroup label="De outros templates (entra no template ao salvar)">${more.map(t => `<option value="team:${esc(t)}">${esc(t)}</option>`).join("")}</optgroup>` : ""}${hasSupport ? "" : `<option value="support">${esc(CAT.supportLaneLabel)}</option>`}<option value="new">Novo time central…</option></select>
           <div class="pp-stats"><div><b>${flow.nodes.length}</b> caixas</div><div><b>${flow.edges.length}</b> setas</div><div class="${orphan ? "warn" : ""}"><b>${orphan}</b> sem vínculo</div></div>
           <div class="pp-help"><b>Como montar</b><ol>
             <li>Escolha uma forma à esquerda e clique na raia do time responsável.</li>
             <li>Arraste a caixa para outra raia para trocar o time. As raias crescem e encolhem sozinhas.</li>
-            <li>Selecione a caixa e arraste o <b>→</b> até o destino para criar a seta.</li>
+            <li>Selecione a caixa e arraste o círculo ao lado dela até o destino para criar a seta.</li>
             <li>Vincule a caixa aos passos (T0, A3…) ou ramos. É isso que o analista lê ao clicar.</li>
-            <li>A forma <b>Ramo</b> cria R1, R2…; ao salvar, o ramo aparece no documento e na aba Ramos (e vice-versa).</li>
+            <li>A forma <b>Ramo</b> cria R1, R2…; ao salvar, o ramo aparece no documento (e vice-versa).</li>
+            <li>Selecione uma seta para escolher os lados, criar pontos de dobra (<b>+</b> no meio de cada trecho) e fixar a rota.</li>
             <li>Arraste o texto de uma seta (sim, não…) para reposicioná-lo.</li></ol>
             <p><kbd>Shift</kbd>+clique ou arrastar no fundo seleciona várias caixas · <kbd>Ctrl+A</kbd> seleciona tudo · o quadrado no canto da seleção redimensiona proporcionalmente</p>
             <p><kbd>Del</kbd> exclui · <kbd>Ctrl+D</kbd> duplica · setas do teclado movem · <kbd>Ctrl+Z</kbd> desfaz</p></div>`;
@@ -657,28 +866,34 @@ const Editor = (() => {
           ${n.type === "support" ? `<label>Time de apoio<select class="in" data-p="team"><option value="">(nenhum)</option>${supportTeams().map(t => `<option ${t === n.team ? "selected" : ""}>${esc(t)}</option>`).join("")}${others("apoio").length ? `<optgroup label="De outros templates (entra no template ao salvar)">${others("apoio").map(t => `<option ${t === n.team ? "selected" : ""}>${esc(t)}</option>`).join("")}</optgroup>` : ""}</select></label>` : ""}
           ${ramoOf(n) ? `<div class="notice ramo-note">Ramo <b>R${esc(ramoOf(n))}</b>: o texto da 1ª linha (depois de R${esc(ramoOf(n))}) é o nome; a linha cinza é o indicador de sucesso. Ao salvar, o documento e a aba Ramos acompanham.</div>` : ""}
           <div class="pp-lbl">Texto da caixa</div>
-          <div class="lines">${n.lines.map((l, i) => `<div class="line"><button class="x up" data-upline="${i}" title="Subir linha" ${i === 0 ? "disabled" : ""}>↑</button><input class="in" data-line="${i}" value="${esc(l.t)}">
+          <div class="lines">${n.lines.map((l, i) => `<div class="line"><button class="x up" data-upline="${i}" title="Subir linha" aria-label="Subir linha" ${i === 0 ? "disabled" : ""}>${ic("up")}</button><input class="in" data-line="${i}" value="${esc(l.t)}">
             <div class="seg" role="group">${[["n", "Aa", "Normal"], ["b", "<b>B</b>", "Negrito"], ["m", "<span style='color:#888'>Aa</span>", "Cinza (detalhe)"]].map(([k, lb, tt]) => `<button data-style="${i}:${k}" class="${l.s === k ? "on" : ""}" title="${tt}">${lb}</button>`).join("")}</div>
-            <button class="x" data-delline="${i}" title="Remover linha">✕</button></div>`).join("")}</div>
-          <button class="btn ghost xs" data-addline>＋ Linha</button>
+            <button class="x" data-delline="${i}" title="Remover linha" aria-label="Remover linha">${ic("close")}</button></div>`).join("")}</div>
+          <button class="btn ghost xs" data-addline>${ic("plus")}Linha</button>
           <div class="pp-row"><label>Largura<input class="in" type="number" step="8" min="40" data-p="w" value="${n.w}"></label><label>Altura<input class="in" type="number" step="4" min="28" data-p="h" value="${n.h}"></label></div>
           <div class="pp-lbl">Ao clicar, o analista lê</div>
-          <div class="refchips">${r.length ? r.map((x, i) => `<span class="chip">${esc(refLabel(x))}<button data-delref="${i}" title="Desvincular">✕</button></span>`).join("") : `<span class="muted small">Nada vinculado. A caixa fica sem clique no modo leitura.</span>`}</div>
+          <div class="refchips">${r.length ? r.map((x, i) => `<span class="chip">${esc(refLabel(x))}<button data-delref="${i}" title="Desvincular" aria-label="Desvincular">${ic("close")}</button></span>`).join("") : `<span class="muted small">Nada vinculado. A caixa fica sem clique no modo leitura.</span>`}</div>
           <select class="in" data-addref>${refOptions(r)}</select>
-          <div class="pp-actions"><button class="btn ghost sm" data-connect>→ Ligar a…</button><button class="btn ghost sm" data-dup>Duplicar</button><button class="btn danger sm" data-del>Excluir</button></div>`;
+          <div class="pp-actions"><button class="btn ghost sm" data-connect>${ic("right")}Ligar a…</button><button class="btn ghost sm" data-dup>${ic("copy")}Duplicar</button><button class="btn danger sm" data-del>${ic("trash")}Excluir</button></div>`;
       } else {
         const e = s, a = nodeById(e.from), b = nodeById(e.to);
         const nm = n => esc((n.lines[0] || {}).t || n.id);
         propsEl.innerHTML = `<div class="pp-title">Seta</div>
-          <div class="pp-ft"><span>${nm(a)}</span><b>→</b><span>${nm(b)}</span></div>
+          <div class="pp-ft"><span>${nm(a)}</span>${ic("right")}<span>${nm(b)}</span></div>
           <label>Tipo<select class="in" data-p="etype">${Object.entries(CAT.edgeTypes).map(([k, t]) => `<option value="${k}" ${k === e.type ? "selected" : ""}>${t.label}</option>`).join("")}</select></label>
           <label>Rótulo<input class="in" data-p="label" value="${esc(e.label || "")}" placeholder="ex.: sim, não"></label>
           <div class="quick">${["sim", "não", "handoff", "escala ao CSIRT"].map(q => `<button class="btn ghost xs" data-qlabel="${q}">${q}</button>`).join("")}</div>
+          <div class="pp-lbl">Rota</div>
           <div class="pp-row"><label>Sai pela<select class="in" data-p="exit">${Object.keys(SIDES).map(k => `<option value="${k}" ${sideKey(e.exit) === k ? "selected" : ""}>${SIDE_NAMES[k]}</option>`).join("")}${sideKey(e.exit) === "custom" ? `<option selected value="custom">Personalizado</option>` : ""}</select></label>
             <label>Chega pela<select class="in" data-p="entry">${Object.keys(SIDES).map(k => `<option value="${k}" ${sideKey(e.entry) === k ? "selected" : ""}>${SIDE_NAMES[k]}</option>`).join("")}${sideKey(e.entry) === "custom" ? `<option selected value="custom">Personalizado</option>` : ""}</select></label></div>
-          ${(e.wps || []).length ? `<div class="muted small">${e.wps.length} ponto(s) de dobra: arraste os círculos para ajustar.</div><button class="btn ghost xs" data-clearwps>Remover dobras (rota automática)</button>` : ""}
-          ${e.label ? `<div class="muted small" style="margin-top:6px">${e.lp ? "Texto da seta reposicionado." : "Arraste o texto da seta no desenho para movê-lo."}</div>${e.lp ? `<button class="btn ghost xs" data-lpreset>↺ Texto na posição automática</button>` : ""}` : ""}
-          <div class="pp-actions"><button class="btn ghost sm" data-reverse>⇄ Inverter</button><button class="btn danger sm" data-del>Excluir</button></div>`;
+          <label class="lock-row ${e.lock ? "on" : ""}"><input type="checkbox" data-lock ${e.lock ? "checked" : ""}><span>${ic(e.lock ? "lock" : "unlock")}<b>Rota fixa</b><small>${e.lock ? "Saída, entrada e pontos de dobra ficam como estão quando as caixas se movem." : "A rota se refaz sozinha quando uma das caixas se move."}</small></span></label>
+          <div class="pp-lbl">Pontos de dobra <span class="muted">(${(e.wps || []).length})</span></div>
+          ${(e.wps || []).length ? `<div class="wp-list">${e.wps.map((w, i) => `<span class="chip">${ic("pin")}Ponto ${i + 1}<button data-wpdel="${i}" title="Remover o ponto ${i + 1}" aria-label="Remover o ponto ${i + 1}">${ic("close")}</button></span>`).join("")}</div>` : ""}
+          <div class="row-btns"><button class="btn ghost xs" data-wpadd>${ic("pointAdd")}Adicionar ponto</button>${(e.wps || []).length ? `<button class="btn ghost xs" data-clearwps>${ic("pointDel")}Remover todos</button>` : ""}</div>
+          <p class="muted small">No desenho: clique no <b>+</b> no meio de um trecho para criar um ponto, arraste os pontos para ajustar e dê dois cliques num ponto para removê-lo.</p>
+          ${e.lock || (e.wps || []).length || e.exit || e.entry ? `<button class="btn ghost xs" data-autoroute>${ic("reset")}Voltar à rota automática</button>` : ""}
+          ${e.label ? `<div class="pp-lbl">Texto da seta</div><div class="muted small">${e.lp ? "Texto reposicionado." : "Arraste o texto no desenho para movê-lo."}</div>${e.lp ? `<button class="btn ghost xs" data-lpreset>${ic("reset")}Texto na posição automática</button>` : ""}` : ""}
+          <div class="pp-actions"><button class="btn ghost sm" data-reverse>${ic("swap")}Inverter</button><button class="btn danger sm" data-del>${ic("trash")}Excluir</button></div>`;
       }
     }
 
@@ -687,16 +902,16 @@ const Editor = (() => {
       const rs = ns.map(ramoOf).filter(Boolean);
       propsEl.innerHTML = `<div class="pp-title">${ns.length} caixas selecionadas</div>
         <div class="pp-lbl">Redimensionar proporcionalmente</div>
-        <div class="scale-row"><button class="btn ghost sm" data-scale="0.9" title="Diminuir 10%">−10%</button>
+        <div class="scale-row"><button class="btn ghost sm" data-scale="0.9" title="Diminuir 10%">-10%</button>
           <label class="pct"><input class="in" type="number" min="30" max="300" step="5" value="100" data-scalepct>%</label>
           <button class="btn ghost sm" data-scaleapply>Aplicar</button><button class="btn ghost sm" data-scale="1.1" title="Aumentar 10%">+10%</button></div>
         <p class="muted small">Ou arraste o quadrado no canto da seleção. Posições, tamanhos e dobras das setas mudam juntos; cada caixa continua na sua raia.</p>
         <div class="pp-lbl">Alinhar</div>
-        <div class="align-grid">${[["left", "⇤ Esquerda"], ["center", "↔ Centro"], ["right", "⇥ Direita"], ["top", "⤒ Topo"], ["middle", "↕ Meio"], ["bottom", "⤓ Base"]].map(([k, l]) => `<button class="btn ghost xs" data-align="${k}">${l}</button>`).join("")}</div>
-        <div class="align-grid"><button class="btn ghost xs" data-dist="x">Distribuir na horizontal</button><button class="btn ghost xs" data-same="w">Mesma largura</button><button class="btn ghost xs" data-same="h">Mesma altura</button></div>
+        <div class="align-grid">${[["left", "alignL", "Esquerda"], ["center", "alignC", "Centro"], ["right", "alignR", "Direita"], ["top", "alignT", "Topo"], ["middle", "alignM", "Meio"], ["bottom", "alignB", "Base"]].map(([k, i, l]) => `<button class="btn ghost xs" data-align="${k}">${ic(i)}${l}</button>`).join("")}</div>
+        <div class="align-grid"><button class="btn ghost xs" data-dist="x">${ic("distribute")}Distribuir na horizontal</button><button class="btn ghost xs" data-same="w">Mesma largura</button><button class="btn ghost xs" data-same="h">Mesma altura</button></div>
         <div class="pp-lbl">Mover</div><p class="muted small" style="margin-top:0">Arraste qualquer caixa selecionada ou use as setas do teclado. As caixas mantêm as raias.</p>
         ${rs.length ? `<p class="muted small">Inclui ramo(s) ${rs.map(k => "R" + esc(k)).join(", ")}.</p>` : ""}
-        <div class="pp-actions"><button class="btn ghost sm" data-clearsel>Limpar seleção</button><button class="btn danger sm" data-del>Excluir ${ns.length}</button></div>`;
+        <div class="pp-actions"><button class="btn ghost sm" data-clearsel>Limpar seleção</button><button class="btn danger sm" data-del>${ic("trash")}Excluir ${ns.length}</button></div>`;
     }
     /* escala proporcional das caixas selecionadas: x a partir da caixa mais à esquerda, y a partir da mais alta
        de cada raia (as caixas não mudam de raia); setas internas à seleção escalam as dobras junto */
@@ -714,7 +929,7 @@ const Editor = (() => {
         if (a && b) {
           e.wps = (e.wps || []).map(w => ({ ...w, x: r(ox + (w.x - ox) * f), y: w.lane in oy ? r(oy[w.lane] + (w.y - oy[w.lane]) * f) : w.y }));
           if (e.lp) e.lp = { dx: r(e.lp.dx * f), dy: r(e.lp.dy * f) };
-        } else if (a || b) e.wps = [];
+        } else if ((a || b) && !e.lock) e.wps = [];
       });
       return F;
     }
@@ -735,7 +950,7 @@ const Editor = (() => {
       } else if (d.same) {
         const v = Math.max(...ns.map(n => n[d.same])); ns.forEach(n => { n[d.same] = v; });
       }
-      flow.edges.forEach(e => { if (touched.has(e.from) || touched.has(e.to)) e.wps = []; });
+      flow.edges.forEach(e => { if ((touched.has(e.from) || touched.has(e.to)) && !e.lock) e.wps = []; });
     }
 
     propsEl.addEventListener("input", ev => {
@@ -751,6 +966,7 @@ const Editor = (() => {
       const t = ev.target, s = findSel(), p = t.dataset.p;
       if (!s) return;
       if (t.matches("[data-addref]")) { if (!t.value) return; snapUndo(); (refs[s.id] = refs[s.id] || []).push(t.value); draw(); props(); return; }
+      if (t.matches("[data-lock]")) { snapUndo(); if (t.checked) s.lock = true; else delete s.lock; draw(); props(); return; }
       if (p === "type") {
         snapUndo(); s.type = t.value;
         if (s.type === "support" && !s.team) { s.team = null; }
@@ -763,7 +979,7 @@ const Editor = (() => {
       } else if (p === "team") {
         snapUndo(); s.team = t.value || null; if (t.value) s.lines = mkLines(supportLabel(t.value));
       } else if (p === "etype") { snapUndo(); s.type = t.value; }
-      else if (p === "exit" || p === "entry") { if (t.value === "custom") return; snapUndo(); s[p] = SIDES[t.value]; s.wps = []; }
+      else if (p === "exit" || p === "entry") { if (t.value === "custom") return; snapUndo(); s[p] = SIDES[t.value]; if (SIDES[t.value]) s.lock = true; }
       else return;
       draw(); props();
     }, sig);
@@ -810,7 +1026,7 @@ const Editor = (() => {
           snapUndo();
           const j = d0.lup !== undefined ? i - 1 : i + 1;
           [L[i], L[j]] = [L[j], L[i]];
-          flow.edges.forEach(e => { e.wps = []; });
+          flow.edges.forEach(e => { if (!e.lock) e.wps = []; });
         }
         draw(); props(); return;
       }
@@ -837,6 +1053,15 @@ const Editor = (() => {
       else if (d.delref !== undefined) { snapUndo(); refs[s.id].splice(+d.delref, 1); }
       else if (d.qlabel) { snapUndo(); s.label = d.qlabel; }
       else if (b.hasAttribute("data-clearwps")) { snapUndo(); s.wps = []; }
+      else if (d.wpdel !== undefined) { snapUndo(); s.wps.splice(+d.wpdel, 1); s.lock = true; }
+      else if (b.hasAttribute("data-wpadd")) {
+        snapUndo();
+        const le = lay.edges.find(x => x.id === s.id), segs = le ? le.pts.length - 1 : 0;
+        let best = 0, bl = -1;                 // novo ponto no meio do trecho mais longo
+        for (let i = 0; i < segs; i++) { const l = Math.abs(le.pts[i][0] - le.pts[i + 1][0]) + Math.abs(le.pts[i][1] - le.pts[i + 1][1]); if (l > bl) { bl = l; best = i; } }
+        addWaypoint(s, best);
+      }
+      else if (b.hasAttribute("data-autoroute")) { snapUndo(); s.wps = []; s.exit = null; s.entry = null; delete s.lock; }
       else if (b.hasAttribute("data-reverse")) { snapUndo(); [s.from, s.to] = [s.to, s.from]; [s.exit, s.entry] = [s.entry, s.exit]; s.wps = (s.wps || []).slice().reverse(); }
       else if (b.hasAttribute("data-connect")) { setMode({ kind: "connect", from: s.id }); return; }
       else if (b.hasAttribute("data-dup")) return duplicate();
@@ -861,6 +1086,13 @@ const Editor = (() => {
       if (tg.matches(".rz")) {
         const n = nodeById(sel.id);
         drag = { kind: "resize", id: n.id, w: n.w, h: n.h, start: p, before: state() };
+        return canvas.setPointerCapture(ev.pointerId);
+      }
+      if (tg.closest(".wpadd")) {               // "+" no meio do trecho: cria o ponto e já o arrasta
+        const e = edgeById(sel.id), before = state();
+        const i = addWaypoint(e, +tg.closest(".wpadd").dataset.seg);
+        draw(); props();
+        drag = { kind: "wp", id: e.id, i, before };
         return canvas.setPointerCapture(ev.pointerId);
       }
       if (tg.matches(".wp")) {
@@ -931,7 +1163,7 @@ const Editor = (() => {
         flow.edges.forEach((e, i) => {
           const a = S.has(e.from), b = S.has(e.to), o = B.edges[i];
           if (a && b) e.wps = (o.wps || []).map(w => ({ ...w, x: w.x + dx, y: w.y + dy }));
-          else if (a || b) { e.wps = []; e.exit = null; e.entry = null; }
+          else if ((a || b) && !e.lock) { e.wps = []; e.exit = null; e.entry = null; }
         });
         draw();
       } else if (drag.kind === "gscale") {
@@ -952,6 +1184,7 @@ const Editor = (() => {
       } else if (drag.kind === "wp") {
         const e = edgeById(drag.id), lane = laneAt(p.y);
         e.wps[drag.i] = { lane: lane.key, x: snap(p.x - lane.x), y: snap(p.y - lane.y) };
+        e.lock = true;
         draw();
       } else if (drag.kind === "connect") {
         const a = lay.abs[drag.from];
@@ -960,6 +1193,12 @@ const Editor = (() => {
         svgEl.querySelectorAll(".node.target").forEach(x => x.classList.remove("target"));
         const og = over && over.closest(".node"); if (og && og.dataset.node !== drag.from) og.classList.add("target");
       }
+    }, sig);
+    canvas.addEventListener("dblclick", ev => {
+      const w = ev.target.closest(".wp"); if (!w || !sel || sel.kind !== "edge") return;
+      const e = edgeById(sel.id); if (!e || !e.wps) return;
+      snapUndo(); e.wps.splice(+w.dataset.wp, 1); e.lock = true; draw(); props();
+      setStatus("Ponto de dobra removido · <kbd>Ctrl+Z</kbd> desfaz");
     }, sig);
     canvas.addEventListener("pointerup", ev => {
       if (!drag) return;
@@ -1014,6 +1253,7 @@ const Editor = (() => {
     window.addEventListener("pointerup", palUp, sig);
 
     const key = ev => {
+      if (document.querySelector(".modal-bg")) return;
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
       const mod = ev.ctrlKey || ev.metaKey;
       if (mod && ev.key.toLowerCase() === "s") { ev.preventDefault(); return save(); }
@@ -1032,7 +1272,7 @@ const Editor = (() => {
         ids.forEach(id => { const n = nodeById(id); n.x = Math.max(minX, n.x + dx); n.y = Math.max(8, n.y + dy); });
         flow.edges.forEach(e => {
           if (S.has(e.from) && S.has(e.to)) e.wps = (e.wps || []).map(w => ({ ...w, x: w.x + dx, y: w.y + dy }));
-          else if (S.has(e.from) || S.has(e.to)) { e.wps = []; e.exit = null; e.entry = null; }
+          else if ((S.has(e.from) || S.has(e.to)) && !e.lock) { e.wps = []; e.exit = null; e.entry = null; }
         });
         draw();
       }
@@ -1088,7 +1328,7 @@ const Editor = (() => {
       }
       $("#fapply", codeBox).onclick = () => apply(ta.value, "Fluxograma atualizado a partir do código");
       $("#fauto", codeBox).onclick = async () => {
-        if (!confirm("Reorganizar todas as caixas automaticamente? As posições atuais e os pontos de dobra serão descartados (dá para desfazer).")) return;
+        if (!(await ask("Reorganizar todas as caixas automaticamente? As posições atuais e os pontos de dobra serão descartados (dá para desfazer).", { title: "Reorganizar", ok: "Reorganizar" }))) return;
         try {
           const cur = codeDirty ? (await api("POST", "api/flow/parse", { text: ta.value })) : { flow, refs };
           const t = (await api("POST", "api/flow/render", { flow: cur.flow, refs: cur.refs, positions: false })).text;
@@ -1110,29 +1350,32 @@ const Editor = (() => {
       el.querySelectorAll("[data-mode]").forEach(b => b.classList.toggle("on", b.dataset.mode === "visual"));
       draw(); props(); setStatus("");
     }
-    el.querySelector(".fe-modes").addEventListener("click", e => {
+    el.querySelector(".fe-modes").addEventListener("click", async e => {
       const b = e.target.closest("[data-mode]"); if (!b) return;
       if (b.dataset.mode === "code" && !codeMode) enterCode();
       if (b.dataset.mode === "visual" && codeMode) {
-        if (codeDirty && !confirm("O texto tem alterações não aplicadas. Voltar ao desenho e descartá-las?")) return;
+        if (codeDirty && !(await ask("O texto tem alterações não aplicadas. Voltar ao desenho e descartá-las?", { title: "Voltar ao desenho", ok: "Descartar texto", danger: true }))) return;
         codeDirty = false; leaveCode();
       }
     }, sig);
 
     async function save() {
       if (codeMode && codeDirty) return toast("Clique em “Aplicar ao desenho” antes de salvar", "warn");
+      const change = await E.askChange(pb, "a alteração do fluxograma");
+      if (change === false) return;
       const btn = $("#fsave"); btn.disabled = true; btn.textContent = "Salvando…";
       try {
-        const v = await ad.saveFlow(flow, refs, pb.rev);
-        E.dirty = false; savedToast(v, "Fluxograma salvo");
+        const v = await ad.saveFlow(flow, refs, baseRev, change || undefined);
+        E.dirty = false; dropCurrent(); savedToast(v, change ? `Fluxograma salvo · versão ${(v.props || {})["Versão"] || ""}` : "Fluxograma salvo");
         ad.after(v); remount(el, v);
-      } catch (err) { saveError(err, el, pb, remount, ad); btn.disabled = false; btn.textContent = "Salvar fluxograma"; }
+      } catch (err) { saveError(err, el, pb, remount, ad); btn.disabled = false; btn.innerHTML = `${ic("check")}Salvar fluxograma`; }
     }
     function selectAll() { if (codeMode) return; setMulti(flow.nodes.map(n => n.id)); draw(); props(); }
     $("#fall").onclick = selectAll;
     $("#fsave").onclick = save;
     $("#fundo").onclick = doUndo; $("#fredo").onclick = doRedo;
     $("#fdiscard").onclick = () => discard(el, pb, remount, "do fluxograma", ad);
+    if (dr) { markDirty($("#fbar")); toast("Rascunho restaurado: as alterações que você deixou nesta aba continuam aqui"); }
     el.querySelectorAll("[data-z]").forEach(b => b.onclick = () => {
       const z = b.dataset.z; if (z === "0") return fit();
       autoFit = false; zoomF = Math.max(.4, Math.min(2.5, zoomF * (z === "1" ? 1.2 : 1 / 1.2))); draw();
@@ -1175,7 +1418,7 @@ const Editor = (() => {
       return m.ramos.map((r, i) => `<div class="ramo-row"><span class="rn">R${i + 1}</span>
         <input class="in" data-ramo="${i}" data-k="name" value="${esc(r.name)}" placeholder="Nome do ramo (ex.: Varredura)">
         <input class="in" data-ramo="${i}" data-k="q" value="${esc(r.q)}" placeholder="Indicador de sucesso (ex.: IP passou a explorar serviço?)">
-        <button type="button" class="x" data-delramo="${i}" title="Remover ramo" ${m.ramos.length < 2 ? "disabled" : ""}>✕</button></div>`).join("");
+        <button type="button" class="x" data-delramo="${i}" title="Remover ramo" aria-label="Remover ramo" ${m.ramos.length < 2 ? "disabled" : ""}>${ic("close")}</button></div>`).join("");
     }
     function syncTemplate() {
       const t = tplOf();
@@ -1205,7 +1448,7 @@ const Editor = (() => {
             <label>Pergunta central da triagem<input class="in" name="question" placeholder="ex.: houve sucesso ou foi só tentativa?"></label></div>
           <div class="ecard" id="ramosCard"><div class="step-h"><span>4</span>Ramos</div>
             <p class="muted small" style="margin-top:0">O template repete, para cada ramo, a subseção de detalhe e a caixa R do fluxograma.</p>
-            <div id="ramos">${ramosHtml()}</div><button type="button" class="btn ghost xs" id="addramo">＋ Ramo</button></div>
+            <div id="ramos">${ramosHtml()}</div><button type="button" class="btn ghost xs" id="addramo">${ic("plus")}Ramo</button></div>
           <div class="create-actions"><a class="btn ghost" href="#/">Cancelar</a><button class="btn primary" type="submit">Criar playbook</button></div>
         </form>
         <aside class="ecard pv" id="cpreview"></aside>
@@ -1223,7 +1466,7 @@ const Editor = (() => {
       if (e.target.name) { m[e.target.name] = e.target.value; e.target.dataset.touched = "1"; } preview();
     }, sig);
     form.addEventListener("click", e => {
-      if (e.target.id === "addramo") { m.ramos.push({ name: "", q: "" }); $("#ramos").innerHTML = ramosHtml(); $("#ramos").querySelector(`[data-ramo="${m.ramos.length - 1}"]`).focus(); preview(); }
+      if (e.target.closest("#addramo")) { m.ramos.push({ name: "", q: "" }); $("#ramos").innerHTML = ramosHtml(); $("#ramos").querySelector(`[data-ramo="${m.ramos.length - 1}"]`).focus(); preview(); }
       const d = e.target.closest("[data-delramo]");
       if (d) { m.ramos.splice(+d.dataset.delramo, 1); $("#ramos").innerHTML = ramosHtml(); preview(); }
     }, sig);

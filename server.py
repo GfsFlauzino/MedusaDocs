@@ -52,7 +52,8 @@ NO_PASSWORD = "!sso"                                      # hash impossível: co
 TRUST_PROXY = os.environ.get("MEDUSA_TRUST_PROXY", "").lower() in ("1", "true", "yes", "sim")
 REQ = threading.local()                                   # IP da requisição em andamento (para a auditoria)
 STATIC = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/flow.js": "flow.js",
-          "/editor.js": "editor.js", "/style.css": "style.css", "/theme.js": "theme.js", "/docs.js": "docs.js"}
+          "/editor.js": "editor.js", "/style.css": "style.css", "/theme.js": "theme.js", "/docs.js": "docs.js",
+          "/icons.js": "icons.js"}
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".ico": "image/x-icon", ".woff2": "font/woff2"}
 
@@ -218,6 +219,8 @@ def validate_flow(flow):
             raise HttpError(400, f"tipo de seta inválido: {e.get('type')}")
         if e["id"] in ids:
             raise HttpError(400, f"seta com o mesmo id de uma caixa: {e['id']}")
+        if e.get("lock"): e["lock"] = True
+        else: e.pop("lock", None)
         lp = e.get("lp")
         if lp is not None:
             try: e["lp"] = {"dx": max(-2000.0, min(2000.0, float(lp["dx"]))), "dy": max(-2000.0, min(2000.0, float(lp["dy"])))}
@@ -235,8 +238,8 @@ class Handler(BaseHTTPRequestHandler):
             if "/api/sso/callback" in str(args[0]): args = (re.sub(r"\?\S*", "?…", str(args[0])),) + args[1:]   # não registra code/state
             sys.stderr.write("%s - %s\n" % (self.log_date_time_string(), fmt % args))
 
-    def headers_common(self, csp=None):
-        self.send_header("Cache-Control", "no-store")
+    def headers_common(self, csp=None, cache=None):
+        self.send_header("Cache-Control", cache or "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "same-origin")
@@ -253,12 +256,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def send_file(self, path):
+    def send_file(self, path, cache=None):
         data = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", TYPES.get(path.suffix, "application/octet-stream"))
         self.send_header("Content-Length", str(len(data)))
-        self.headers_common()
+        self.headers_common(cache=cache)
         self.end_headers()
         self.wfile.write(data)
 
@@ -360,7 +363,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in STATIC: return self.send_file(core.HERE / STATIC[path])
         m = re.fullmatch(r"/assets/([\w.-]+)", path)
         if m and (core.HERE / "assets" / m.group(1)).is_file() and Path(m.group(1)).suffix in TYPES:
-            return self.send_file(core.HERE / "assets" / m.group(1))
+            return self.send_file(core.HERE / "assets" / m.group(1), cache="public, max-age=604800")   # fontes e imagens fixas
         self.send_json({"error": "não encontrado"}, 404)
 
     def do_POST(self): self.handle_api("POST")
@@ -492,10 +495,29 @@ def ensure_baseline(folder, pid):
     """Playbook sem histórico (anterior à 2.0): registra o estado atual antes da primeira alteração."""
     if not open_db().count_versions(pid): snapshot(folder, pid, SYSTEM_USER, "base", "Estado registrado ao ativar o histórico de versões")
 
-def bump(doc, old_doc, publish=False):
-    v = core.next_version(core.get_version(old_doc), core.get_gov(old_doc)["status"], publish)
+def bump(doc, old_doc, publish=False, change=None):
+    v = core.next_version(core.get_version(old_doc), core.get_gov(old_doc)["status"], publish, change and change["type"])
     core.set_version(doc, v)
     return core.fmt_version(v)
+
+CHANGE_TYPES = {"major": "Major", "minor": "Minor"}
+
+def prod_change(b, old_doc):
+    """Playbook em Produção: a gravação precisa dizer o tipo da atualização (major/minor) e descrever o que mudou.
+    Fora de Produção não pede nada (a versão segue 0.1 → 0.2). Retorna None ou {"type", "note"}."""
+    if core.get_gov(old_doc)["status"] != "Produção": return None
+    c = b.get("change") if isinstance(b.get("change"), dict) else {}
+    t, note = str(c.get("type", "")).lower(), " ".join(str(c.get("note", "")).split())[:500]
+    if t not in CHANGE_TYPES: raise HttpError(400, "Playbook em Produção: escolha o tipo da atualização (Major ou Minor)")
+    if len(note) < 5: raise HttpError(400, "Playbook em Produção: descreva as alterações realizadas")
+    return {"type": t, "note": note}
+
+def change_note(change, extra=""):
+    parts = ([f"{CHANGE_TYPES[change['type']]}: {change['note']}"] if change else []) + ([extra] if extra else [])
+    return " · ".join(parts)
+
+def change_audit(change):
+    return {"tipo_atualizacao": CHANGE_TYPES[change["type"]], "descricao": change["note"]} if change else {}
 
 def r_pb_doc(h, pid, **_):
     u = h.require("editor")
@@ -508,17 +530,18 @@ def r_pb_doc(h, pid, **_):
         ensure_baseline(folder, pid)
         md, dio = core.files_of(folder)
         old = core.parse_md(md.read_text("utf-8"))
+        change = prod_change(b, old)
         touch_review(doc, u, old)
         doc = core.parse_md(core.doc_to_md(doc))          # mesma forma que será lida de volta
-        ver = bump(doc, old)
+        ver = bump(doc, old, change=change)
         view = load_pb(folder)
         flow, refs = view["flow"], view["refs"]
         changes = ramos.sync_from_doc(flow, refs, old, doc)
         backup(pid, md, *( (dio, core.MAPPINGS_FILE) if changes else ()))
         md.write_text(core.doc_to_md(doc), "utf-8")
         if changes: write_flow(folder, pid, view["name"], flow, refs)
-        snapshot(folder, pid, u, "documento", "; ".join(changes))
-    audit(u["login"], "documento_salvo", pid, versao=ver, **({"ramos": "; ".join(changes)} if changes else {}))
+        snapshot(folder, pid, u, "documento", change_note(change, "; ".join(changes)))
+    audit(u["login"], "documento_salvo", pid, versao=ver, **change_audit(change), **({"ramos": "; ".join(changes)} if changes else {}))
     h.send_json({"ok": True, "playbook": load_pb(folder), "sync": changes, "version": ver})
 
 def write_flow(folder, pid, name, flow, refs):
@@ -541,13 +564,14 @@ def r_pb_flow(h, pid, **_):
         view = load_pb(folder)
         backup(pid, dio, md, core.MAPPINGS_FILE)
         doc = core.parse_md(md.read_text("utf-8")); old = core.clone_doc(doc)
+        change = prod_change(b, old)
         changes = ramos.sync_from_flow(doc, view["flow"], view["refs"], flow, refs)
         write_flow(folder, pid, view["name"], flow, refs)
-        touch_review(doc, u, doc); ver = bump(doc, old)
+        touch_review(doc, u, doc); ver = bump(doc, old, change=change)
         md.write_text(core.doc_to_md(doc), "utf-8")
         new_teams = add_template_teams(view["templateKey"], sorted(tpl.used_teams(flow) - set(view["teams"])))
-        snapshot(folder, pid, u, "fluxograma", "; ".join(changes))
-    audit(u["login"], "fluxograma_salvo", pid, versao=ver, **({"ramos": "; ".join(changes)} if changes else {}),
+        snapshot(folder, pid, u, "fluxograma", change_note(change, "; ".join(changes)))
+    audit(u["login"], "fluxograma_salvo", pid, versao=ver, **change_audit(change), **({"ramos": "; ".join(changes)} if changes else {}),
           **({"times_no_template": ", ".join(new_teams)} if new_teams else {}))
     h.send_json({"ok": True, "playbook": load_pb(folder), "sync": changes, "version": ver})
 
@@ -563,13 +587,14 @@ def r_pb_ramo_add(h, pid, **_):
         view = load_pb(folder)
         doc, flow, refs = core.parse_md(md.read_text("utf-8")), view["flow"], view["refs"]
         old = core.clone_doc(doc)
+        change = prod_change(b, old)
         k = ramos.next_key(doc, flow, refs)
         backup(pid, md, dio, core.MAPPINGS_FILE)
         ramos.add(doc, flow, refs, k, name, q)
         write_flow(folder, pid, view["name"], flow, refs)
-        touch_review(doc, u, doc); ver = bump(doc, old)
+        touch_review(doc, u, doc); ver = bump(doc, old, change=change)
         md.write_text(core.doc_to_md(doc), "utf-8")
-        snapshot(folder, pid, u, "ramo", f"R{k} {name} criado")
+        snapshot(folder, pid, u, "ramo", change_note(change, f"R{k} {name} criado"))
     audit(u["login"], "ramo_criado", pid, ramo=f"R{k} {name}", versao=ver)
     h.send_json({"ok": True, "playbook": load_pb(folder), "ramo": f"R{k}"})
 
@@ -586,12 +611,13 @@ def r_pb_ramo_delete(h, pid, **_):
         if k not in ramos.doc_ramos(doc) and k not in ramos.flow_ramos(flow, refs): raise HttpError(404, "ramo não encontrado")
         ensure_baseline(folder, pid)
         old = core.clone_doc(doc)
+        change = prod_change(b, old)
         backup(pid, md, dio, core.MAPPINGS_FILE)
         ramos.remove(doc, flow, refs, k)
         write_flow(folder, pid, view["name"], flow, refs)
-        touch_review(doc, u, doc); ver = bump(doc, old)
+        touch_review(doc, u, doc); ver = bump(doc, old, change=change)
         md.write_text(core.doc_to_md(doc), "utf-8")
-        snapshot(folder, pid, u, "ramo", f"R{k} excluído")
+        snapshot(folder, pid, u, "ramo", change_note(change, f"R{k} excluído"))
     audit(u["login"], "ramo_excluido", pid, ramo=f"R{k}", versao=ver)
     h.send_json({"ok": True, "playbook": load_pb(folder)})
 
@@ -853,6 +879,29 @@ def r_import(h, **_):
     audit(u["login"], "playbook_importado", pid, origem=p["meta"].get("gerado_por", ""), id_original=p["id"], template=tkey,
           substituiu="sim" if existing else "", times_no_template=", ".join(sorted(p["createTeams"])))
     h.send_json({"ok": True, "playbook": load_pb(folder), "teams": core.load_teams(), "summary": summary})
+
+MAX_MD = 2 * 1024 * 1024
+
+def r_md(h, **_):
+    """Modo Markdown do editor: {doc} → {md}; {md, pid?} → {doc, sections} (prévia renderizada como na leitura).
+    Usa o mesmo parser que lê os arquivos .md, então a prévia é o que será gravado."""
+    h.require("editor"); b = h.body()
+    if "doc" in b:
+        doc = b.get("doc")
+        if not isinstance(doc, dict) or not isinstance(doc.get("sections"), list): raise HttpError(400, "documento inválido")
+        return h.send_json({"md": core.doc_to_md({"title": str(doc.get("title", "")), "byline": str(doc.get("byline", "")), "sections": doc["sections"]})})
+    text = str(b.get("md", ""))
+    if len(text.encode("utf-8")) > MAX_MD: raise HttpError(400, "Documento grande demais (máx. 2 MB)")
+    text = text.replace("\r\n", "\n").lstrip("\ufeff")
+    if not re.match(r"^\s*#\s+\S", text): raise HttpError(400, "A primeira linha precisa ser o título do playbook: # PB-00 — Nome")
+    doc = core.parse_md(text.lstrip())
+    if not doc["title"].strip(): raise HttpError(400, "O título não pode ficar vazio")
+    if not doc["sections"]: raise HttpError(400, "O documento precisa de pelo menos uma seção (## Título da seção)")
+    pid = str(b.get("pid") or "")
+    img = f"api/pb/{pid}/img/" if core.ID_RE.fullmatch(pid) else None
+    render = lambda bl: core.render_blocks(bl, img)
+    h.send_json({"doc": doc, "sections": [{"title": s["title"], "html": render(s["blocks"]),
+                                            "subs": [{"title": x["title"], "html": render(x["blocks"])} for x in s["subs"]]} for s in doc["sections"]]})
 
 def r_flow_parse(h, **_):
     h.require("editor"); b = h.body()
@@ -1464,15 +1513,16 @@ def r_version_restore(h, pid, **_):
         ensure_baseline(folder, pid)
         md, dio = core.files_of(folder)
         cur = core.parse_md(md.read_text("utf-8"))
+        change = prod_change(b, cur)
         doc = core.set_gov(core.parse_md(v["md"]), core.get_gov(cur))
-        touch_review(doc, u, cur); ver = bump(doc, cur)
+        touch_review(doc, u, cur); ver = bump(doc, cur, change=change)
         backup(pid, md, dio, core.MAPPINGS_FILE)
         md.write_text(core.doc_to_md(doc), "utf-8")
         if v["drawio"].strip():
             view = load_pb(folder)
             write_flow(folder, pid, view["name"], core.drawio_to_flow(v["drawio"]), dict(v["refs"]))
-        snapshot(folder, pid, u, "restauracao", f"Conteúdo da versão {v['version']} ({v['created_at'][:10]})")
-    audit(u["login"], "versao_restaurada", pid, de=v["version"], nova=ver)
+        snapshot(folder, pid, u, "restauracao", change_note(change, f"Conteúdo da versão {v['version']} ({v['created_at'][:10]})"))
+    audit(u["login"], "versao_restaurada", pid, de=v["version"], nova=ver, **change_audit(change))
     h.send_json({"ok": True, "playbook": load_pb(folder), "version": ver})
 
 ROUTES = {
@@ -1500,7 +1550,7 @@ ROUTES = {
     ("PUT", "/api/templates/{t}/doc"): r_tpl_doc, ("PUT", "/api/templates/{t}/flow"): r_tpl_flow, ("PUT", "/api/templates/{t}/meta"): r_tpl_meta,
     ("GET", "/api/people"): r_people,
     ("GET", "/api/pb/{pb}/export"): r_pb_export, ("GET", "/api/export"): r_export_all, ("POST", "/api/import"): r_import,
-    ("POST", "/api/flow/parse"): r_flow_parse, ("POST", "/api/flow/render"): r_flow_render,
+    ("POST", "/api/flow/parse"): r_flow_parse, ("POST", "/api/md"): r_md, ("POST", "/api/flow/render"): r_flow_render,
     ("GET", "/api/branding"): r_brand_get, ("PUT", "/api/branding"): r_brand_put,
     ("GET", "/api/branding/logo"): r_logo_get, ("PUT", "/api/branding/logo"): r_logo_put, ("DELETE", "/api/branding/logo"): r_logo_delete,
 }

@@ -19,6 +19,7 @@ Regras da linguagem
   %% @refs alerta T0, T1          → ao clicar na caixa, o analista lê esses passos/ramos/seções
   %% @pos alerta 68 34 96 48      → posição (x y largura altura) dentro da raia; sem ela, layout automático
   %% @route e9 0.5,1 0.5,0 n1:80,350 n1:380,350   → lados de saída/entrada e pontos de dobra (opcional)
+  %% @route a>b auto auto n1:80,350 lock          → "lock": rota fixa, não muda quando as caixas se movem
   %% @type hand corr handoff      → força o tipo de uma seta tracejada
   %% @label dedup>vinc 12,-6      → rótulo da seta deslocado (x,y) da posição automática
   %% @lane n1 #1D62D1             → cor da raia
@@ -102,10 +103,11 @@ def render(flow, refs=None, positions=True):
         for n in flow["nodes"]:
             L.append(f"  %% @pos {n['id']} {_num(n['x'])} {_num(n['y'])} {_num(n['w'])} {_num(n['h'])}")
         for e in flow["edges"]:
-            if e.get("exit") or e.get("entry") or e.get("wps"):
+            if e.get("exit") or e.get("entry") or e.get("wps") or e.get("lock"):
                 side = lambda p: f"{_num(p['x'])},{_num(p['y'])}" if p else "auto"
                 wps = " ".join(f"{w['lane']}:{_num(w['x'])},{_num(w['y'])}" for w in e.get("wps", []))
-                L.append(f"  %% @route {e['from']}>{e['to']} {side(e.get('exit'))} {side(e.get('entry'))} {wps}".rstrip())
+                parts = [f"{e['from']}>{e['to']}", side(e.get("exit")), side(e.get("entry"))] + ([wps] if wps else []) + (["lock"] if e.get("lock") else [])
+                L.append("  %% @route " + " ".join(parts))
             lp = e.get("lp")
             if e.get("label") and lp and (lp.get("dx") or lp.get("dy")):
                 L.append(f"  %% @label {e['from']}>{e['to']} {_num(lp['dx'])},{_num(lp['dy'])}")
@@ -279,6 +281,7 @@ def parse(text, teams=None):
             if mm and mm.group(1) in lane_by: wps.append({"lane": mm.group(1), "x": float(mm.group(2)), "y": float(mm.group(3))})
         out_edges.append({"id": eid(), "from": e["from"], "to": e["to"], "label": e["label"], "type": etype,
                           "exit": side(r[0]) if r else None, "entry": side(r[1]) if len(r) > 1 else None, "wps": wps})
+        if "lock" in r[2:]: out_edges[-1]["lock"] = True
         if e["label"] and (e["from"], e["to"]) in lpos: out_edges[-1]["lp"] = lpos[(e["from"], e["to"])]
     refs = {k: v for k, v in refs.items() if k in nodes}
     return {"subtitle": subtitle, "lanes": lanes, "nodes": flow_nodes, "edges": out_edges}, refs, warns

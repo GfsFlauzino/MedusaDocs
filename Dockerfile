@@ -19,7 +19,7 @@ RUN addgroup -S -g 10001 medusa && adduser -S -D -H -u 10001 -G medusa medusa \
 
 WORKDIR /app
 COPY server.py store.py pbcore.py templates.py ramos.py bundle.py flowdsl.py logfwd.py sso.py mitre.json ./
-COPY index.html app.js editor.js flow.js docs.js theme.js style.css ./
+COPY index.html app.js editor.js flow.js docs.js icons.js theme.js style.css ./
 COPY assets ./assets
 COPY LICENSE ./
 

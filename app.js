@@ -55,59 +55,29 @@ function toast(msg, kind = "ok") {
   setTimeout(() => t.remove(), 3700);
 }
 
-/* ───────── marca (nome, cor, logo) e tema ───────── */
+/* ───────── marca (nome do workspace e logo) e tema ───────── */
+/* O visual é fixo (tema claro ou escuro, escolhido por cada usuário). O administrador muda só o nome do workspace
+   e a logo. Cores e textos de marca antigos que estejam no banco são ignorados. */
 const Brand = (() => {
-  const DEFAULT = { name: "Medusa Docs", color: "#3B5BDB", logo: null, logoBg: "white", homeTitle: "Playbooks de resposta a incidentes", homeSubtitle: "" };
+  const DEFAULT = { name: "Medusa Docs", logo: null };
   let cur = { ...DEFAULT };
-  const clamp = v => Math.max(0, Math.min(255, Math.round(v)));
-  const hexToRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
-  const rgbToHex = (r, g, b) => "#" + [r, g, b].map(v => clamp(v).toString(16).padStart(2, "0")).join("").toUpperCase();
-  function rgbToHsl(r, g, b) {
-    r /= 255; g /= 255; b /= 255;
-    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2;
-    if (mx === mn) return [0, 0, l];
-    const d = mx - mn, s = l > .5 ? d / (2 - mx - mn) : d / (mx + mn);
-    const h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
-    return [h * 60, s, l];
-  }
-  function hslToRgb(h, s, l) {
-    const k = n => (n + h / 30) % 12, a = s * Math.min(l, 1 - l);
-    const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
-    return [f(0) * 255, f(8) * 255, f(4) * 255];
-  }
-  const lum = ([r, g, b]) => { const f = c => { c /= 255; return c <= .03928 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4; }; return .2126 * f(r) + .7152 * f(g) + .0722 * f(b); };
-  const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + .05) / (y + .05); };
-  function palette(hex) {
-    const rgb = hexToRgb(hex), [h, s, l] = rgbToHsl(...rgb);
-    const hsl = (dh, dl) => rgbToHex(...hslToRgb((h + dh + 360) % 360, s, Math.max(0, Math.min(1, l + dl))));
-    const mix = (w, t) => rgbToHex(...rgb.map((v, i) => v * (1 - t) + w[i] * t));
-    let inkL = hex, dl = 0; while (contrast(hexToRgb(inkL), [255, 255, 255]) < 4.5 && dl < 1) { dl += .04; inkL = hsl(0, -dl); }
-    let inkD = hex; dl = 0; while (contrast(hexToRgb(inkD), [28, 28, 32]) < 4.5 && dl < 1) { dl += .04; inkD = hsl(0, dl); }
-    return {
-      "--brand": hex, "--brand-dark": hsl(-2, -.09), "--brand-2": hsl(4, .07), "--brand-rgb": rgb.join(","),
-      "--on-brand": contrast(rgb, [255, 255, 255]) >= 3 ? "#FFFFFF" : "#161616",
-      "--brand-soft-l": mix([255, 255, 255], .9), "--brand-soft-d": mix([28, 28, 32], .78),
-      "--brand-ink-l": inkL, "--brand-ink-d": inkD,
-    };
-  }
+  const markHtml = b => b.logo ? `<img src="api/branding/logo?v=${encodeURIComponent(b.logo)}" alt="">` : "";
   function paint(b) {
-    const vars = palette(b.color);
-    for (const k in vars) document.documentElement.style.setProperty(k, vars[k]);
     document.title = b.name;
     $("#brandName").textContent = b.name;
     const mark = $("#brandMark");
-    mark.className = "brand-mark " + (b.logo ? "has-logo" + (b.logoBg === "transparent" ? " logo-clear" : "") : "default");
-    mark.innerHTML = b.logo ? `<img src="api/branding/logo?v=${encodeURIComponent(b.logo)}" alt="">` : "";
-    document.querySelectorAll(".login-brand .bname").forEach(n => n.textContent = b.name);
-    return vars;
+    mark.className = "brand-mark " + (b.logo ? "has-logo" : "default");
+    mark.innerHTML = markHtml(b);
+    document.querySelectorAll(".login-brand").forEach(n => { n.innerHTML = loginBrand(); });
   }
+  const loginBrand = () => `<span class="brand-mark ${cur.logo ? "has-logo" : "default"}">${markHtml(cur)}</span><span class="bname">${esc(cur.name)}</span>`;
   function apply(b) {
-    cur = { ...DEFAULT, ...b };
-    const vars = paint(cur);
-    try { localStorage.setItem("medusa-brand", JSON.stringify({ vars, name: cur.name })); } catch { }
+    cur = { ...DEFAULT, name: (b && b.name) || DEFAULT.name, logo: (b && b.logo) || null, appVersion: b && b.appVersion };
+    paint(cur);
+    try { localStorage.setItem("medusa-brand", JSON.stringify({ name: cur.name })); } catch { }
   }
   async function load() { try { apply(await api("GET", "api/branding")); } catch { apply(cur); } }
-  return { load, apply, preview: b => paint({ ...cur, ...b }), get: () => cur, DEFAULT, hexToRgb, rgbToHex, contrast };
+  return { load, apply, get: () => cur, DEFAULT, loginBrand };
 })();
 $("#themeTgl").onclick = () => {
   const t = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
@@ -116,12 +86,12 @@ $("#themeTgl").onclick = () => {
 };
 
 /* ───────── modal ───────── */
-function modal({ title, html, wide, onMount, dismissable = true }) {
+function modal({ title, html, wide, onMount, onClose, dismissable = true }) {
   const bg = document.createElement("div");
   bg.className = "modal-bg";
-  bg.innerHTML = `<div class="modal ${wide ? "wide" : ""}" role="dialog" aria-modal="true"><div class="mhead"><b>${title}</b>${dismissable ? `<button class="mclose" title="Fechar">✕</button>` : ""}</div><div class="mbody">${html}</div></div>`;
+  bg.innerHTML = `<div class="modal ${wide ? "wide" : ""}" role="dialog" aria-modal="true"><div class="mhead"><b>${title}</b>${dismissable ? `<button class="mclose" title="Fechar" aria-label="Fechar">${ic("close")}</button>` : ""}</div><div class="mbody">${html}</div></div>`;
   document.body.append(bg);
-  const close = () => { bg.remove(); document.removeEventListener("keydown", onKey); };
+  const close = () => { if (!bg.isConnected) return; bg.remove(); document.removeEventListener("keydown", onKey); if (onClose) onClose(); };
   const onKey = e => { if (e.key === "Escape" && dismissable) close(); };
   document.addEventListener("keydown", onKey);
   if (dismissable) { bg.querySelector(".mclose").onclick = close; bg.addEventListener("mousedown", e => { if (e.target === bg) close(); }); }
@@ -130,12 +100,29 @@ function modal({ title, html, wide, onMount, dismissable = true }) {
   return close;
 }
 
+/* Confirmação dentro da aplicação. Substitui o confirm() do navegador, que em alguns navegadores embutidos
+   não aparece e responde "Cancelar" sozinho (o botão parecia não funcionar). Retorna uma Promise<boolean>. */
+function ask(message, { title = "Confirmar", ok = "Confirmar", cancel = "Cancelar", danger = false } = {}) {
+  return new Promise(resolve => {
+    let answered = false;
+    const done = v => { if (!answered) { answered = true; resolve(v); } };
+    modal({ title, html: `<div class="ask-msg">${esc(message).replace(/\n/g, "<br>")}</div>
+      <div class="create-actions"><button type="button" class="btn ghost" data-no>${esc(cancel)}</button><button type="button" class="btn ${danger ? "danger solid" : "primary"}" data-yes>${esc(ok)}</button></div>`,
+      onClose: () => done(false),
+      onMount: (b, close) => {
+        b.querySelector("[data-no]").onclick = () => close();
+        b.querySelector("[data-yes]").onclick = () => { done(true); close(); };
+        setTimeout(() => b.querySelector("[data-yes]").focus(), 40);
+      } });
+  });
+}
+
 /* imagens do documento: clique amplia */
 function lightbox(img) {
   const cap = img.closest("figure") && img.closest("figure").querySelector("figcaption");
   const bg = document.createElement("div");
   bg.className = "lightbox"; bg.setAttribute("role", "dialog"); bg.setAttribute("aria-modal", "true");
-  bg.innerHTML = `<figure><img src="${esc(img.getAttribute("src"))}" alt="${esc(img.alt)}">${cap ? `<figcaption>${esc(cap.textContent)}</figcaption>` : ""}</figure><button class="mclose" title="Fechar (Esc)">✕</button>`;
+  bg.innerHTML = `<figure><img src="${esc(img.getAttribute("src"))}" alt="${esc(img.alt)}">${cap ? `<figcaption>${esc(cap.textContent)}</figcaption>` : ""}</figure><button class="mclose" title="Fechar (Esc)" aria-label="Fechar">${ic("close")}</button>`;
   const close = () => { bg.remove(); document.removeEventListener("keydown", onKey); };
   const onKey = e => { if (e.key === "Escape") close(); };
   bg.onclick = close; document.addEventListener("keydown", onKey);
@@ -276,7 +263,7 @@ function showTeam(pb, name, keep) {
   if (!keep) stack = [];
   const t = TEAMS[name]; if (!t) return;
   let h = `<div class="teamhero" style="border-color:${t.color}"><div class="kind">${esc(t.kind)}</div><p style="margin:6px 0 0">${esc(t.summary)}</p></div>`;
-  if (can("editor") && pb && pb.templateKey) h += `<button class="btn ghost sm" id="editTeam" title="Edita o time no template deste playbook">✎ Editar time</button>`;
+  if (can("editor") && pb && pb.templateKey) h += `<button class="btn ghost sm" id="editTeam" title="Edita o time no template deste playbook">${ic("edit")}Editar time</button>`;
   if (t.does && t.does.length) h += `<h4>Responsabilidades</h4><div class="does">${listStr(t.does)}</div>`;
   if (t.never && t.never.length) h += `<h4>O que não faz</h4><div class="never">${listStr(t.never)}</div>`;
   if (pb) {
@@ -313,10 +300,10 @@ async function showLogin(msg) {
   let ssoSt = { enabled: false };
   try { ssoSt = await api("GET", "api/sso/status"); } catch { }
   view.innerHTML = `<div class="login-wrap"><form class="login" id="loginForm" autocomplete="on">
-      <div class="login-brand"><span class="mark"></span><span class="bname">${esc(Brand.get().name)}</span></div>
+      <div class="login-brand">${Brand.loginBrand()}</div>
       <h1>Entrar</h1>
       ${msg ? `<div class="notice">${esc(msg)}</div>` : ""}
-      ${ssoSt.enabled ? `<a class="btn primary block sso-btn" href="api/sso/login">🔐 ${esc(ssoSt.label)}</a>
+      ${ssoSt.enabled ? `<a class="btn primary block sso-btn" href="api/sso/login">${ic("sso")}${esc(ssoSt.label)}</a>
         <div class="login-or"><span>${ssoSt.localLogin === "admins" ? "acesso de emergência (administradores)" : "ou com usuário e senha"}</span></div>` : ""}
       <label>Usuário<input class="in" name="login" autocomplete="username" required autocapitalize="none"></label>
       <label>Senha<input class="in" name="password" type="password" autocomplete="current-password" required></label>
@@ -360,17 +347,30 @@ function bindPasswordForm(root, done) {
 function forcePassword() {
   if ($("#pwForm")) return;
   document.body.className = "auth";
-  view.innerHTML = `<div class="login-wrap"><div class="login"><div class="login-brand"><span class="mark"></span><span class="bname">${esc(Brand.get().name)}</span></div><h1>Defina sua senha</h1>${passwordForm(true)}
+  view.innerHTML = `<div class="login-wrap"><div class="login"><div class="login-brand">${Brand.loginBrand()}</div><h1>Defina sua senha</h1>${passwordForm(true)}
     <button class="btn ghost block" id="lo2" style="margin-top:8px">Sair</button></div></div>`;
   bindPasswordForm(view, () => start());
   $("#lo2").onclick = logout;
 }
 async function logout() {
-  if (Editor.dirty && !confirm("Há alterações não salvas. Sair mesmo assim?")) return;
-  Editor.dirty = false; Editor.unmount();
+  if ((Editor.dirty || Editor.hasDraft()) && !(await ask("Há alterações não salvas nos editores. Sair mesmo assim e descartá-las?", { title: "Sair", ok: "Sair e descartar", danger: true }))) return;
+  Editor.dirty = false; Editor.unmount(); Editor.dropDrafts();
   await api("POST", "api/logout").catch(() => {});
   location.hash = "#/"; showLogin();
 }
+
+/* barra lateral: navegação principal (o item da página atual fica marcado) */
+function renderSide() {
+  const key = (location.hash.replace(/^#\/?/, "").split("/")[0] || "").toLowerCase();
+  const on = k => (k === "home" ? (!key || /^pb-\d+$/.test(key) || key === "novo") : key === k) ? "on" : "";
+  $("#sideNav").innerHTML = !App.user ? "" : `<a href="#/" class="${on("home")}">${ic("playbooks")}<span>Playbooks</span><small>${PBS.length}</small></a>
+    ${can("editor") ? `<a href="#/templates" class="${on("templates")}">${ic("templates")}<span>Templates</span></a>` : ""}
+    ${can("admin") ? `<a href="#/admin" class="${on("admin")}">${ic("settings")}<span>Administração</span></a>` : ""}`;
+}
+/* telas estreitas: a barra lateral vira uma gaveta */
+const sideOpen = v => { document.body.classList.toggle("side-open", v); $("#sideScrim").hidden = !v; };
+$("#sideScrim").onclick = () => sideOpen(false);
+document.addEventListener("click", e => { if (e.target.closest("#sideOpen")) sideOpen(true); });
 
 function renderUserMenu() {
   const u = App.user, box = $("#usermenu");
@@ -379,12 +379,11 @@ function renderUserMenu() {
   box.innerHTML = `<button class="ubtn" id="ubtn" title="${esc(u.name)}"><span class="avatar">${esc(ini)}</span><span class="uname">${esc(u.name)}<small>${esc(u.roleName)}</small></span></button>
     <div class="umenu" id="umenu" hidden>
       <div class="uhead"><b>${esc(u.name)}</b><span>${esc(u.login)} · ${esc(u.roleName)}</span></div>
-      ${can("editor") ? `<a href="#/templates" class="uitem">📐 Templates, times e tags</a>` : ""}
-      <a href="#/docs" class="uitem">📖 Documentação</a>
-      ${can("admin") ? `<a href="#/admin" class="uitem">⚙ Administração</a>` : ""}
-      <button class="uitem" id="uPw">🔑 Trocar senha</button>
-      <button class="uitem" id="uOut">↩ Sair</button></div>`;
+      <a href="#/docs" class="uitem">${ic("docs")}Documentação</a>
+      <button class="uitem" id="uPw">${ic("key")}Trocar senha</button>
+      <button class="uitem" id="uOut">${ic("logout")}Sair</button></div>`;
   $("#ubtn").onclick = e => { e.stopPropagation(); $("#umenu").hidden = !$("#umenu").hidden; };
+  $("#umenu").addEventListener("click", e => { if (e.target.closest(".uitem")) $("#umenu").hidden = true; });   // escolher uma opção fecha o menu
   $("#uPw").onclick = () => { $("#umenu").hidden = true; modal({ title: "Trocar senha", html: passwordForm(false), onMount: (b, close) => bindPasswordForm(b, close) }); };
   $("#uOut").onclick = logout;
 }
@@ -395,10 +394,11 @@ document.addEventListener("click", e => {
 
 /* ───────── rotas ───────── */
 const currentPb = () => { const m = location.hash.match(/^#\/(pb-\d+)/i); return m ? pbBy(m[1].toLowerCase()) : null; };
-const TABS = [["fluxo", "Fluxograma"], ["fases", "Passo a passo"], ["ramos", "Ramos"], ["doc", "Documento"], ["versoes", "Versões"]];
-const EDIT_TABS = [["editar", "✎ Editar documento"], ["editar-fluxo", "✎ Editar fluxograma"]];
+/* playbook: duas visualizações (fluxograma e documentação, que já traz fases, passos e ramos), o histórico e os editores */
+const TABS = [["fluxo", "Fluxograma"], ["doc", "Documentação"], ["versoes", "Versões"]];
+const EDIT_TABS = [["editar", "Editar documento"], ["editar-fluxo", "Editar fluxograma"]];
 const view = $("#view");
-let lastHash = location.hash, skipGuard = false;
+let lastHash = location.hash;
 
 /* Abas como num navegador: cada playbook (ou página) aberto vira uma aba que pode ser fechada.
    A lista fica salva no navegador, por usuário. Cada aba lembra a sub-aba em que estava. */
@@ -411,10 +411,10 @@ const Tabs = (() => {
   const save = () => { try { localStorage.setItem(storeKey(), JSON.stringify(list)); } catch { } };
   const keyOf = hash => (hash.replace(/^#\/?/, "").split("/").filter(Boolean)[0] || "").toLowerCase() || null;
   function info(key) {
-    if (key === "novo") return can("editor") && { title: "Novo playbook", icon: "＋" };
-    if (key === "admin") return can("admin") && { title: "Administração", icon: "⚙" };
-    if (key === "templates") return can("editor") && { title: "Templates, times e tags", icon: "📐" };
-    if (key === "docs") return { title: "Documentação", icon: "📖" };
+    if (key === "novo") return can("editor") && { title: "Novo playbook", icon: "plus" };
+    if (key === "admin") return can("admin") && { title: "Administração", icon: "settings" };
+    if (key === "templates") return can("editor") && { title: "Templates, times e tags", icon: "templates" };
+    if (key === "docs") return { title: "Documentação", icon: "docs" };
     const pb = pbBy(key);
     return pb && { title: `${pb.id} · ${pb.name}`, dot: STATUS_CLS[pb.gov.status] };
   }
@@ -430,19 +430,21 @@ const Tabs = (() => {
   }
   function render() {
     list = list.filter(t => info(t.key));
-    $("#tabbar").innerHTML = `<a class="tab home ${!activeKey ? "on" : ""}" href="#/" title="Início">⌂ Início</a>` +
+    $("#tabbar").innerHTML = `<button class="side-open" id="sideOpen" title="Menu" aria-label="Abrir menu">${ic("menu")}</button><a class="tab home ${!activeKey ? "on" : ""}" href="#/" title="Início">${ic("home")}Início</a>` +
       list.map(t => {
         const i = info(t.key);
-        return `<a class="tab ${t.key === activeKey ? "on" : ""}" href="${esc(t.path)}" data-k="${esc(t.key)}" title="${esc(i.title)}">${i.dot ? `<i class="dot ${i.dot}"></i>` : `<span>${i.icon}</span>`}<span class="ttl">${esc(i.title)}</span><button class="tx" data-close="${esc(t.key)}" title="Fechar aba">✕</button></a>`;
-      }).join("") + `<button class="tab-new" id="tabNew" title="Nova aba (página inicial)">＋</button>`;
+        return `<a class="tab ${t.key === activeKey ? "on" : ""}" href="${esc(t.path)}" data-k="${esc(t.key)}" title="${esc(i.title)}">${i.dot ? `<i class="dot ${i.dot}"></i>` : ic(i.icon)}<span class="ttl">${esc(i.title)}</span>${Editor.hasDraft(t.key) ? `<i class="draft-dot" title="Alterações não salvas"></i>` : ""}<button class="tx" data-close="${esc(t.key)}" title="Fechar aba" aria-label="Fechar aba">${ic("close")}</button></a>`;
+      }).join("") + `<button class="tab-new" id="tabNew" title="Nova aba (página inicial)" aria-label="Nova aba">${ic("plus")}</button>`;
     const on = $("#tabbar .tab.on"); if (on) on.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
-  function close(key) {
+  async function close(key) {
     const i = list.findIndex(t => t.key === key); if (i < 0) return;
     const wasActive = key === activeKey;
-    if (wasActive && Editor.dirty && !confirm("Há alterações não salvas nesta aba. Fechar e descartar?")) return;
+    if (wasActive) Editor.stash();
+    if (Editor.hasDraft(key) && !(await ask("Esta aba tem alterações não salvas. Fechar e descartar as alterações?", { title: "Fechar aba", ok: "Fechar e descartar", danger: true }))) { if (wasActive) route(); return; }
+    Editor.dropDrafts(key);
     list.splice(i, 1); save();
-    if (wasActive) { Editor.dirty = false; const n = list[i] || list[i - 1]; location.hash = n ? n.path : "#/"; }
+    if (wasActive) { const n = list[i] || list[i - 1]; location.hash = n ? n.path : "#/"; }
     else render();
   }
   $("#tabbar").addEventListener("click", e => {
@@ -458,10 +460,11 @@ const renderNav = () => Tabs.render();
 
 function route() {
   if (!App.user) return;
-  if (!skipGuard && Editor.dirty && location.hash !== lastHash) {
-    if (!confirm("Há alterações não salvas. Sair e descartar?")) { skipGuard = true; location.hash = lastHash; return; }
-  }
-  skipGuard = false; Editor.dirty = false; Editor.unmount();
+  /* trocar de aba ou de página não perde o que está sendo editado: o editor guarda um rascunho, que volta
+     ao reabrir o editor (a aba mostra um ponto); só fechar a aba ou descartar apagam o rascunho */
+  Editor.stash(); Editor.unmount();
+  const um = $("#umenu"); if (um) um.hidden = true;
+  sideOpen(false); renderSide();
   lastHash = location.hash;
   if (App.data) useTeams(null);
   closeDrawer();
@@ -477,12 +480,13 @@ function route() {
   if (!parts.length) return renderHome();
   const pb = pbBy(parts[0].toLowerCase());
   if (!pb) return notFound();
+  if (parts[1] === "fases" || parts[1] === "ramos") { location.replace(`#/${pb.slug}/doc${parts[2] ? "/" + parts[2] : ""}`); return; }
   const all = TABS.concat(can("editor") ? EDIT_TABS : []);
   const tab = all.some(t => t[0] === parts[1]) ? parts[1] : "fluxo";
   renderPb(pb, tab, parts[2], parts.slice(3));
 }
 window.addEventListener("hashchange", route);
-window.addEventListener("beforeunload", e => { if (Editor.dirty) { e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("beforeunload", e => { if (Editor.dirty || Editor.hasDraft()) { e.preventDefault(); e.returnValue = ""; } });
 
 function notFound() {
   view.innerHTML = `<div class="wrap"><div class="ecard"><h2 style="margin-top:0">Página não encontrada</h2><p class="muted">O playbook não existe ou não está disponível para o seu perfil.</p><a class="btn ghost" href="#/">Voltar ao início</a></div></div>`;
@@ -510,8 +514,7 @@ function homeCards(list) {
       <p>${esc(pbSubtitle(p))}</p>
       <div class="meta"><span class="chip">${p.ramos.length} ramos</span><span class="chip">${p.steps.length} passos</span></div>
       <div class="govline">${govLine(p.gov)}</div></a>`).join("")}
-    ${!list.length ? homeEmpty() : ""}
-    ${can("editor") ? `<a class="card add" href="#/novo"><span class="plus">＋</span><h3>Criar playbook</h3><p>Preencha o essencial; a ferramenta gera o documento no padrão e o fluxograma inicial. Começa em Desenvolvimento.</p></a>` : ""}</div>`;
+    ${can("editor") ? addCard() : ""}</div>`;
 }
 function homeLarge(list) {
   if (!list.length) return homeEmpty();
@@ -533,23 +536,22 @@ function homeSmall(list) {
         <span role="cell" class="pt-num">${p.ramos.length}</span><span role="cell" class="pt-num">${p.steps.length}</span>
         <span role="cell" class="pt-rev">${p.gov.reviewed ? esc(p.gov.reviewed) + (p.gov.reviewer ? ` · ${esc(p.gov.reviewer)}` : "") : `<span class="muted">—</span>`}</span></a>`).join("")}</div>`;
 }
-const homeEmpty = () => `<div class="empty">Nenhum playbook ${homeFilter === "Todos" ? "disponível" : "em " + esc(homeFilter)}.</div>`;
+const addCard = () => `<a class="card add" href="#/novo"><span class="plus">${ic("plus")}</span><h3>Criar playbook</h3><p>Preencha o essencial; a ferramenta gera o documento no padrão e o fluxograma inicial. Começa em Desenvolvimento.</p></a>`;
+/* lista vazia: só a opção de criar (para quem pode criar); sem mensagem de "nenhum playbook" */
+const homeEmpty = () => can("editor") ? `<div class="cards">${addCard()}</div>` : "";
 
 function renderHome() {
   const counts = s => PBS.filter(p => p.gov.status === s).length;
   const list = PBS.filter(p => homeFilter === "Todos" || p.gov.status === homeFilter);
   const hv = homeView();
-  view.innerHTML = `<section class="hero"><div class="wrap">
-      <h1>${esc(Brand.get().homeTitle || Brand.DEFAULT.homeTitle)}</h1>
-      ${Brand.get().homeSubtitle ? `<p>${esc(Brand.get().homeSubtitle)}</p>` : ""}
-      ${can("editor") ? "" : `<p class="ro">Você vê os playbooks publicados (Produção) e os que estão em Homologação.</p>`}
-    </div></section>
-    <div class="wrap">
+  view.innerHTML = `<div class="wrap">
+    <header class="page-head"><h1>Playbooks</h1><span class="count">${PBS.length}</span>
+      <div class="home-actions">${can("editor") ? `<button class="btn ghost sm" id="impBtn" title="Importar .medusa.md ou .md">${ic("upload")}Importar</button>` : ""}<a class="btn ghost sm" href="api/export" download title="Baixar todos (.zip de .medusa.md)">${ic("download")}Exportar</a>
+        ${can("editor") ? `<a class="btn primary sm" href="#/novo">${ic("plus")}Novo playbook</a>` : ""}</div></header>
     <div class="home-bar"><div class="filters">${["Todos", ...App.data.statuses.filter(s => can("editor") || s !== "Desenvolvimento")].map(s =>
       `<button class="${s === homeFilter ? "on" : ""}" data-hf="${esc(s)}">${s === "Todos" ? "Todos" : `<i class="dot ${STATUS_CLS[s]}"></i>${esc(s)}`} <span class="cnt">${s === "Todos" ? PBS.length : counts(s)}</span></button>`).join("")}</div>
-      <div class="home-actions"><div class="view-seg" role="group" aria-label="Visualização da lista">${HOME_VIEWS.map(([k, n, ic]) =>
-        `<button class="${k === hv ? "on" : ""}" data-hv="${k}" title="${n}" aria-label="${n}" aria-pressed="${k === hv}">${ic}</button>`).join("")}</div>
-        ${can("editor") ? `<a class="btn primary sm" href="#/novo">＋ Novo playbook</a><button class="btn ghost sm" id="impBtn" title="Importar um arquivo .medusa.md ou .md">⤒ Importar</button>` : ""}<a class="btn ghost sm" href="api/export" download title="Baixa um .zip com os playbooks que você pode ver, no formato .medusa.md">⤓ Exportar todos</a></div></div>
+      <div class="view-seg" role="group" aria-label="Visualização da lista">${HOME_VIEWS.map(([k, n, ic]) =>
+        `<button class="${k === hv ? "on" : ""}" data-hv="${k}" title="${n}" aria-label="${n}" aria-pressed="${k === hv}">${ic}</button>`).join("")}</div></div>
     ${hv === "lg" ? homeLarge(list) : hv === "sm" ? homeSmall(list) : homeCards(list)}</div>`;
   view.querySelector(".filters").onclick = e => { const b = e.target.closest("[data-hf]"); if (b) { homeFilter = b.dataset.hf; renderHome(); } };
   view.querySelector(".view-seg").onclick = e => {
@@ -573,7 +575,7 @@ function renderPb(pb, tab, extra, rest) {
   const all = TABS.concat(can("editor") ? EDIT_TABS : []);
   view.innerHTML = `<div class="pbbar"><div class="wrap">
     <div class="pbhead"><span class="pbid">${pb.id}</span><h1>${esc(pb.name)}</h1>${statusPill(g.status)}
-      <div class="pbactions"><div class="menu-wrap"><button class="btn ghost sm" id="expBtn" aria-haspopup="true">⤓ Exportar ▾</button>
+      <div class="pbactions"><div class="menu-wrap"><button class="btn ghost sm" id="expBtn" aria-haspopup="true">${ic("download")}Exportar${ic("caret", "caret")}</button>
         <div class="dmenu" id="expMenu" hidden>
           <div class="dm-h">Documento</div>
           <a href="api/pb/${pb.id}/export?fmt=md" download><b>Markdown</b><small>.md · Confluence, Git, qualquer editor (.zip se tiver imagens)</small></a>
@@ -582,13 +584,14 @@ function renderPb(pb, tab, extra, rest) {
           <div class="dm-h">Fluxograma</div>
           <a href="api/pb/${pb.id}/export?fmt=drawio" download><b>draw.io</b><small>.drawio · editável no draw.io e no Confluence</small></a>
           <a href="api/pb/${pb.id}/export?fmt=mmd" download><b>Mermaid</b><small>.mmd · GitHub, GitLab, mermaid.live</small></a>
-          <button data-exp="svg"><b>Imagem SVG</b><small>.svg · para apresentações e wikis</small></button>
+          <button data-exp="svg"><b>Imagem SVG</b><small>.svg · vetorial, para wikis</small></button>
+          <button data-exp="jpeg"><b>Imagem JPEG</b><small>.jpg · apresentações, e-mail e tickets</small></button>
           <div class="dm-h">Pacote completo</div>
           <a href="api/pb/${pb.id}/export?fmt=medusa" download><b>Medusa</b><small>.medusa.md · documento + fluxograma, reimportável</small></a>
         </div></div>
-        ${can("editor") ? `<button class="btn ghost sm" id="stBtn">⇄ Alterar status</button>` : ""}${can("admin") ? `<button class="btn danger sm" id="delBtn" title="Excluir playbook (somente administrador)">🗑 Excluir</button>` : ""}</div></div>
+        ${can("editor") ? `<button class="btn ghost sm" id="stBtn">${ic("swap")}Alterar status</button>` : ""}${can("admin") ? `<button class="btn danger sm" id="delBtn" title="Excluir playbook (somente administrador)">${ic("trash")}Excluir</button>` : ""}</div></div>
     ${govHtml(pb)}
-    <nav class="tabs">${all.map(([k, l]) => `<a href="#/${pb.slug}/${k}" class="${k === tab ? "on" : ""} ${k.startsWith("editar") ? "edit" : ""}">${l}</a>`).join("")}</nav></div></div>
+    <nav class="tabs">${all.map(([k, l]) => `<a href="#/${pb.slug}/${k}" class="${k === tab ? "on" : ""} ${k.startsWith("editar") ? "edit" : ""}">${k.startsWith("editar") ? ic("edit") : ""}${l}${Editor.hasDraft(pb.id.toLowerCase() + (k === "editar" ? ":doc" : ":flow")) && k.startsWith("editar") ? `<i class="draft-dot" title="Alterações não salvas"></i>` : ""}</a>`).join("")}</nav></div></div>
     <div class="wrap" id="tabview"></div>`;
   if ($("#stBtn")) $("#stBtn").onclick = () => statusDialog(currentPb());
   $("#expBtn").onclick = e => { e.stopPropagation(); $("#expMenu").hidden = !$("#expMenu").hidden; };
@@ -597,9 +600,10 @@ function renderPb(pb, tab, extra, rest) {
   const tv = $("#tabview");
   if (tab === "editar") return Editor.docEditor(tv, pb);
   if (tab === "editar-fluxo") { document.body.classList.add("editing"); return Editor.flowEditor(tv, pb); }
-  if (tab === "versoes") return Versions.render(pb, tv, extra, rest || []);
-  ({ fluxo: tabFlow, fases: tabSteps, ramos: tabRamos, doc: tabDoc })[tab](pb, tv, extra);
-  linkify(tv, pb);
+  if (tab === "versoes") Versions.render(pb, tv, extra, rest || []);
+  else { ({ fluxo: tabFlow, doc: tabDoc })[tab](pb, tv, extra); linkify(tv, pb); }
+  const pend = [["editar", "Editar documento", ":doc"], ["editar-fluxo", "Editar fluxograma", ":flow"]].filter(([, , k]) => Editor.hasDraft(pb.id.toLowerCase() + k));
+  if (pend.length) tv.insertAdjacentHTML("afterbegin", `<div class="notice draft-note">${ic("warn")}<span>Alterações não salvas em ${pend.map(([k, l]) => `<a href="#/${pb.slug}/${k}">${l}</a>`).join(" e ")}. Elas ficam guardadas enquanto a aba estiver aberta.</span></div>`);
 }
 
 function govHtml(pb) {
@@ -621,7 +625,7 @@ function updateHeader(pb) {
 
 /* ── ciclo de vida ── */
 async function statusDialog(pb) {
-  if (Editor.dirty) return toast("Salve ou descarte as alterações antes de mudar o status", "warn");
+  if (Editor.dirty || Editor.hasDraft(pb.id.toLowerCase())) return toast("Salve ou descarte as alterações dos editores deste playbook antes de mudar o status", "warn");
   let approvers = [];
   try { approvers = (await api("GET", "api/approvers")).approvers; } catch (e) { return toast(e.message, "err"); }
   const cur = pb.gov.status, sts = App.data.statuses;
@@ -670,7 +674,7 @@ function deleteDialog(pb) {
         e.preventDefault();
         try {
           await api("DELETE", `api/pb/${pb.id}`, { confirm: form.confirm.value.trim().toUpperCase() });
-          removePlaybook(pb.id); close(); toast(`${pb.id} excluído (movido para a lixeira)`); location.hash = "#/";
+          removePlaybook(pb.id); Editor.dropDrafts(pb.id.toLowerCase()); close(); toast(`${pb.id} excluído (movido para a lixeira)`); location.hash = "#/";
         } catch (x) { $("#delerr", b).textContent = x.message; $("#delerr", b).hidden = false; }
       };
     }
@@ -689,10 +693,9 @@ function badgesFor(pb) {
 }
 function tabFlow(pb, el) {
   zoom = 1;
-  el.innerHTML = `<div class="flowbar"><div class="hint"><b>Clique</b> em uma caixa (ex.: <b>R1</b>) para ler o trecho da documentação, ou no <b>nome do time</b> (raias e times de apoio) para ver responsabilidades. A etiqueta em cada caixa mostra o ID do passo.</div>
-    <div class="zoom"><button data-z="-1" title="Diminuir">−</button><button data-z="0" title="Ajustar à largura">⤢</button><button data-z="1" title="Aumentar">+</button></div></div>
-    <div class="flowbox viewer" id="flowbox"></div>
-    <div class="legend"><span><i style="color:#B25E09"></i>handoff ao N2</span><span><i style="color:#C0272D"></i>escalonamento ao CSIRT</span><span><i style="color:#7A3E9D"></i>referência a outro playbook</span><span><i style="color:#5B6673"></i>acionamento de time de apoio</span></div>`;
+  el.innerHTML = `<div class="flowbar"><div class="legend"><span><i style="color:#B25E09"></i>handoff ao N2</span><span><i style="color:#C0272D"></i>escalonamento ao CSIRT</span><span><i style="color:#7A3E9D"></i>outro playbook</span><span><i style="color:#5B6673"></i>time de apoio</span></div>
+    <div class="zoom"><button data-z="-1" title="Diminuir" aria-label="Diminuir">${ic("zoomOut")}</button><button data-z="0" title="Ajustar à largura" aria-label="Ajustar à largura">${ic("fit")}</button><button data-z="1" title="Aumentar" aria-label="Aumentar">${ic("zoomIn")}</button></div></div>
+    <div class="flowbox viewer" id="flowbox" title="Clique numa caixa para ler o trecho da documentação, ou no nome de um time para ver as responsabilidades"></div>`;
   const live = n => (pb.refs[n.id] || []).length || n.team;
   const { svg, vb } = Flow.svg(pb.flow, { badges: badgesFor(pb), nodeClass: n => live(n) ? "" : "static" });
   const box = $("#flowbox");
@@ -702,7 +705,7 @@ function tabFlow(pb, el) {
   const fit = () => { zoom = Math.min(1.4, (box.clientWidth - 4) / vb[2]); apply(); };
   fit();
   el.querySelector(".zoom").onclick = e => {
-    const z = e.target.dataset.z; if (z === undefined) return;
+    const zb = e.target.closest("[data-z]"); if (!zb) return; const z = zb.dataset.z;
     if (z === "0") fit(); else { zoom = Math.max(.4, Math.min(2.5, zoom * (z === "1" ? 1.2 : 1 / 1.2))); apply(); }
   };
   svgEl.addEventListener("click", e => {
@@ -717,75 +720,26 @@ function tabFlow(pb, el) {
   });
 }
 
-/* ── passo a passo ── */
-function tabSteps(pb, el, focus) {
-  const phases = [];
-  for (const s of pb.steps) {
-    let p = phases.find(x => x.name === s.phase);
-    if (!p) phases.push(p = { name: s.phase, team: s.team, steps: [] });
-    p.steps.push(s);
-  }
-  const teams = ["Todos", ...new Set(pb.steps.map(s => s.team))];
-  el.innerHTML = `<div class="filters">${teams.map((t, i) => `<button class="${i ? "" : "on"}" data-f="${esc(t)}">${esc(t)}</button>`).join("")}</div>
-  <div id="phases">${phases.map(p => `<div class="phase" data-ph="${esc(p.team)}"><h3 style="border-left-color:${TEAM_COLOR(p.team)}">${esc(p.name)} ${teamChip(p.team)}</h3>
-    ${p.steps.map(s => `<div class="srow" id="step-${esc(s.id)}"><div class="sid">${esc(s.id)}</div><div>${esc(s.action)}</div><div class="exit"><b>Saída:</b> ${esc(s.exit)}</div></div>`).join("")}</div>`).join("")}</div>`;
-  el.querySelector(".filters").onclick = e => {
-    const f = e.target.dataset.f; if (!f) return;
-    el.querySelectorAll(".filters button").forEach(b => b.classList.toggle("on", b === e.target));
-    el.querySelectorAll(".phase").forEach(p => p.hidden = f !== "Todos" && p.dataset.ph !== f);
-  };
-  if (focus) setTimeout(() => {
-    const t = document.getElementById("step-" + focus);
-    if (t) { t.scrollIntoView({ block: "center" }); t.classList.add("flash"); setTimeout(() => t.classList.remove("flash"), 2500); }
-  }, 30);
-}
-
-/* ── ramos ── */
-function tabRamos(pb, el) {
-  const rot = findSection(pb, "subcategorias-de-entrada-e-roteamento"), dec = findSection(pb, "tabela-de-decisao-da-triagem");
-  const ed = can("editor");
-  el.innerHTML = `<div class="ramos-bar"><p class="muted" style="margin:0">Clique em um ramo para ler o detalhamento completo: o que o N1 verifica, o que conta como sucesso, contenção por time e saídas.</p>
-    ${ed ? `<button class="btn primary sm" id="ramoNew" title="Cria a subseção no documento e a caixa no fluxograma">＋ Novo ramo</button>` : ""}</div>
-  <div class="ramogrid">${pb.ramos.map(r => `<div class="ramocell"><button class="ramobtn" data-ramo="${esc(r.id)}"><b>${esc(r.id)}</b>${esc(r.short)}</button>
-    ${ed ? `<button class="ramodel" data-del="${esc(r.id)}" title="Excluir ${esc(r.id)} do documento e do fluxograma">✕</button>` : ""}</div>`).join("")}
-    ${pb.ramos.length ? "" : `<div class="empty">Este playbook ainda não tem ramos.${ed ? " Crie um aqui, pela forma <b>Ramo</b> no editor de fluxograma ou por <b>＋ Novo ramo</b> no documento." : ""}</div>`}</div>
-  ${rot ? `<div class="doc"><section class="md"><h2>${esc(rot.title)}</h2>${rot.html}</section></div>` : ""}
-  ${dec ? `<div class="doc"><section class="md"><h2>${esc(dec.title)}</h2>${dec.html}</section></div>` : ""}`;
-  el.querySelectorAll(".ramobtn").forEach(b => b.onclick = () => showRefs(pb, [b.dataset.ramo], "", false));
-  if (!ed) return;
-  $("#ramoNew").onclick = () => modal({ title: `Novo ramo no ${pb.id}`, html: `<form id="rnForm" class="tform">
-      <label>Nome do ramo<input class="in" name="name" required maxlength="80" placeholder="ex.: Phishing com anexo"></label>
-      <label>Indicador de sucesso <small>(o que conta como sucesso)</small><input class="in" name="q" maxlength="200" placeholder="ex.: usuário abriu o anexo?"></label>
-      <p class="muted small">Cria <b>R${pb.ramos.length ? "n" : "1"}</b> nos dois lados: a subseção de detalhe no documento e a caixa no fluxograma, ao lado do último ramo e com as mesmas ligações.</p>
-      <div class="err" id="rnErr" hidden></div>
-      <div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn primary" type="submit">Criar ramo</button></div></form>`,
-    onMount: (b, close) => {
-      b.querySelector("[data-cancel]").onclick = close;
-      $("#rnForm", b).onsubmit = async e => {
-        e.preventDefault(); const f = new FormData(e.target);
-        try {
-          const r = await api("POST", `api/pb/${pb.id}/ramos`, { name: f.get("name"), q: f.get("q"), rev: pb.rev });
-          replacePlaybook(r.playbook); close(); toast(`${r.ramo} criado no documento e no fluxograma`); route();
-        } catch (x) { $("#rnErr", b).textContent = x.message; $("#rnErr", b).hidden = false; }
-      };
-    } });
-  el.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
-    const id = b.dataset.del;
-    if (!confirm(`Excluir o ramo ${id}?\n\nSai a subseção de detalhe do documento, a caixa ${id} do fluxograma (com as setas dela) e os vínculos "ao clicar" para ${id}.`)) return;
-    try { const r = await api("DELETE", `api/pb/${pb.id}/ramos/${encodeURIComponent(id)}`, { rev: pb.rev }); replacePlaybook(r.playbook); toast(`${id} excluído`); route(); }
-    catch (x) { toast(x.message, "err"); }
-  });
-}
-
 /* ── documento completo ── */
-function tabDoc(pb, el) {
+function tabDoc(pb, el, focus) {
   const secs = pb.sections.filter(s => !/^Fluxograma/.test(s.title));
-  el.innerHTML = `<div class="docgrid"><nav class="toc">${secs.map(s => `<a href="#" data-go="${s.id}">${esc(s.title)}</a>`).join("")}</nav>
+  el.innerHTML = `<div class="docgrid"><nav class="toc">${secs.map(s => `<a href="#" data-go="${s.id}">${esc(s.title)}</a>
+      ${s.subs.length && s.subs.length <= 24 ? `<div class="toc-subs">${s.subs.map(x => `<a href="#" data-sub="${x.id}">${esc(x.title)}</a>`).join("")}</div>` : ""}`).join("")}</nav>
     <div class="doc">${secs.map(s => `<section id="sec-${s.id}" class="md"><h2>${esc(s.title)}</h2>${s.html}${s.subs.map(x => `<h3 id="sub-${x.id}">${esc(x.title)}</h3>${x.html}`).join("")}</section>`).join("")}</div></div>`;
   el.querySelector(".toc").onclick = e => {
-    const a = e.target.closest("[data-go]"); if (!a) return;
-    e.preventDefault(); document.getElementById("sec-" + a.dataset.go).scrollIntoView();
+    const a = e.target.closest("[data-go], [data-sub]"); if (!a) return;
+    e.preventDefault(); document.getElementById(a.dataset.go ? "sec-" + a.dataset.go : "sub-" + a.dataset.sub).scrollIntoView();
   };
+  if (focus) setTimeout(() => focusInDoc(el, pb, decodeURIComponent(focus)), 30);
+}
+/* leva ao trecho: R2 → subseção do ramo; T3, A1, E4… → linha da tabela que começa com o ID */
+function focusInDoc(el, pb, id) {
+  let t = null;
+  const ramo = pb.ramos.find(r => r.id === id);
+  if (ramo) t = el.querySelector(`#sub-${CSS.escape(pb.sections.flatMap(s => s.subs).find(x => x.title === ramo.title)?.id || "")}`);
+  if (!t) t = [...el.querySelectorAll(".doc tr")].find(tr => { const c = tr.querySelector("td"); return c && (c.textContent.trim() === id || c.textContent.trim().startsWith(id + " ")); });
+  if (!t) return;
+  t.scrollIntoView({ block: "center" }); t.classList.add("flash"); setTimeout(() => t.classList.remove("flash"), 2500);
 }
 
 /* ───────── administração ───────── */
@@ -824,7 +778,7 @@ const Admin = (() => {
         <div class="tw"><table class="utable"><thead><tr><th>Usuário</th><th>Perfil</th><th>Situação</th><th>Último acesso</th><th>Sessões</th><th></th></tr></thead><tbody>
         ${data.users.map(u => `<tr class="${u.active ? "" : "off"}"><td><b>${esc(u.name)}</b><br><code>${esc(u.login)}</code>${u.mustChange ? ` <span class="tag warn">senha temporária</span>` : ""}
             <br><select class="in xs auth-sel" data-auth="${esc(u.login)}" ${u.login === App.user.login ? "disabled" : ""} title="Forma de autenticação">
-              <option value="local" ${u.auth !== "sso" ? "selected" : ""}>🔑 Senha local</option><option value="sso" ${u.auth === "sso" ? "selected" : ""}>🔐 SSO${u.auth === "sso" && !u.ssoLinked ? " (aguardando 1º login)" : ""}</option></select></td>
+              <option value="local" ${u.auth !== "sso" ? "selected" : ""}>Senha local</option><option value="sso" ${u.auth === "sso" ? "selected" : ""}>SSO${u.auth === "sso" && !u.ssoLinked ? " (aguardando 1º login)" : ""}</option></select></td>
           <td>${roleSel(u)}</td>
           <td><label class="switch"><input type="checkbox" data-active="${esc(u.login)}" ${u.active ? "checked" : ""} ${u.login === App.user.login ? "disabled" : ""}><span>${u.active ? "Ativo" : "Inativo"}</span></label></td>
           <td class="small">${fmtTs(u.lastLogin)}</td>
@@ -849,15 +803,15 @@ const Admin = (() => {
     el.querySelectorAll("[data-role]").forEach(s => s.onchange = () => upd(s.dataset.role, { role: s.value }, "Perfil alterado"));
     el.querySelectorAll("[data-auth]").forEach(sel => sel.onchange = async () => {
       const lg = sel.dataset.auth, to = sel.value;
-      if (!confirm(to === "sso" ? `Converter ${lg} para SSO? A senha local deixa de funcionar e as sessões abertas são encerradas. O login precisa ser igual ao enviado pelo provedor.`
-        : `Voltar ${lg} para senha local? Uma senha temporária será gerada.`)) { sel.value = to === "sso" ? "local" : "sso"; return; }
+      if (!(await ask(to === "sso" ? `Converter ${lg} para SSO? A senha local deixa de funcionar e as sessões abertas são encerradas. O login precisa ser igual ao enviado pelo provedor.`
+        : `Voltar ${lg} para senha local? Uma senha temporária será gerada.`, { title: "Forma de autenticação", ok: "Alterar" }))) { sel.value = to === "sso" ? "local" : "sso"; return; }
       try { const r = await api("PUT", `api/users/${encodeURIComponent(lg)}`, { auth: to }); toast("Autenticação alterada"); if (r.tempPassword) showTemp(r.user, r.tempPassword, "Senha local gerada"); }
       catch (e) { toast(e.message, "err"); }
       reload();
     });
     el.querySelectorAll("[data-active]").forEach(c => c.onchange = () => upd(c.dataset.active, { active: c.checked }, c.checked ? "Usuário reativado" : "Usuário desativado (sessões encerradas)"));
     el.querySelectorAll("[data-reset]").forEach(b => b.onclick = async () => {
-      if (!confirm(`Gerar nova senha temporária para ${b.dataset.reset}? As sessões abertas dele serão encerradas.`)) return;
+      if (!(await ask(`Gerar nova senha temporária para ${b.dataset.reset}? As sessões abertas dele serão encerradas.`, { title: "Redefinir senha", ok: "Gerar senha" }))) return;
       try { const r = await api("POST", `api/users/${encodeURIComponent(b.dataset.reset)}/reset`); showTemp(r.user, r.tempPassword, "Senha redefinida"); reload(); } catch (e) { toast(e.message, "err"); }
     });
     el.querySelectorAll("[data-kick]").forEach(b => b.onclick = async () => {
@@ -865,7 +819,7 @@ const Admin = (() => {
       reload();
     });
     el.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
-      if (!confirm(`Excluir o usuário ${b.dataset.del}? Para só bloquear o acesso, prefira desativar.`)) return;
+      if (!(await ask(`Excluir o usuário ${b.dataset.del}? Para só bloquear o acesso, prefira desativar.`, { title: "Excluir usuário", ok: "Excluir", danger: true }))) return;
       try { await api("DELETE", `api/users/${encodeURIComponent(b.dataset.del)}`); toast("Usuário excluído"); } catch (e) { toast(e.message, "err"); }
       reload();
     });
@@ -893,95 +847,26 @@ const Admin = (() => {
     $("#afilter", el).oninput = ev => { const v = ev.target.value.toLowerCase(); el.querySelectorAll("tbody tr").forEach(tr => tr.hidden = v && !tr.dataset.q.includes(v)); };
   }
 
-  /* Aparência: grade 2×2 de cartões do mesmo formato (título, conteúdo, ações no rodapé).
-     Identidade | Logo  /  Página inicial | Prévia. A prévia mostra o que ainda não foi salvo. */
+  /* Aparência: só o nome do workspace e a logo. O tema (claro/escuro) é escolha de cada usuário, na barra lateral. */
   function appearance(el) {
     const b = Brand.get();
-    let st = { name: b.name, color: b.color };
-    const SW = ["#3B5BDB", "#CC092F", "#0F766E", "#2E7D32", "#7A3E9D", "#B25E09", "#374151", "#AD1457"];
-    const card = (title, sub, body, foot) => `<section class="ecard ap-card"><header class="ap-h"><b>${title}</b><small>${sub}</small></header>
-      <div class="ap-body">${body}</div><footer class="ap-foot">${foot}</footer></section>`;
     const logoImg = b.logo ? `<img src="api/branding/logo?v=${esc(b.logo)}" alt="">` : "";
-    const clear = b.logoBg === "transparent";
     el.innerHTML = `<div class="appearance">
-      ${card("Identidade", "Nome e cor primária da ferramenta", `
-        <label>Nome exibido no topo, no login e na aba do navegador<input class="in" id="apName" maxlength="40" value="${esc(st.name)}"></label>
-        <div class="pp-lbl">Cor primária</div>
-        <div class="color-grid">
-          <label class="cf"><span>Seletor</span><input type="color" id="apPick" value="${esc(st.color)}"></label>
-          <label class="cf"><span>Hexadecimal</span><input class="in hex" id="apHex" value="${esc(st.color)}" maxlength="7"></label>
-          <label class="cf"><span>R</span><input class="in" id="apR" type="number" min="0" max="255"></label>
-          <label class="cf"><span>G</span><input class="in" id="apG" type="number" min="0" max="255"></label>
-          <label class="cf"><span>B</span><input class="in" id="apB" type="number" min="0" max="255"></label>
-        </div>
-        <div class="swatches" role="group" aria-label="Cores sugeridas">${SW.map(c => `<button style="background:${c}" data-sw="${c}" title="${c}" aria-label="${c}"></button>`).join("")}</div>
-        <div class="contrast" id="apContrast"></div>
-        <p class="muted small">A cor muda botões, cabeçalho, abas e destaques. As cores das raias, formas e setas dos fluxogramas não mudam: fazem parte do modelo dos playbooks.</p>
-        <div class="err" id="aperr" hidden></div>`,
-        `<button class="btn ghost" id="apReset">Restaurar padrão</button><button class="btn primary" id="apSave">Salvar identidade</button>`)}
-      ${card("Logo", "Aparece no topo, ao lado do nome", `
-        <div class="logo-cur"><div class="lg ${clear ? "clear" : ""}" id="lgBox" title="${clear ? "O quadriculado indica as áreas transparentes" : ""}">${logoImg || `<span class="muted small">sem logo</span>`}</div>
-          <div class="small muted">PNG, JPG, SVG ou WEBP até 512 KB, de preferência com fundo transparente. A logo se ajusta sozinha à altura do topo.</div></div>
-        <div class="pp-lbl">Fundo da logo no topo</div>
-        <div class="bg-opts" role="radiogroup" aria-label="Fundo da logo">
-          <label class="bg-opt"><input type="radio" name="logoBg" value="white" ${clear ? "" : "checked"}><span><b>Branco</b><small>Caixa branca atrás da logo: legível com qualquer cor primária. Bom para logos escuras.</small></span></label>
-          <label class="bg-opt"><input type="radio" name="logoBg" value="transparent" ${clear ? "checked" : ""}><span><b>Transparente</b><small>A logo fica direto sobre a faixa colorida. Bom para logos claras ou brancas em PNG/SVG transparente.</small></span></label>
-        </div>
-        <label class="logo-drop" id="lgDrop"><span>Arraste a imagem aqui ou clique para escolher</span><input type="file" id="lgFile" accept="image/png,image/jpeg,image/svg+xml,image/webp" hidden></label>`,
-        `<button class="btn ghost" id="lgDel" ${b.logo ? "" : "disabled"}>Remover logo</button><button class="btn primary" id="lgPick">Enviar logo</button>`)}
-      ${card("Página inicial", "Título e subtítulo do topo da página inicial", `
-        <label>Título<input class="in" id="hmTitle" maxlength="120" value="${esc(b.homeTitle || "")}"></label>
-        <label>Subtítulo<textarea class="in" id="hmSub" rows="4" maxlength="600">${esc(b.homeSubtitle || "")}</textarea></label>
-        <p class="muted small">Vale para todos os usuários. Não muda os playbooks nem os fluxogramas.</p>
-        <div class="err" id="hmErr" hidden></div>`,
-        `<button class="btn ghost" id="hmReset">Texto padrão</button><button class="btn primary" id="hmSave">Salvar página inicial</button>`)}
-      ${card("Prévia", "Como fica, inclusive o que ainda não foi salvo", `
-        <div class="preview-box">
-          <div class="preview-top" style="background:var(--brand-grad);color:var(--on-brand)"><span class="brand-mark ${b.logo ? "has-logo" + (clear ? " logo-clear" : "") : "default"}" id="pvMark">${logoImg}</span><span id="pvName">${esc(st.name)}</span></div>
-          <div class="preview-hero"><b id="pvTitle"></b><p id="pvSub"></p></div>
-          <div class="preview-body"><button class="btn primary sm" type="button">Botão</button><span class="status prd">Produção</span><button class="ref step" type="button">T0</button><span class="chip">chip</span></div></div>`,
-        `<span class="muted small">Cada cartão tem o próprio botão de salvar.</span>`)}
+      <section class="ecard ap-card"><header class="ap-h"><b>Workspace</b></header>
+        <div class="ap-body"><label>Nome<input class="in" id="apName" maxlength="40" value="${esc(b.name)}" placeholder="${esc(Brand.DEFAULT.name)}"></label>
+          <p class="muted small">Aparece na barra lateral, no login e na aba do navegador.</p><div class="err" id="aperr" hidden></div></div>
+        <footer class="ap-foot"><button class="btn ghost" id="apReset">Padrão</button><button class="btn primary" id="apSave">Salvar</button></footer></section>
+      <section class="ecard ap-card"><header class="ap-h"><b>Logo</b></header>
+        <div class="ap-body"><div class="logo-cur"><div class="lg">${logoImg || `<span class="muted small">sem logo</span>`}</div>
+            <div class="lg dark" title="Como fica no tema escuro">${logoImg || `<span class="muted small">sem logo</span>`}</div></div>
+          <label class="logo-drop" id="lgDrop"><span>Arraste a imagem ou clique para escolher</span><input type="file" id="lgFile" accept="image/png,image/jpeg,image/svg+xml,image/webp" hidden></label>
+          <p class="muted small">PNG, SVG, JPG ou WEBP até 512 KB. Prefira fundo transparente; a prévia mostra os dois temas.</p></div>
+        <footer class="ap-foot"><button class="btn ghost" id="lgDel" ${b.logo ? "" : "disabled"}>Remover</button><button class="btn primary" id="lgPick">Enviar logo</button></footer></section>
     </div>`;
-    const hex = $("#apHex", el), pick = $("#apPick", el), R = $("#apR", el), G = $("#apG", el), B = $("#apB", el);
-    function set(color, from) {
-      if (!/^#[0-9A-Fa-f]{6}$/.test(color)) return;
-      st.color = color.toUpperCase();
-      if (from !== "hex") hex.value = st.color;
-      if (from !== "pick") pick.value = st.color.toLowerCase();
-      const [r, g, bb] = Brand.hexToRgb(st.color);
-      if (from !== "rgb") { R.value = r; G.value = g; B.value = bb; }
-      const c = Brand.contrast([r, g, bb], [255, 255, 255]);
-      $("#apContrast", el).className = "contrast" + (c < 3 ? " bad" : "");
-      $("#apContrast", el).textContent = c < 3 ? `Contraste baixo com branco (${c.toFixed(1)}:1): o texto sobre a cor ficará escuro.` : `Contraste com branco: ${c.toFixed(1)}:1`;
-      el.querySelectorAll("[data-sw]").forEach(x => x.classList.toggle("on", x.dataset.sw === st.color));
-      Brand.preview(st);
-    }
-    set(st.color);
-    const pvHome = () => {
-      $("#pvTitle", el).textContent = $("#hmTitle", el).value.trim() || Brand.DEFAULT.homeTitle;
-      const sub = $("#hmSub", el).value.trim(); $("#pvSub", el).textContent = sub; $("#pvSub", el).hidden = !sub;
-    };
-    pvHome();
-    $("#hmTitle", el).oninput = pvHome; $("#hmSub", el).oninput = pvHome;
-    pick.oninput = () => set(pick.value, "pick");
-    hex.oninput = () => { let v = hex.value.trim(); if (!v.startsWith("#")) v = "#" + v; set(v, "hex"); };
-    [R, G, B].forEach(i => i.oninput = () => set(Brand.rgbToHex(+R.value || 0, +G.value || 0, +B.value || 0), "rgb"));
-    el.querySelector(".swatches").onclick = e => { const b2 = e.target.closest("[data-sw]"); if (b2) set(b2.dataset.sw); };
-    $("#apName", el).oninput = e => { st.name = e.target.value; $("#pvName", el).textContent = st.name || Brand.DEFAULT.name; };
-    $("#apReset", el).onclick = () => { $("#apName", el).value = Brand.DEFAULT.name; st.name = Brand.DEFAULT.name; $("#pvName", el).textContent = st.name; set(Brand.DEFAULT.color); };
+    $("#apReset", el).onclick = () => { $("#apName", el).value = Brand.DEFAULT.name; };
     $("#apSave", el).onclick = async () => {
-      try { Brand.apply(await api("PUT", "api/branding", st)); $("#aperr", el).hidden = true; toast("Identidade salva para todos os usuários"); }
+      try { Brand.apply(await api("PUT", "api/branding", { name: $("#apName", el).value.trim() })); $("#aperr", el).hidden = true; toast("Nome do workspace salvo"); }
       catch (x) { $("#aperr", el).textContent = x.message; $("#aperr", el).hidden = false; }
-    };
-    $("#hmReset", el).onclick = async () => {
-      try { Brand.apply(await api("PUT", "api/branding", { homeReset: true })); toast("Texto padrão restaurado"); appearance(el); } catch (x) { toast(x.message, "err"); }
-    };
-    $("#hmSave", el).onclick = async () => {
-      const t = $("#hmTitle", el).value.trim(), sub = $("#hmSub", el).value.trim();
-      try {
-        Brand.apply(await api("PUT", "api/branding", { homeTitle: t, homeSubtitle: sub }));
-        toast("Página inicial salva"); appearance(el);
-      } catch (x) { $("#hmErr", el).textContent = x.message; $("#hmErr", el).hidden = false; }
     };
     const upload = file => {
       if (!file) return;
@@ -993,14 +878,6 @@ const Admin = (() => {
       };
       rd.readAsDataURL(file);
     };
-    /* fundo da logo: vale na hora (topo, prévia e quadro) e é salvo para todos */
-    el.querySelectorAll("input[name=logoBg]").forEach(r => r.onchange = async () => {
-      const v = r.value, isClear = v === "transparent";
-      $("#lgBox", el).classList.toggle("clear", isClear);
-      $("#pvMark", el).classList.toggle("logo-clear", isClear && !!b.logo);
-      try { Brand.apply(await api("PUT", "api/branding", { logoBg: v })); toast(isClear ? "Logo com fundo transparente" : "Logo com fundo branco"); }
-      catch (x) { toast(x.message, "err"); appearance(el); }
-    });
     $("#lgFile", el).onchange = e => upload(e.target.files[0]);
     $("#lgPick", el).onclick = () => $("#lgFile", el).click();
     const drop = $("#lgDrop", el);
@@ -1008,14 +885,14 @@ const Admin = (() => {
     drop.ondragleave = () => drop.classList.remove("over");
     drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); upload(e.dataTransfer.files[0]); };
     $("#lgDel", el).onclick = async () => {
-      if (!confirm("Remover a logo?")) return;
+      if (!(await ask("Remover a logo? A barra lateral volta a mostrar o símbolo padrão.", { title: "Remover logo", ok: "Remover", danger: true }))) return;
       try { Brand.apply(await api("DELETE", "api/branding/logo")); toast("Logo removida"); appearance(el); } catch (x) { toast(x.message, "err"); }
     };
   }
 
   /* ── reset da aplicação (só administrador), com a mesma confirmação da exclusão de playbook ── */
   async function resetDialog() {
-    if (Editor.dirty) return toast("Salve ou descarte as alterações antes", "warn");
+    if (Editor.dirty || Editor.hasDraft()) return toast("Salve ou descarte as alterações dos editores antes", "warn");
     let s;
     try { s = await api("GET", "api/admin/summary"); } catch (e) { return toast(e.message, "err"); }
     const sso = App.user.auth === "sso", n = (v, one, many) => `${v} ${v === 1 ? one : many}`;
@@ -1063,7 +940,7 @@ const Admin = (() => {
         <label>Guardar a auditoria por<div class="inline-in"><input class="in" type="number" name="retention_days" min="1" max="3650" value="${c.retention_days}"> dias</div></label>
         <p class="muted small">Eventos e arquivos de log mais antigos são apagados automaticamente (verificação a cada 6 horas e ao salvar). Padrão: 30 dias. O histórico de versões dos playbooks não é afetado.</p>
         <div class="pp-lbl">Exportar</div>
-        <div class="row-btns"><a class="btn ghost sm" href="api/audit/export?days=${c.retention_days}" download>⤓ Baixar auditoria (JSON Lines)</a></div>
+        <div class="row-btns"><a class="btn ghost sm" href="api/audit/export?days=${c.retention_days}" download>${ic("download")}Baixar auditoria (JSON Lines)</a></div>
         <div class="pp-lbl" style="margin-top:16px">Formato de cada evento</div>
         <pre class="json-sample">${esc(JSON.stringify(d.sample, null, 2))}</pre>
         <p class="muted small">Campos no padrão Elastic Common Schema (ECS): funciona direto em Elastic, OpenSearch, Splunk, Sentinel, Graylog e Wazuh.</p></div>
@@ -1175,8 +1052,8 @@ function buildIndex() {
   INDEX = [];
   const strip = h => h.replace(/<[^>]+>/g, " ");
   for (const p of PBS) {
-    p.steps.forEach(s => INDEX.push({ pb: p, type: "Passo", title: `${s.id} · ${s.action}`, text: `${s.id} ${s.action} ${s.exit}`, go: () => { location.hash = `#/${p.slug}/fases/${s.id}`; } }));
-    p.ramos.forEach(r => INDEX.push({ pb: p, type: "Ramo", title: r.title, text: r.title + " " + strip(r.html), go: () => { location.hash = `#/${p.slug}/ramos`; setTimeout(() => showRefs(p, [r.id], "", false), 60); } }));
+    p.steps.forEach(s => INDEX.push({ pb: p, type: "Passo", title: `${s.id} · ${s.action}`, text: `${s.id} ${s.action} ${s.exit}`, go: () => { location.hash = `#/${p.slug}/doc/${encodeURIComponent(s.id)}`; } }));
+    p.ramos.forEach(r => INDEX.push({ pb: p, type: "Ramo", title: r.title, text: r.title + " " + strip(r.html), go: () => { location.hash = `#/${p.slug}/doc/${encodeURIComponent(r.id)}`; } }));
     p.sections.forEach(s => INDEX.push({ pb: p, type: "Seção", title: s.title, text: s.title + " " + strip(s.html) + s.subs.map(x => x.title + strip(x.html)).join(" "), go: () => { location.hash = `#/${p.slug}/doc`; setTimeout(() => { const el = document.getElementById("sec-" + s.id); el && el.scrollIntoView(); }, 60); } }));
   }
   Object.keys(TEAMS).forEach(t => INDEX.push({ pb: null, type: "Time", title: t, text: t + " " + TEAMS[t].summary, go: () => showTeam(currentPb(), t, false) }));
@@ -1244,8 +1121,8 @@ async function teamDialog(ctx, name, done, preset) {
         save(all);
       };
       const del = form.querySelector("[data-del]");
-      if (del) del.onclick = () => {
-        if (!confirm(`Tirar "${name}" do template ${tv.name}? Só é possível se ele não estiver no fluxograma do template nem em playbooks dele.`)) return;
+      if (del) del.onclick = async () => {
+        if (!(await ask(`Tirar "${name}" do template ${tv.name}? Só é possível se ele não estiver no fluxograma do template nem em playbooks dele.`, { title: "Tirar time", ok: "Tirar do template", danger: true }))) return;
         const all = JSON.parse(JSON.stringify(own)); delete all[name]; save(all, true);
       };
     }
@@ -1303,7 +1180,7 @@ const Exporter = (() => {
     blockquote{margin:10px 0;padding:8px 14px;border-left:4px solid #999;background:#f6f6f8}code{background:#f0f0f3;padding:1px 4px;border-radius:3px}
     .meta{color:#666;font-size:13px}.flow{overflow:auto;border:1px solid #ddd;border-radius:8px;margin:12px 0}.flow svg{display:block;max-width:100%;height:auto}
     figure.docimg{margin:14px 0;text-align:center}figure.docimg img{max-width:100%;height:auto;border:1px solid #ddd;border-radius:6px}figure.docimg figcaption{font-size:13px;color:#666;margin-top:6px}
-    li.chk{list-style:none;margin-left:-20px}li.chk::before{content:"☐ "}li.chk.done::before{content:"☑ "}
+    li.chk{list-style:none;margin-left:-20px}li.chk::before{content:"";display:inline-block;width:.75em;height:.75em;border:1.5px solid #777;border-radius:3px;margin-right:7px;vertical-align:-1px}li.chk.done::before{background:#2E7D32;border-color:#2E7D32}
     @media print{body{margin:0;max-width:none}.flow{border:0;page-break-inside:avoid}h2{page-break-after:avoid}}`;
   const SVG_CSS = `.nodetxt{width:100%;height:100%;display:flex;align-items:center;justify-content:center;text-align:center;font:11px/1.25 Helvetica,Arial,sans-serif;color:#1b2230;padding:2px 4px;box-sizing:border-box;overflow:hidden}.nodetxt .m{color:#666}`;
   function flowSvg(pb) {
@@ -1311,6 +1188,20 @@ const Exporter = (() => {
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb.join(" ")}" width="${vb[2]}" height="${vb[3]}"><style>${SVG_CSS}</style><rect x="${vb[0]}" y="${vb[1]}" width="${vb[2]}" height="${vb[3]}" fill="#fff"/>${svg}</svg>`;
   }
   /* imagens do documento entram no arquivo como data URL: o HTML funciona sozinho, fora da aplicação */
+  /* JPEG: desenha o fluxograma (texto em SVG puro) num canvas em 2x, com fundo branco */
+  async function flowJpeg(pb) {
+    const { svg, vb } = Flow.svg(pb.flow, { badges: badgesFor(pb), plainText: true });
+    const xml = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb.join(" ")}" width="${vb[2]}" height="${vb[3]}"><rect x="${vb[0]}" y="${vb[1]}" width="${vb[2]}" height="${vb[3]}" fill="#fff"/>${svg}</svg>`;
+    const img = new Image();
+    await new Promise((ok, bad) => { img.onload = ok; img.onerror = () => bad(new Error("Não foi possível desenhar o fluxograma")); img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(xml); });
+    const scale = Math.min(2, 8000 / Math.max(vb[2], vb[3]));
+    const c = document.createElement("canvas");
+    c.width = Math.round(vb[2] * scale); c.height = Math.round(vb[3] * scale);
+    const g = c.getContext("2d");
+    g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height);
+    g.drawImage(img, 0, 0, c.width, c.height);
+    return new Promise((ok, bad) => c.toBlob(b => b ? ok(b) : bad(new Error("Não foi possível gerar a imagem")), "image/jpeg", .92));
+  }
   async function inlineImages(text) {
     const urls = [...new Set([...text.matchAll(/src="(api\/pb\/PB-\d+\/img\/[\w.-]+)"/g)].map(m => m[1]))];
     for (const u of urls) {
@@ -1343,6 +1234,11 @@ const Exporter = (() => {
   return {
     html: async pb => { download(`${base(pb)}.html`, await inlineImages(html(pb)), "text/html"); toast("Documento HTML gerado"); },
     svg: pb => { download(`${base(pb)}-fluxo.svg`, flowSvg(pb), "image/svg+xml"); toast("Imagem do fluxograma gerada"); },
+    jpeg: async pb => {
+      try { download(`${base(pb)}-fluxo.jpg`, await flowJpeg(pb), "image/jpeg"); toast("Fluxograma exportado em JPEG"); }
+      catch (e) { toast(e.message || "Falha ao gerar o JPEG", "err"); }
+    },
+    flowJpeg,
     print: async pb => {
       const w = window.open("", "_blank");       // abre já no clique (senão o navegador bloqueia) e recebe o conteúdo depois
       if (!w) return toast("O navegador bloqueou a nova janela. Use “HTML com fluxograma” e imprima o arquivo.", "warn");
@@ -1362,16 +1258,16 @@ const TemplatesPage = (() => {
     teams: v.teamDefs || {}, tplKey: v.key,
     reload: () => api("GET", `api/templates/${v.key}`).then(r => r.template),
     after: nv => { current = nv; const h = $(".tplhead small"); if (h) h.textContent = upd(nv); },
-    fileBase: "template-" + v.key,
+    fileBase: "template-" + v.key, draftKey: "templates/" + v.key,
     banner: `<div class="notice tplnote">Você está editando o <b>modelo</b>. Use variáveis como <code>{{nome}}</code> e <code>{{id}}</code>; o que tiver <code>{{ramo.…}}</code> se repete para cada ramo. Lista completa na aba <a href="#/templates/${esc(v.key)}/geral">Geral</a>.</div>`,
-    docBar: `<b>Documento modelo</b><span class="muted"> · template ${esc(v.name)}</span>`,
-    flowBar: `<b>Fluxograma modelo</b><span class="muted"> · template ${esc(v.name)} · caixas com {{ramo.…}} se repetem lado a lado · times do template (aba Times e tags)</span>`,
+    docBar: `<b>Documento modelo</b><span class="muted"> · ${esc(v.name)}</span>`,
+    flowBar: `<b>Fluxograma modelo</b><span class="muted"> · ${esc(v.name)}</span>`,
   });
   const upd = t => t.updated_at ? `atualizado ${new Date(t.updated_at).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}${t.updated_by ? " por " + t.updated_by : ""}` : "";
 
   async function list(root) {
-    root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead"><span class="pbid">📐</span><h1>Templates, times e tags</h1>
-      <div class="pbactions"><button class="btn primary sm" id="tNew">＋ Novo template</button><button class="btn ghost sm" id="tImp">⤒ Importar template</button></div></div>
+    root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead"><span class="pbid">${ic("templates")}</span><h1>Templates, times e tags</h1>
+      <div class="pbactions"><button class="btn primary sm" id="tNew">${ic("plus")}Novo template</button><button class="btn ghost sm" id="tImp">${ic("upload")}Importar template</button></div></div>
       <p class="muted" style="margin:6px 0 16px">Cada template define o documento modelo, o fluxograma modelo (com os ramos) e os <b>times e tags</b> dos playbooks criados com ele. Os times de um template são gerenciados na aba <b>Times e tags</b> dele. O template <b>Padrão</b> é o inicial da instalação.</p></div></div>
       <div class="wrap" id="tlist"><div class="empty">Carregando…</div></div>`;
     let data;
@@ -1383,14 +1279,14 @@ const TemplatesPage = (() => {
         <div class="meta"><span class="chip">${t.sections} seções</span><span class="chip">${t.nodes} caixas</span><span class="chip">${t.teams.length} times</span>${t.usesRamos ? `<span class="chip">usa ramos</span>` : ""}</div>
         <div class="govline">${t.lanes.map(esc).join(" · ")}<br><span class="muted">${esc(upd(t))}</span></div>
         <div class="row-btns" style="margin-top:12px"><a class="btn primary xs" href="#/templates/${esc(t.key)}/geral">Abrir</a>
-          <button class="btn ghost xs" data-dup="${esc(t.key)}">Duplicar</button><a class="btn ghost xs" href="api/templates/${esc(t.key)}/export" download>⤓ Exportar</a>
+          <button class="btn ghost xs" data-dup="${esc(t.key)}">Duplicar</button><a class="btn ghost xs" href="api/templates/${esc(t.key)}/export" download>${ic("download")}Exportar</a>
           ${can("admin") && t.key !== "padrao" ? `<button class="btn danger xs" data-del="${esc(t.key)}">Excluir</button>` : ""}</div></div>`).join("")}</div>`;
     const reload = () => list(root);
     $("#tNew").onclick = () => newDialog(data.templates, null, reload);
     $("#tImp").onclick = () => importDialog(reload);
     root.querySelectorAll("[data-dup]").forEach(b => b.onclick = () => newDialog(data.templates, b.dataset.dup, reload));
     root.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
-      if (!confirm("Excluir este template? Ele vai para a lixeira do servidor. Os playbooks criados com ele passam para o template Padrão, que recebe os times que eles usam.")) return;
+      if (!(await ask("Excluir este template? Ele vai para a lixeira do servidor. Os playbooks criados com ele passam para o template Padrão, que recebe os times que eles usam.", { title: "Excluir template", ok: "Excluir", danger: true }))) return;
       try { const r = await api("DELETE", `api/templates/${b.dataset.del}`); toast(`Template excluído${r.moved.length ? ` · ${r.moved.join(", ")} agora usa(m) o Padrão` : ""}`); refreshData(); } catch (e) { toast(e.message, "err"); }
     });
   }
@@ -1439,11 +1335,11 @@ const TemplatesPage = (() => {
           <div class="pp-row"><label>Owner padrão<input class="in" name="owner" value="${esc(t.owner || "")}"></label>
             <label>Fase NIST padrão<input class="in" name="nist" value="${esc(t.nist || "")}"></label></div>
           <div class="err" id="tgErr" hidden></div>
-          <div class="create-actions"><a class="btn ghost" href="api/templates/${esc(t.key)}/export" download>⤓ Exportar template</a><button class="btn primary" type="submit">Salvar</button></div></form>
+          <div class="create-actions"><a class="btn ghost" href="api/templates/${esc(t.key)}/export" download>${ic("download")}Exportar template</a><button class="btn primary" type="submit">Salvar</button></div></form>
         <div class="pp-lbl" style="margin-top:18px">Resumo</div>
         <div class="meta"><span class="chip">${t.sections.length} seções</span><span class="chip">${t.flow.nodes.length} caixas</span>${t.usesRamos ? `<span class="chip">usa ramos</span>` : `<span class="chip">sem ramos</span>`}${t.flow.lanes.map(l => `<span class="chip">${esc(l.label)}</span>`).join("")}</div>
         ${t.hasRamos ? `<p class="muted small">Ramos: a subseção <code>R{{ramo.n}} · {{ramo.nome}}</code> e a caixa <code>R{{ramo.n}}</code> do fluxograma se repetem para cada ramo informado na criação. Ficam sincronizadas: criar, renomear ou excluir de um lado reflete no outro ao salvar.</p>`
-          : `<div class="notice" style="margin-top:12px">Este template não tem ramos. <button class="btn soft xs" id="tgRamos">＋ Adicionar ramos</button><br><small class="muted">Cria a seção “Ramos em detalhe” no documento e a caixa de ramo no fluxograma, como no template Padrão.</small></div>`}</div>
+          : `<div class="notice" style="margin-top:12px">Este template não tem ramos. <button class="btn soft xs" id="tgRamos">${ic("plus")}Adicionar ramos</button><br><small class="muted">Cria a seção “Ramos em detalhe” no documento e a caixa de ramo no fluxograma, como no template Padrão.</small></div>`}</div>
       <div class="ecard"><div class="ecard-h"><b>Variáveis disponíveis</b></div>
         <p class="muted small" style="margin-top:0">Escreva no documento modelo ou nos textos das caixas do fluxograma; são substituídas na criação do playbook.</p>
         <table class="vars"><tbody>${vars.map(([k, d]) => `<tr><td><code>{{${esc(k)}}}</code></td><td>${esc(d)}</td></tr>`).join("")}</tbody></table>
@@ -1466,15 +1362,15 @@ const TemplatesPage = (() => {
     const card = n => { const d = own[n], cat = d.category === "central" ? "central" : "apoio";
       return `<div class="team-card" style="border-left-color:${esc(d.color)}"><h4><span class="chip team" style="background:${esc(d.color)}">${esc(n)}</span><span class="cat ${cat}">${cat}</span></h4>
         <p>${esc(d.summary || "Sem descrição.")}</p>
-        <div class="row"><button class="btn ghost xs" data-edit="${esc(n)}">✎ Editar</button>
+        <div class="row"><button class="btn ghost xs" data-edit="${esc(n)}">${ic("edit")}Editar</button>
           ${used.has(n) ? `<span class="muted small" title="Aparece no fluxograma modelo (raia ou caixa de apoio)">em uso no fluxograma</span>` : `<button class="btn ghost xs" data-rm="${esc(n)}">Tirar do template</button>`}</div></div>`; };
     const names = Object.keys(own);
     el.innerHTML = `<div class="ecard"><div class="ecard-h"><b>Times e tags do template</b></div>
       <p class="muted small" style="margin-top:0">Times <b>centrais</b> podem virar raias; <b>apoio e tags</b> aparecem como caixas de apoio e como tags clicáveis nos textos. Valem para este template e para os playbooks criados com ele, e vão junto quando o template é exportado. Um time em uso (no fluxograma do template ou em playbooks dele) não pode ser retirado.</p>
       ${[["central", "Times centrais (raias)"], ["apoio", "Apoio e tags"]].map(([c, h]) => `<div class="sect-title">${h}</div>
         <div class="teams-grid">${names.filter(n => (own[n].category === "central") === (c === "central")).map(card).join("") || `<div class="empty">Nenhum.</div>`}</div>`).join("")}
-      <div class="tt-add"><button class="btn primary sm" id="ttNew">＋ Novo time ou tag</button>
-        ${other.length ? `<select class="in" id="ttCopy"><option value="">＋ Copiar de outro template…</option>${other.map(n => `<option>${esc(n)}</option>`).join("")}</select>` : ""}</div>
+      <div class="tt-add"><button class="btn primary sm" id="ttNew">${ic("plus")}Novo time ou tag</button>
+        ${other.length ? `<select class="in" id="ttCopy"><option value="">Copiar de outro template…</option>${other.map(n => `<option>${esc(n)}</option>`).join("")}</select>` : ""}</div>
       <div class="err" id="ttErr" hidden></div></div>`;
     const put = async (next, msg) => {
       try { const r = await api("PUT", `api/templates/${t.key}/teams`, { teams: next, rev: t.rev }); setTeams(r.allTeams); toast(msg); route(); }
@@ -1483,7 +1379,7 @@ const TemplatesPage = (() => {
     const clone = () => JSON.parse(JSON.stringify(own));
     if ($("#ttCopy", el)) $("#ttCopy", el).onchange = e => { const n = e.target.value; if (!n) return; const nx = clone(); nx[n] = TEAMS[n]; put(nx, `${n} copiado para o template`); };
     $("#ttNew", el).onclick = () => teamDialog({ tpl: t.key }, null, () => route());
-    el.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => { if (!confirm(`Tirar ${b.dataset.rm} do template?`)) return; const nx = clone(); delete nx[b.dataset.rm]; put(nx, `${b.dataset.rm} retirado do template`); });
+    el.querySelectorAll("[data-rm]").forEach(b => b.onclick = async () => { if (!(await ask(`Tirar ${b.dataset.rm} do template?`, { title: "Tirar time", ok: "Tirar", danger: true }))) return; const nx = clone(); delete nx[b.dataset.rm]; put(nx, `${b.dataset.rm} retirado do template`); });
     el.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => teamDialog({ tpl: t.key }, b.dataset.edit, () => route()));
   }
   async function detail(root, key, sub) {
@@ -1494,9 +1390,9 @@ const TemplatesPage = (() => {
       current = (await api("GET", `api/templates/${key}`)).template;
     } catch (e) { root.innerHTML = `<div class="wrap"><div class="err">${esc(e.message)}</div></div>`; return; }
     const t = current;
-    root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead tplhead"><a class="pbid" href="#/templates" title="Voltar à lista">📐</a><h1>${esc(t.name)}</h1><small class="muted">${esc(upd(t))}</small></div>
-      <nav class="tabs">${[["geral", "Geral"], ["documento", "✎ Documento modelo"], ["fluxograma", "✎ Fluxograma modelo"], ["times", "Times e tags"]].map(([k, l]) =>
-        `<a href="#/templates/${esc(key)}/${k}" class="${k === sub ? "on" : ""}">${l}</a>`).join("")}</nav></div></div><div class="wrap" id="tplview"></div>`;
+    root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead tplhead"><a class="pbid" href="#/templates" title="Voltar à lista">${ic("templates")}</a><h1>${esc(t.name)}</h1><small class="muted">${esc(upd(t))}</small></div>
+      <nav class="tabs">${[["geral", "Geral"], ["documento", "Documento modelo", "edit"], ["fluxograma", "Fluxograma modelo", "edit"], ["times", "Times e tags"]].map(([k, l, i]) =>
+        `<a href="#/templates/${esc(key)}/${k}" class="${k === sub ? "on" : ""}">${i ? ic(i) : ""}${l}</a>`).join("")}</nav></div></div><div class="wrap" id="tplview"></div>`;
     const tv = $("#tplview");
     if (sub === "documento") return Editor.docEditor(tv, t, adapter);
     if (sub === "fluxograma") { document.body.classList.add("editing"); return Editor.flowEditor(tv, t, adapter); }
@@ -1515,7 +1411,7 @@ const Versions = (() => {
     let d; try { d = await api("GET", `api/pb/${pb.id}/versions`); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
     const vs = d.versions;
     el.innerHTML = `<div class="ver-head"><div><b>Versão atual: ${vpill(d.current)}</b> ${statusPill(d.currentStatus)}</div>
-        <p class="muted small">Desenvolvimento e Homologação somam 1 depois do ponto a cada gravação (0.1 → 0.2). Publicar em Produção, ou alterar um playbook publicado, gera a próxima versão cheia (0.4 → 1.0). ${can("editor") ? "" : "Você vê as versões que estiveram em Homologação ou Produção."}</p></div>
+        <p class="muted small">Desenvolvimento e Homologação somam 1 depois do ponto a cada gravação (0.1 → 0.2). Publicar em Produção gera a próxima versão cheia (0.4 → 1.0). Em Produção, cada alteração é Minor (2.3 → 2.4) ou Major (2.3 → 3.0), com a descrição de quem salvou. ${can("editor") ? "" : "Você vê as versões que estiveram em Homologação ou Produção."}</p></div>
       ${vs.length ? `<div class="vtimeline">${vs.map((v, i) => `<div class="vitem ${i === 0 ? "latest" : ""}"><div class="vdot"></div>
           <div class="vbody"><div class="vtop">${vpill(v.version)} ${statusPill(v.status)} <span class="vkind">${esc(v.kindName)}</span>${i === 0 ? `<span class="tag">mais recente</span>` : ""}</div>
             <div class="vmeta">${esc(fmt(v.created_at))} · ${esc(v.author_name)}${v.note ? ` · <span class="vnote">${esc(v.note)}</span>` : ""}</div></div>
@@ -1527,10 +1423,12 @@ const Versions = (() => {
   }
 
   async function restore(pb, id, v) {
-    if (Editor.dirty) return toast("Salve ou descarte as alterações antes", "warn");
-    if (!confirm(`Restaurar o conteúdo da versão ${v}?\n\nDocumento, fluxograma e vínculos voltam ao daquela versão. O status atual (${pb.gov.status}) e o histórico são mantidos: a restauração vira uma nova versão.`)) return;
+    if (Editor.dirty || Editor.hasDraft(pb.id.toLowerCase())) return toast("Salve ou descarte as alterações dos editores deste playbook antes", "warn");
+    if (!(await ask(`Restaurar o conteúdo da versão ${v}?\n\nDocumento, fluxograma e vínculos voltam ao daquela versão. O status atual (${pb.gov.status}) e o histórico são mantidos: a restauração vira uma nova versão.`, { title: "Restaurar versão", ok: "Restaurar" }))) return;
+    const change = await Editor.askChange(pb, `a restauração do conteúdo da versão ${v}`);
+    if (change === false) return;
     try {
-      const r = await api("POST", `api/pb/${pb.id}/versions/${id}/restore`, { rev: pb.rev });
+      const r = await api("POST", `api/pb/${pb.id}/versions/${id}/restore`, { rev: pb.rev, change: change || undefined });
       replacePlaybook(r.playbook); toast(`Conteúdo da versão ${v} restaurado como versão ${r.version}`); location.hash = `#/${pb.slug}/versoes`;
     } catch (e) { toast(e.message, "err"); }
   }
@@ -1542,9 +1440,9 @@ const Versions = (() => {
     const v = d.version, vp = d.playbook, g = vp.gov;
     vp.slug = pb.slug;
     const secs = vp.sections.filter(s => !/^Fluxograma/.test(s.title));
-    el.innerHTML = `<div class="ver-banner"><div>📜 Você está lendo a versão ${vpill(v.version)} ${statusPill(v.status)} de <b>${esc(fmt(v.created_at))}</b>, salva por <b>${esc(v.author_name)}</b> (${esc(v.kindName)}${v.note ? `: ${esc(v.note)}` : ""}). Não é necessariamente a versão em uso.</div>
-        <div class="ver-actions"><a class="btn ghost sm" href="#/${pb.slug}/versoes">← Histórico</a><a class="btn ghost sm" href="#/${pb.slug}/versoes/${v.id}/comparar/atual">Comparar com a atual</a>
-          <button class="btn ghost sm" id="vHtml" title="Baixa esta versão como HTML com o fluxograma">⤓ HTML</button><button class="btn ghost sm" id="vPrint">Imprimir / PDF</button>
+    el.innerHTML = `<div class="ver-banner"><div>${ic("history")}Você está lendo a versão ${vpill(v.version)} ${statusPill(v.status)} de <b>${esc(fmt(v.created_at))}</b>, salva por <b>${esc(v.author_name)}</b> (${esc(v.kindName)}${v.note ? `: ${esc(v.note)}` : ""}). Não é necessariamente a versão em uso.</div>
+        <div class="ver-actions"><a class="btn ghost sm" href="#/${pb.slug}/versoes">${ic("left")}Histórico</a><a class="btn ghost sm" href="#/${pb.slug}/versoes/${v.id}/comparar/atual">${ic("compare")}Comparar com a atual</a>
+          <button class="btn ghost sm" id="vHtml" title="Baixa esta versão como HTML com o fluxograma">${ic("download")}HTML</button><button class="btn ghost sm" id="vPrint">${ic("print")}Imprimir / PDF</button>
           ${can("editor") ? `<button class="btn primary sm" id="vRestore">Restaurar esta versão</button>` : ""}</div></div>
       <article class="docview">
         <header class="docview-head"><div class="dv-id">${esc(vp.id)} · versão ${esc(v.version)}</div><h1>${esc(vp.name)}</h1><div class="muted">${esc(vp.byline)}</div>
@@ -1595,10 +1493,10 @@ const Versions = (() => {
     };
     for (const o of d.doc) { if (o.t === "eq") eqRun.push(o.text); else { flushEq(false); rows.push([o.t, o.text]); } }
     flushEq(true);
-    const line = ([t, x]) => t === "gap" ? `<div class="dl gap">⋯ ${x} linha(s) iguais</div>` : `<div class="dl ${t}"><span class="sg">${t === "add" ? "+" : t === "del" ? "−" : " "}</span>${esc(x) || "&nbsp;"}</div>`;
+    const line = ([t, x]) => t === "gap" ? `<div class="dl gap">${ic("more")} ${x} linha(s) iguais</div>` : `<div class="dl ${t}"><span class="sg">${t === "add" ? "+" : t === "del" ? "−" : " "}</span>${esc(x) || "&nbsp;"}</div>`;
     el.innerHTML = `<div class="ver-banner"><div>Comparando ${vpill(d.from.version)} → ${vpill(d.to.version)}
         <span class="dstat"><b class="add">+${d.stats.added}</b> <b class="del">−${d.stats.removed}</b> linhas no documento · ${d.stats.flowChanges} mudança(s) no fluxograma</span></div>
-        <div class="ver-actions"><a class="btn ghost sm" href="#/${pb.slug}/versoes">← Histórico</a></div></div>
+        <div class="ver-actions"><a class="btn ghost sm" href="#/${pb.slug}/versoes">${ic("left")}Histórico</a></div></div>
       <div class="cmp-pick"><label>Versão<select class="in" id="cA">${opt(String(id))}</select></label><span>×</span><label>Comparar com<select class="in" id="cB">${opt(other || "atual")}</select></label></div>
       <div class="ecard"><div class="ecard-h"><b>Fluxograma</b><span class="muted small">caixas e setas (posição não conta)</span></div>
         ${d.flow.length ? `<div class="difflines">${d.flow.map(o => line([o.t, o.text])).join("")}</div>` : `<p class="muted">Sem mudanças no fluxograma.</p>`}</div>

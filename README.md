@@ -34,7 +34,7 @@ python3 server.py adduser seu.login --role admin --name "Seu Nome"
 python3 server.py            # http://localhost:8765
 ```
 
-Os demais usuários são criados em **⚙ Administração → Usuários**. Cada usuário novo recebe uma senha temporária,
+Os demais usuários são criados em **Administração → Usuários**. Cada usuário novo recebe uma senha temporária,
 exibida uma única vez, e precisa trocá-la no primeiro acesso.
 
 ## Primeiro acesso: o que vem configurado
@@ -42,16 +42,20 @@ exibida uma única vez, e precisa trocá-la no primeiro acesso.
 - Template **Padrão**: raias SOC N1, SOC N2 e CSIRT; times de apoio de segurança (DFIR, Threat Intel, IAM,
   Vulnerabilidades, AppSec, Cloud Security, Infraestrutura, Privacidade) com descrições genéricas; ramos e um ciclo
   completo de resposta (triagem, análise, investigação, contenção/erradicação/recuperação e pós-incidente).
-- Nenhum playbook: crie o primeiro em **＋ Novo playbook** ou importe um `.medusa.md`.
-- Aparência padrão (nome "Medusa Docs"); ajuste em **⚙ Administração → Aparência**.
+- Nenhum playbook: crie o primeiro em **Novo playbook** ou importe um `.medusa.md`.
+- Aparência padrão (nome "Medusa Docs"); ajuste em **Administração → Aparência**.
 
 ## Interface
 
-- **Abas:** cada playbook ou página aberta vira uma aba, como num navegador (`✕` ou botão do meio fecha; `＋` abre o início). Ficam salvas no navegador de cada usuário.
+- **Abas:** cada playbook ou página aberta vira uma aba, como num navegador (o X ou o botão do meio fecha; o + abre o início). Ficam salvas no navegador de cada usuário.
 - **Tema claro/escuro** no topo.
-- **📖 Docs** ao lado do perfil: documentação da plataforma (uso, edição, ramos, templates, administração, operação), filtrada pelo perfil. Conteúdo em `docs.js`.
+- **Barra lateral:** logo e nome do workspace, busca, Playbooks, Templates e Administração; perfil e tema claro/escuro no rodapé. Em telas estreitas vira gaveta.
+- **Menu do perfil** (rodapé da barra lateral): Documentação da plataforma (uso, edição, ramos, templates, administração, operação, filtrada pelo perfil; conteúdo em `docs.js`), Templates, Administração, Trocar senha e Sair.
+- **Playbook:** duas visualizações, **Fluxograma** e **Documentação** (fases, passos e ramos ficam na documentação, com índice por seção e subseção), além de **Versões** e dos editores.
+- **Rascunhos:** sair de uma aba de edição sem salvar não perde nada; a aba ganha um ponto e as alterações voltam ao reabrir. Fechar a aba pede confirmação.
+- **Ícones** do [Iconoir](https://iconoir.com) (MIT), embutidos em `icons.js`.
 - **Página inicial** em **cartões**, **lista grande** ou **lista pequena** (escolha salva por usuário).
-- **Aparência** (só administrador), em quatro cartões: Identidade (nome e cor primária: seletor, `#RRGGBB` ou R/G/B), Logo (PNG, JPG, SVG ou WEBP até 512 KB, com fundo branco ou transparente no topo), Página inicial (título e subtítulo) e Prévia. As cores do fluxograma não mudam: fazem parte do modelo dos playbooks.
+- **Aparência** (só administrador): nome do workspace e logo. O visual é fixo e minimalista (fonte Inter, embutida), com tema claro e escuro por usuário. As cores do fluxograma não mudam: fazem parte do modelo dos playbooks.
 - **Resetar aplicação** (só administrador, botão no topo da Administração): volta ao estado de recém-instalada, com confirmação digitando `RESETAR`. Opcionalmente restaura configurações, remove os demais usuários e apaga a auditoria. Tudo vai para `data/lixeira/reset__<data-hora>/`, com cópia do banco e um `LEIA-ME.txt` de como voltar.
 
 ## Perfis
@@ -71,7 +75,7 @@ As permissões são verificadas no servidor. O visualizador nem recebe os playbo
 - Playbook novo ou importado começa em Desenvolvimento.
 - Produção exige um **aprovador** (editor ou administrador ativo).
 - **Último revisor** e **Data de revisão** são preenchidos a cada gravação. Os quatro campos ficam na tabela
-  "Propriedades do playbook" do `.md` e aparecem bloqueados 🔒 no editor.
+  "Propriedades do playbook" do `.md` e aparecem bloqueados (cadeado) no editor.
 
 ## Versionamento e histórico
 
@@ -79,10 +83,12 @@ As permissões são verificadas no servidor. O visualizador nem recebe os playbo
 | --- | --- | --- |
 | Gravação em Desenvolvimento ou Homologação | soma 1 depois do ponto | 0.1 → 0.2 · 2.3 → 2.4 |
 | Publicação em Produção | próxima versão cheia | 0.4 → 1.0 · 2.4 → 3.0 |
-| Alteração em playbook publicado | próxima versão cheia | 1.0 → 2.0 |
+| Alteração em Produção do tipo **Minor** | soma 1 depois do ponto | 1.0 → 1.1 · 2.3 → 2.4 |
+| Alteração em Produção do tipo **Major** | soma 1 antes do ponto | 1.4 → 2.0 |
 | Republicar sem alteração | mantém | 1.0 → 1.0 |
 
-A versão fica na tabela "Propriedades do playbook" (bloqueada no editor) e na linha de versão do documento. Cada
+Em Produção, toda gravação (documento, fluxograma ou restauração) pede o tipo (Minor/Major) e a descrição das alterações,
+que vão para o histórico e para a auditoria. A versão fica na tabela "Propriedades do playbook" (bloqueada no editor) e na linha de versão do documento. Cada
 gravação guarda o conteúdo completo (`.md`, `.drawio`, vínculos) na tabela `pb_versions` do banco. A aba
 A aba **Versões** do playbook lista o histórico e permite:
 
@@ -95,7 +101,7 @@ registro inicial na primeira alteração. Excluir um playbook guarda o históric
 
 ## Logs: encaminhamento em JSON e retenção
 
-**⚙ Administração → Logs e retenção** (só administrador):
+**Administração → Logs e retenção** (só administrador):
 
 - **Retenção:** a auditoria é guardada por **30 dias** (padrão; ajustável de 1 a 3650). O que for mais antigo é apagado automaticamente (a cada 6 h e ao salvar), junto com os arquivos de log do período.
 - **Formato:** um documento JSON por evento, no padrão Elastic Common Schema:
@@ -120,7 +126,7 @@ mostra enviados, falhas e último erro. **Baixar auditoria** exporta o período 
 ## Login único (SSO)
 
 Opcional, por **OpenID Connect** (Microsoft Entra ID, Okta, Keycloak, Google, Auth0, Authentik, ADFS 2016+):
-**⚙ Administração → SSO**. Cadastre no provedor a URL de redirecionamento `https://SEU-ENDERECO/api/sso/callback`,
+**Administração → SSO**. Cadastre no provedor a URL de redirecionamento `https://SEU-ENDERECO/api/sso/callback`,
 informe emissor, client ID, client secret e a URL pública, e ative.
 
 - Fluxo authorization code + **PKCE**; `state` amarrado ao navegador (cookie) e `nonce`.
@@ -131,17 +137,17 @@ informe emissor, client ID, client secret e a URL pública, e ative.
 
 ## Templates, times e tags
 
-Menu do perfil → **📐 Templates, times e tags** (editor e admin). O template define o que um playbook recebe:
+Barra lateral → **Templates** (editor e admin). O template define o que um playbook recebe:
 
 | Aba | O que define |
 | --- | --- |
 | Geral | Nome, descrição, owner e fase NIST padrão, ramos e a lista de variáveis |
-| ✎ Documento modelo | Seções, tabelas e textos iniciais |
-| ✎ Fluxograma modelo | Raias, caixas e setas iniciais (editor visual e modo Código) |
+| Documento modelo | Seções, tabelas e textos iniciais |
+| Fluxograma modelo | Raias, caixas e setas iniciais (editor visual e modo Código) |
 | Times e tags | Os times do template: centrais (podem ser raias) e de apoio/tags |
 
 **Times e tags pertencem ao template.** Cada playbook fica ligado ao template com que foi criado (ou importado) e
-usa os times dele; o cabeçalho do playbook mostra qual. Editar um time (na aba do template ou em "✎ Editar time" ao
+usa os times dele; o cabeçalho do playbook mostra qual. Editar um time (na aba do template ou em "Editar time" ao
 clicar num time do playbook) vale para o template e todos os playbooks dele.
 
 - O template **Padrão** é criado na primeira inicialização e não pode ser excluído.
@@ -173,9 +179,11 @@ Um ramo (R1, R2…) existe nos dois lados e fica sincronizado ao salvar (`ramos.
 
 ## Editores
 
-- **Documento:** seções, subseções, parágrafos, listas, checklists, destaques, tabelas e **imagens**. `Ctrl+S` salva, `Ctrl+B` negrito, 🎯 escolhe táticas MITRE ATT&CK. **Descartar** recarrega a versão salva.
-  - Imagens: **＋ Imagem**, colar (`Ctrl+V`) ou arrastar para a seção. PNG, JPG, WEBP ou GIF até 3 MB, legenda opcional. Ficam em `imagens/` na pasta do playbook com nome pelo conteúdo (nunca sobrescritas) e entram no `.md` como `![legenda](imagens/img-….png)`. O servidor confere o tipo real do arquivo e aplica as permissões do playbook.
+- **Documento:** seções, subseções, parágrafos, listas, checklists, destaques, tabelas e **imagens**. `Ctrl+S` salva, `Ctrl+B` negrito, o botão de alvo escolhe táticas MITRE ATT&CK. **Descartar** recarrega a versão salva.
+  - **Modo Markdown:** o documento inteiro como texto, com barra de formatação e prévia ao vivo; alterna com o modo Visual a qualquer momento.
+  - Imagens: **Imagem**, colar (`Ctrl+V`) ou arrastar para a seção. PNG, JPG, WEBP ou GIF até 3 MB, legenda opcional. Ficam em `imagens/` na pasta do playbook com nome pelo conteúdo (nunca sobrescritas) e entram no `.md` como `![legenda](imagens/img-….png)`. O servidor confere o tipo real do arquivo e aplica as permissões do playbook.
 - **Fluxograma:** só as formas, cores e setas do modelo; arrastar a caixa para outra raia troca o time.
+  - Setas: lados de saída/entrada, pontos de dobra (**+** no meio de cada trecho cria; dois cliques removem) e **rota fixa**, que mantém lados e pontos ao mover as caixas.
   - Texto das setas arrastável (posição gravada no `.drawio` e no Mermaid).
   - Seleção múltipla (`Shift`/`Ctrl`+clique, laço, `Ctrl+A`), mover em grupo, redimensionar proporcionalmente, alinhar e distribuir.
   - `Ctrl+Z` desfaz, `Del` exclui, `Ctrl+D` duplica.
@@ -186,9 +194,9 @@ Um ramo (R1, R2…) existe nos dois lados e fica sincronizado ao salvar (`ramos.
 
 | Ação | Onde | Formatos |
 | --- | --- | --- |
-| Exportar um playbook (todos os perfis) | **⤓ Exportar ▾** no playbook | Markdown (`.zip` com `imagens/` se houver imagens), HTML com fluxograma e imagens embutidas, PDF, draw.io, Mermaid, SVG, Medusa |
+| Exportar um playbook (todos os perfis) | **Exportar** no playbook | Markdown (`.zip` com `imagens/` se houver imagens), HTML com fluxograma e imagens embutidas, PDF, draw.io, Mermaid, SVG, JPEG, Medusa |
 | Exportar todos | Página inicial | `.zip` de `.medusa.md` |
-| Importar (editor) | Página inicial → **⤒ Importar** | `.medusa.md` ou `.md` comum |
+| Importar (editor) | Página inicial → **Importar** | `.medusa.md` ou `.md` comum |
 
 O `.medusa.md` é Markdown comum com front matter, um bloco de times, o fluxograma em Mermaid e, se houver, um bloco com as imagens (até 6 MB no total): abre em qualquer
 visualizador e GitHub, GitLab, Confluence (macro Mermaid) e mermaid.live desenham o fluxo. Na importação, escolha o
@@ -283,7 +291,7 @@ Para testar sem mexer nos dados reais, aponte `MEDUSA_HOME` para uma cópia.
 | `ramos.py` | Sincronização de ramos entre documento e fluxograma |
 | `flowdsl.py` | Fluxograma ⇄ Mermaid |
 | `bundle.py` | Formato de troca `.medusa.md` |
-| `index.html`, `app.js`, `editor.js`, `flow.js`, `docs.js`, `style.css`, `theme.js` | Interface |
+| `index.html`, `app.js`, `editor.js`, `flow.js`, `docs.js`, `icons.js`, `style.css`, `theme.js` | Interface |
 
 ## Licença
 

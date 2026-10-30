@@ -87,6 +87,26 @@ const Flow = (() => {
     return [(p[bi][0] + p[bi + 1][0]) / 2, (p[bi][1] + p[bi + 1][1]) / 2];
   }
 
+  /* texto da caixa em <text> puro (sem foreignObject): usado nas exportações em imagem, porque o navegador não
+     converte para JPEG um SVG com HTML dentro. Quebra as linhas pela largura da caixa. */
+  function plainLabel(n, a, t, inset) {
+    const fs = 11, lh = 13.75, maxW = Math.max(10, a.w - inset * 2 - 8), cw = fs * .56;
+    const out = [];
+    for (const l of n.lines || []) {
+      const max = Math.max(4, Math.floor(maxW / (cw * (l.s === "b" ? 1.07 : 1))));
+      let cur = "";
+      for (const w of String(l.t).split(/\s+/)) {
+        if (!cur) cur = w;
+        else if ((cur + " " + w).length <= max) cur += " " + w;
+        else { out.push([cur, l.s]); cur = w; }
+      }
+      out.push([cur, l.s]);
+    }
+    const y0 = a.y + a.h / 2 - (out.length * lh) / 2 + lh * .78, cx = a.x + a.w / 2;
+    return `<text text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="${fs}" fill="${t.fc || "#1b2230"}">${out.map(([txt, st], i) =>
+      `<tspan x="${cx}" y="${(y0 + i * lh).toFixed(1)}"${st === "b" ? ' font-weight="700"' : ""}${st === "m" ? ' fill="#666"' : ""}>${escH(txt)}</tspan>`).join("")}</text>`;
+  }
+
   function shape(n, a) {
     const t = CAT.nodeTypes[n.type] || CAT.nodeTypes.action;
     const base = `class="shape" fill="${t.fill}" stroke="${t.stroke}" stroke-width="${t.sw}" ${t.dashed ? 'stroke-dasharray="5 3"' : ""}`;
@@ -107,7 +127,7 @@ const Flow = (() => {
       s += `<g class="lane" data-lane="${l.key}"><rect x="${l.x}" y="${l.y}" width="${l.w}" height="${l.h}" rx="6" fill="${opts.editor ? "url(#grid8)" : "#fff"}" stroke="${l.color}"/>`;
       if (opts.editor) s += `<rect x="${l.x}" y="${l.y}" width="${l.w}" height="${l.h}" rx="6" fill="#fff" opacity=".55" pointer-events="none"/>`;
       s += `<g class="lane-label" ${l.team ? `data-team="${escH(l.team)}"` : ""} style="${l.team ? "" : "cursor:default"}"><rect x="${l.x}" y="${l.y}" width="${l.start}" height="${l.h}" rx="6" fill="${l.color}"/>
-        <text transform="translate(${l.x + l.start / 2 + 5},${l.y + l.h / 2}) rotate(-90)" text-anchor="middle" fill="#fff" font-weight="700" font-size="${Math.min(13, (l.h - 10) / ((l.label.length + (l.team && !opts.editor ? 2 : 0)) * .62)).toFixed(1)}" font-family="Helvetica,Arial">${escH(l.label)}${l.team && !opts.editor ? " ⓘ" : ""}</text></g></g>`;
+        <text transform="translate(${l.x + l.start / 2 + 5},${l.y + l.h / 2}) rotate(-90)" text-anchor="middle" fill="#fff" font-weight="700" font-size="${Math.min(13, (l.h - 10) / (l.label.length * .62)).toFixed(1)}" font-family="Helvetica,Arial">${escH(l.label)}</text></g></g>`;
     }
     for (const e of lay.edges) {
       const t = CAT.edgeTypes[e.type] || CAT.edgeTypes.flow;
@@ -116,7 +136,15 @@ const Flow = (() => {
       s += `<g class="edge ${sel ? "sel" : ""}" data-edge="${escH(e.id)}">`;
       if (opts.editor) s += `<polyline class="hit" fill="none" stroke="transparent" stroke-width="12" points="${pts}"/>`;
       s += `<polyline class="line" fill="none" stroke="${t.color}" stroke-width="${sel ? t.sw + 1.5 : t.sw}" ${t.dashed ? 'stroke-dasharray="6 4"' : ""} marker-end="url(#ar${t.color.slice(1)})" points="${pts}"/>`;
-      if (opts.editor && sel) s += (e.wps || []).map((w, i) => { const ln = lay.byKey[w.lane]; return `<circle class="wp" data-wp="${i}" cx="${ln.x + w.x}" cy="${ln.y + w.y}" r="4"/>`; }).join("");
+      if (opts.editor && sel) {
+        /* seta selecionada: "+" no meio de cada trecho cria um ponto de dobra; os pontos se arrastam e somem com dois cliques */
+        s += e.pts.slice(0, -1).map((a, i) => {
+          const b = e.pts[i + 1]; if (Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) < 30) return "";
+          const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+          return `<g class="wpadd" data-seg="${i}"><title>Clique (ou arraste) para criar um ponto de dobra aqui</title><circle cx="${mx}" cy="${my}" r="6.5"/><path d="M${mx - 3} ${my}H${mx + 3}M${mx} ${my - 3}V${my + 3}"/></g>`;
+        }).join("");
+        s += (e.wps || []).map((w, i) => { const ln = lay.byKey[w.lane]; return ln ? `<circle class="wp" data-wp="${i}" cx="${ln.x + w.x}" cy="${ln.y + w.y}" r="5"><title>Arraste para mover · dois cliques removem o ponto</title></circle>` : ""; }).join("");
+      }
       s += `</g>`;
     }
     for (const e of lay.edges) if (e.label) {
@@ -128,8 +156,9 @@ const Flow = (() => {
       const a = lay.abs[n.id], t = CAT.nodeTypes[n.type] || CAT.nodeTypes.action;
       const inset = t.shape === "rhombus" ? a.w * .2 : 0;
       const sel = (opts.sel && opts.sel.kind === "node" && opts.sel.id === n.id) || (opts.multi && opts.multi.has(n.id));
-      s += `<g class="node ${opts.nodeClass ? opts.nodeClass(n) : ""} ${sel ? "sel" : ""}" data-node="${escH(n.id)}" ${n.team ? `data-team="${escH(n.team)}"` : ""}>${shape(n, a)}
-        <foreignObject x="${a.x + inset}" y="${a.y}" width="${Math.max(10, a.w - inset * 2)}" height="${a.h}"><div xmlns="http://www.w3.org/1999/xhtml" class="nodetxt" ${t.fc ? `style="color:${t.fc}"` : ""}><div>${labelHtml(n.lines)}</div></div></foreignObject>`;
+      s += `<g class="node ${opts.nodeClass ? opts.nodeClass(n) : ""} ${sel ? "sel" : ""}" data-node="${escH(n.id)}" ${n.team ? `data-team="${escH(n.team)}"` : ""}>${shape(n, a)}`;
+      s += opts.plainText ? plainLabel(n, a, t, inset)
+        : `<foreignObject x="${a.x + inset}" y="${a.y}" width="${Math.max(10, a.w - inset * 2)}" height="${a.h}"><div xmlns="http://www.w3.org/1999/xhtml" class="nodetxt" ${t.fc ? `style="color:${t.fc}"` : ""}><div>${labelHtml(n.lines)}</div></div></foreignObject>`;
       const b = opts.badges && opts.badges[n.id];
       if (b) {
         const bw = b.length * 6.3 + 10, col = (lay.byKey[n.lane] || {}).color || "#5B6673";
@@ -137,7 +166,7 @@ const Flow = (() => {
       }
       if (opts.editor && sel && !(opts.multi && opts.multi.size > 1)) {
         s += `<rect class="rz" data-rz="1" x="${a.x + a.w - 5}" y="${a.y + a.h - 5}" width="10" height="10" rx="2"/>`;
-        s += `<circle class="ch" data-ch="1" cx="${a.x + a.w + 14}" cy="${a.y + a.h / 2}" r="7"/><text class="ch-t" x="${a.x + a.w + 14}" y="${a.y + a.h / 2 + 4}" text-anchor="middle" pointer-events="none">→</text>`;
+        s += `<circle class="ch" data-ch="1" cx="${a.x + a.w + 14}" cy="${a.y + a.h / 2}" r="7"/><path class="ch-t" d="M${a.x + a.w + 10.5} ${a.y + a.h / 2}H${a.x + a.w + 17.5}M${a.x + a.w + 14.5} ${a.y + a.h / 2 - 3}L${a.x + a.w + 17.5} ${a.y + a.h / 2}L${a.x + a.w + 14.5} ${a.y + a.h / 2 + 3}" pointer-events="none"/>`;
       }
       s += `</g>`;
     }

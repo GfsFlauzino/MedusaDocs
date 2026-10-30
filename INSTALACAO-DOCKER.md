@@ -74,12 +74,12 @@ A senha aparece **uma única vez**, na primeira subida. Depois do primeiro acess
 
 1. Abra `http://localhost:8765` (ou `http://IP-DO-SERVIDOR:8765` se publicou na rede).
 2. Entre com o login e a senha temporária e defina a sua senha (mínimo 10 caracteres, com letras e números).
-3. Em **⚙ Administração → Aparência**, ajuste nome, cor, logo e o título e subtítulo da página inicial.
-4. Em **⚙ Administração → Usuários**, crie os usuários do time (visualizador, editor ou administrador).
-5. Em **📐 Templates, times e tags**, revise o template **Padrão** e os times de apoio.
+3. Em **Administração → Aparência**, ajuste o nome do workspace e a logo.
+4. Em **Administração → Usuários**, crie os usuários do time (visualizador, editor ou administrador).
+5. Em **Templates, times e tags**, revise o template **Padrão** e os times de apoio.
 
-A instalação começa com o template Padrão e nenhum playbook. Crie playbooks em **＋ Novo playbook** ou importe
-arquivos `.medusa.md` em **⤒ Importar**.
+A instalação começa com o template Padrão e nenhum playbook. Crie playbooks em **Novo playbook** ou importe
+arquivos `.medusa.md` em **Importar**.
 
 ## 6. Acesso pelo time com HTTPS
 
@@ -132,15 +132,15 @@ Com o HTTPS funcionando:
 
 1. No provedor (Entra ID, Okta, Keycloak, Google…), crie um aplicativo web OIDC com a URL de redirecionamento
    `https://playbooks.suaempresa.com.br/api/sso/callback`.
-2. Em **⚙ Administração → SSO**, informe o emissor (issuer), clique em **Testar**, preencha client ID, client secret e
+2. Em **Administração → SSO**, informe o emissor (issuer), clique em **Testar**, preencha client ID, client secret e
    a URL pública (`https://playbooks.suaempresa.com.br`), configure os grupos → perfis e ative.
 3. O container precisa alcançar o provedor por HTTPS (saída para a internet ou para o IdP interno).
 
-Detalhes na aba **📖 Docs** da aplicação (tópico "Login único").
+Detalhes em **Documentação**, no menu do perfil da aplicação (tópico "Login único").
 
 ### Logs para o SIEM, opcional
 
-Em **⚙ Administração → Logs e retenção**: envio em JSON por HTTP(S) ou syslog (UDP/TCP), ou arquivo JSON Lines em
+Em **Administração → Logs e retenção**: envio em JSON por HTTP(S) ou syslog (UDP/TCP), ou arquivo JSON Lines em
 `/data/data/logs/` para um agente coletor (monte o volume no container do agente, somente leitura). A auditoria é
 guardada por 30 dias por padrão.
 
@@ -211,8 +211,8 @@ Os dados continuam no volume; ajustes no banco são aplicados sozinhos ao inicia
 
 ## 10. Trazer dados de outra instalação
 
-- **Playbooks:** exporte na origem (**⤓ Exportar todos** gera um `.zip` de `.medusa.md`) e importe cada arquivo em **⤒ Importar**, escolhendo o template.
-- **Templates:** **⤓ Exportar** na lista de templates da origem e **⤒ Importar template** no destino.
+- **Playbooks:** exporte na origem (**Exportar todos** gera um `.zip` de `.medusa.md`) e importe cada arquivo em **Importar**, escolhendo o template.
+- **Templates:** **Exportar** na lista de templates da origem e **Importar template** no destino.
 - **Instalação inteira** (incluindo usuários e auditoria): copie a pasta de dados da origem (`playbooks/`, `templates/`, `data/`, `mappings.json`, `.backups/`) para o volume, com o container parado:
 
 ```bash

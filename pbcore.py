@@ -335,6 +335,7 @@ def drawio_to_flow(path):
         wps = [rel_wp(float(p.get("x")), float(p.get("y"))) for p in arr.iter("mxPoint")] if arr is not None else []
         e = {"id": eid, "from": c.get("source"), "to": c.get("target"), "label": html.unescape(c.get("value") or ""),
              "type": infer_edge(st), "exit": side("exitX", "exitY"), "entry": side("entryX", "entryY"), "wps": wps}
+        if st.get("medusaLock") == "1": e["lock"] = True
         off = g.find("mxPoint[@as='offset']") if g is not None else None
         if e["label"] and off is not None:
             e["_off"] = (float(off.get("x", 0)), float(off.get("y", 0)), float(g.get("x", 0) or 0))
@@ -473,6 +474,7 @@ def flow_to_drawio(flow, pid, name, original=None):
         et = EDGE_TYPES.get(e.get("type"), EDGE_TYPES["flow"])
         style = EDGE_BASE + f"strokeColor={et['color']};" + ("dashed=1;" if et["dashed"] else "") + (f"strokeWidth={et['sw']};" if et["sw"] != 1 else "")
         style += f"exitX={fmt(ex['x'])};exitY={fmt(ex['y'])};exitDx=0;exitDy=0;entryX={fmt(en['x'])};entryY={fmt(en['y'])};entryDx=0;entryDy=0;"
+        if e.get("lock"): style += "medusaLock=1;"
         pts = [(lanes[w["lane"]]["x"] + w["x"], lanes[w["lane"]]["y"] + w["y"]) for w in e.get("wps", []) if w.get("lane") in lanes]
         offset, lp = None, e.get("lp")
         if e.get("label") and lp and (lp.get("dx") or lp.get("dy")):
@@ -553,11 +555,13 @@ def get_version(doc):
 def fmt_version(v):
     return f"{v[0]}.{v[1]}"
 
-def next_version(v, status, publish=False):
+def next_version(v, status, publish=False, change=None):
+    """Desenvolvimento/Homologação: 0.1 → 0.2. Publicar: próxima versão cheia. Em Produção, quem salva escolhe:
+    change="minor" soma 1 depois do ponto (2.3 → 2.4); "major" (padrão) soma 1 antes do ponto (2.3 → 3.0)."""
     major, minor = v
     if publish:
         return v if major > 0 and minor == 0 else (major + 1, 0)
-    if status == "Produção": return (major + 1, 0)
+    if status == "Produção": return (major, minor + 1) if change == "minor" else (major + 1, 0)
     return (major, minor + 1)
 
 def set_version(doc, v):
