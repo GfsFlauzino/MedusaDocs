@@ -1,0 +1,8 @@
+Medusa Docs — benchmark (2026-10-30 12:20, Python 3.13.3, /private/tmp/claude-501/-Users-gabrielflauzino-Documents-Playbooks-modelo2/ebf1bb7b-7369-4fa8-9a2d-380a7bcb9b91/scratchpad/base)
+tempos em ms (mediana); concorrência: p50/p95 por requisição e tempo total; memória do servidor no fim (MB)
+
+N | lista | fria | quente | bruto KB | gzip KB | 304 | detalhe | busca | PUT doc | 8 simult. | 32 simult. | RSS MB
+10 | /api/data | 39.6 | 43.9 | 427 | 63 | — | 5.9 | — | 18.4 | 220/226 (228) | 721/759 (768) 6 erro(s) | 87
+50 | /api/data | 194.2 | 223.2 | 2093 | 299 | — | 6.2 | — | 19.4 | 1141/1182 (1183) | 3625/3761 (3790) 8 erro(s) | 290
+150 | /api/data | 672.0 | 692.8 | 6260 | 888 | — | 6.9 | — | 20.6 | 4079/4191 (4193) | 12559/12926 (12971) 10 erro(s) | 614
+500 | /api/data | 2860.5 | 2890.2 | 20844 | 2953 | — | 8.2 | — | 25.1 | 19985/20361 (20365) | 11549/11668 (11671) 27 erro(s) | 767

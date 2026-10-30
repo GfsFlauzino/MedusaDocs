@@ -1,0 +1,21 @@
+{
+ "user_version": 3,
+ "counts": {
+  "users": 3,
+  "sessions": 3,
+  "audit": 15,
+  "pb_versions": 5,
+  "settings": 2
+ },
+ "viewer_token": "MzjnL8MTEi9eNL-ikbbrSAdzJaGuU3PZ54IDxzXxo0w",
+ "logins": {
+  "admin.teste": "Teste-admin-2026!",
+  "viewer.teste": "Teste-usuario-2026",
+  "editor.teste": "Teste-usuario-2026"
+ },
+ "roles": {
+  "admin.teste": "admin",
+  "viewer.teste": "viewer",
+  "editor.teste": "editor"
+ }
+}

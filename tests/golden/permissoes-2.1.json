@@ -1,0 +1,464 @@
+{
+ "base": "v2.1.x-base",
+ "statuses": {
+  "DELETE /api/branding/logo": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "DELETE /api/pb/{pb}#PB-01": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "DELETE /api/pb/{pb}#PB-02": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "DELETE /api/pb/{pb}/ramos/{r}#PB-01": {
+   "admin": 404,
+   "anon": 401,
+   "editor": 404,
+   "viewer": 403
+  },
+  "DELETE /api/pb/{pb}/ramos/{r}#PB-02": {
+   "admin": 404,
+   "anon": 401,
+   "editor": 404,
+   "viewer": 403
+  },
+  "DELETE /api/templates/{t}": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "DELETE /api/users/{u}": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "GET /api/admin/summary": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "GET /api/approvers": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 403
+  },
+  "GET /api/audit": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "GET /api/audit/export": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "GET /api/branding": {
+   "admin": 200,
+   "anon": 200,
+   "editor": 200,
+   "viewer": 200
+  },
+  "GET /api/branding/logo": {
+   "admin": 404,
+   "anon": 404,
+   "editor": 404,
+   "viewer": 404
+  },
+  "GET /api/data": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 200
+  },
+  "GET /api/export": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 200
+  },
+  "GET /api/logs": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "GET /api/me": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 200
+  },
+  "GET /api/pb/{pb}#PB-01": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 404
+  },
+  "GET /api/pb/{pb}#PB-02": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 200
+  },
+  "GET /api/pb/{pb}/export#PB-01": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 404
+  },
+  "GET /api/pb/{pb}/export#PB-02": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 200
+  },
+  "GET /api/pb/{pb}/img/{f}#PB-01": {
+   "admin": 404,
+   "anon": 401,
+   "editor": 404,
+   "viewer": 404
+  },
+  "GET /api/pb/{pb}/img/{f}#PB-02": {
+   "admin": 404,
+   "anon": 401,
+   "editor": 404,
+   "viewer": 404
+  },
+  "GET /api/pb/{pb}/versions#PB-01": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 404
+  },
+  "GET /api/pb/{pb}/versions#PB-02": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 200
+  },
+  "GET /api/pb/{pb}/versions/{v}#PB-01": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 404
+  },
+  "GET /api/pb/{pb}/versions/{v}#PB-02": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 404
+  },
+  "GET /api/pb/{pb}/versions/{v}/diff#PB-01": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 404
+  },
+  "GET /api/pb/{pb}/versions/{v}/diff#PB-02": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 404
+  },
+  "GET /api/people": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 403
+  },
+  "GET /api/sso/callback": {
+   "admin": 302,
+   "anon": 302,
+   "editor": 302,
+   "viewer": 302
+  },
+  "GET /api/sso/config": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "GET /api/sso/login": {
+   "admin": 302,
+   "anon": 302,
+   "editor": 302,
+   "viewer": 302
+  },
+  "GET /api/sso/status": {
+   "admin": 200,
+   "anon": 200,
+   "editor": 200,
+   "viewer": 200
+  },
+  "GET /api/templates": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 403
+  },
+  "GET /api/templates/{t}": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 403
+  },
+  "GET /api/templates/{t}/export": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 403
+  },
+  "GET /api/users": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "POST /api/admin/reset": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "POST /api/flow/parse": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "POST /api/flow/render": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "POST /api/import": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "POST /api/import#replace": {
+   "editor": 200
+  },
+  "POST /api/login": {
+   "admin": 401,
+   "anon": 401,
+   "editor": 401,
+   "viewer": 401
+  },
+  "POST /api/logout": {
+   "admin": 200,
+   "anon": 200,
+   "editor": 200,
+   "viewer": 200
+  },
+  "POST /api/logs/test": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "POST /api/md": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "POST /api/me/password": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 400
+  },
+  "POST /api/pb": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "POST /api/pb/{pb}/img#PB-01": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "POST /api/pb/{pb}/img#PB-02": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "POST /api/pb/{pb}/ramos#PB-01": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "POST /api/pb/{pb}/ramos#PB-02": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "POST /api/pb/{pb}/versions/{v}/restore#PB-01": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 403
+  },
+  "POST /api/pb/{pb}/versions/{v}/restore#PB-02": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "POST /api/sso/test": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "POST /api/templates": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "POST /api/templates/import": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "POST /api/templates/{t}/ramos": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "POST /api/users": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "POST /api/users/{u}/logout": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "POST /api/users/{u}/reset": {
+   "admin": 404,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "PUT /api/branding": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "PUT /api/branding/logo": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "PUT /api/logs": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "PUT /api/pb/{pb}/doc#PB-01": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "PUT /api/pb/{pb}/doc#PB-02": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "PUT /api/pb/{pb}/flow#PB-01": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "PUT /api/pb/{pb}/flow#PB-02": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "PUT /api/pb/{pb}/status#PB-01": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "PUT /api/pb/{pb}/status#PB-02": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "PUT /api/sso/config": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  },
+  "PUT /api/templates/{t}/doc": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "PUT /api/templates/{t}/flow": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "PUT /api/templates/{t}/meta": {
+   "admin": 200,
+   "anon": 401,
+   "editor": 200,
+   "viewer": 403
+  },
+  "PUT /api/templates/{t}/teams": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 400,
+   "viewer": 403
+  },
+  "PUT /api/users/{u}": {
+   "admin": 400,
+   "anon": 401,
+   "editor": 403,
+   "viewer": 403
+  }
+ }
+}
