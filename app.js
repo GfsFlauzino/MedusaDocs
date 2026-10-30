@@ -21,7 +21,12 @@ const canAny = (...ps) => ps.some(can);
 const ADMIN_PERMS = ["users.manage", "roles.manage", "audit.view", "logs.manage", "sso.manage", "branding.edit", "app.reset"];
 const canAdmin = () => canAny(...ADMIN_PERMS);
 const STATUS_CLS = { "Desenvolvimento": "dev", "Homologação": "hml", "Produção": "prd" };
-const statusPill = st => `<span class="status ${STATUS_CLS[st] || "dev"}">${esc(st)}</span>`;
+/* tipos de documento (o servidor manda o registro em /api/bootstrap); rota da biblioteca de cada um */
+const TYPE_ROUTE = { playbook: "", runbook: "runbooks", doc: "documentos" };
+const ROUTE_TYPE = { runbooks: "runbook", documentos: "doc" };
+const typeInfo = t => (App.data && App.data.types && App.data.types[t]) || { label: "Playbook", plural: "Playbooks", flow: "required", steps: true, ramos: true, approval: true, folders: false };
+const typeOfId = id => /^RB-/i.test(id) ? "runbook" : /^DOC-/i.test(id) ? "doc" : "playbook";
+const statusPill = (st, t) => `<span class="status ${STATUS_CLS[st] || "dev"}">${esc(statusLabel(t, st))}</span>`;
 
 /* ───────── API ───────── */
 class ApiError extends Error { constructor(msg, status) { super(msg); this.status = status; } }
@@ -41,14 +46,15 @@ async function api(method, url, body, opts = {}) {
 
 /* dados de abertura (/api/bootstrap): catálogo do fluxograma, status e times; a lista vem de refreshIndex() */
 function setData(d) {
-  App.data = { catalog: d.catalog, statuses: d.statuses, teams: d.teams }; TEAMS = d.teams;
+  App.data = { catalog: d.catalog, statuses: d.statuses, teams: d.teams, types: d.types, enabledTypes: d.enabledTypes || ["playbook"] }; TEAMS = d.teams;
   Flow.setCatalog(d.catalog); buildRefRegex();
 }
 const byId = (a, b) => a.id.localeCompare(b.id, undefined, { numeric: true });
 /* resumo montado no navegador a partir do documento completo (mesmos campos de /api/library) */
 function summaryOf(v) {
   const g = v.gov, props = v.props || {};
-  return { id: v.id, type: "playbook", slug: v.slug, name: v.name, status: g.status, version: (props["Versão"] || "").split(" ")[0],
+  return { id: v.id, type: v.type || "playbook", slug: v.slug, name: v.name, status: g.status, version: (props["Versão"] || "").split(" ")[0],
+    hasFlow: v.hasFlow !== false, fields: (PBS.find(p => p.id === v.id) || {}).fields || {},
     templateKey: v.templateKey, templateName: v.templateName, reviewed: g.reviewed || "", reviewer: g.reviewer || "", approver: g.approver || "",
     gov: g, ramos: v.ramos.length, steps: v.steps.length, rev: v.rev, subtitle: props["Tática MITRE principal"] || props["Fase NIST"] || "" };
 }
@@ -169,12 +175,12 @@ document.addEventListener("click", e => { const im = e.target.closest(".docimg i
 let REF_SRC = "", REF_TEST = /$^/;
 function buildRefRegex() {
   const names = Object.keys(TEAMS).sort((a, b) => b.length - a.length).map(n => n.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"));
-  REF_SRC = `(?<![\\w/])(ER\\d+|[TAICPH]\\d+|R\\d+|E[1-5]|PB-\\d+|${names.concat(["N1", "N2"]).join("|")})(?![\\w/])`;
+  REF_SRC = `(?<![\\w/])(ER\\d+|[TAICPH]\\d+|R\\d+|E[1-5]|(?:PB|RB|DOC)-\\d+|${names.concat(["N1", "N2"]).join("|")})(?![\\w/])`;
   REF_TEST = new RegExp(REF_SRC);
 }
 
 function classify(tok, pb) {
-  if (/^PB-\d+$/.test(tok)) return { kind: "pb", id: tok };
+  if (/^(PB|RB|DOC)-\d+$/.test(tok)) return { kind: "pb", id: tok };
   if (TEAMS[tok]) return { kind: "team", id: tok };
   if (tok === "N1" || tok === "N2") return { kind: "team", id: "SOC " + tok };
   if (!pb) return null;
@@ -203,7 +209,7 @@ function linkify(root, pb) {
       const b = document.createElement("button");
       b.className = "ref " + info.kind; b.textContent = tok;
       b.dataset.kind = info.kind; b.dataset.id = info.id;
-      if (info.kind === "pb" && !PBS.some(p => p.id === info.id)) { b.classList.add("dead"); b.title = "Playbook não disponível para o seu perfil ou ainda não criado"; }
+      if (info.kind === "pb" && !PBS.some(p => p.id === info.id)) { b.classList.add("dead"); b.title = "Documento não disponível para o seu papel ou ainda não criado"; }
       frag.append(b); last = off + tok.length; return tok;
     });
     frag.append(txt.slice(last));
@@ -226,7 +232,7 @@ document.addEventListener("click", e => {
   const { kind, id } = b.dataset;
   if (kind === "pb") {
     const t = PBS.find(p => p.id === id);
-    if (t) { closeDrawer(); location.hash = `#/${t.slug}/fluxo`; }
+    if (t) { closeDrawer(); location.hash = `#/${t.slug}/${t.type === "playbook" ? "fluxo" : "doc"}`; }
     return;
   }
   if (kind === "team") return showTeam(pb, id, true);
@@ -257,6 +263,7 @@ scrim.onclick = closeDrawer;
 $("#dback").onclick = () => { stack.pop(); paintDrawer(); };
 
 function teamChip(name) {
+  if (!name) return "";
   return `<button class="chip team" style="background:${TEAM_COLOR(name)}" data-team="${esc(name)}">${esc(name)}</button>`;
 }
 document.addEventListener("click", e => {
@@ -405,8 +412,12 @@ async function logout() {
 /* barra lateral: navegação principal (o item da página atual fica marcado) */
 function renderSide() {
   const key = (location.hash.replace(/^#\/?/, "").split("/")[0] || "").toLowerCase();
-  const on = k => (k === "home" ? (!key || /^pb-\d+$/.test(key) || key === "novo") : key === k) ? "on" : "";
-  $("#sideNav").innerHTML = !App.user ? "" : `<a href="#/" class="${on("home")}">${ic("playbooks")}<span>Playbooks</span><small>${PBS.filter(p => p.type === "playbook").length}</small></a>
+  const on = k => (k === "home" ? (!key || /^pb-\d+$/.test(key) || key === "novo") : k === "runbooks" ? (key === k || /^rb-\d+$/.test(key))
+    : k === "documentos" ? (key === k || /^doc-\d+$/.test(key)) : key === k) ? "on" : "";
+  const count = t => PBS.filter(p => p.type === t).length;
+  $("#sideNav").innerHTML = !App.user ? "" : `<a href="#/" class="${on("home")}">${ic("playbooks")}<span>Playbooks</span><small>${count("playbook")}</small></a>
+    ${can("runbook.view") ? `<a href="#/runbooks" class="${on("runbooks")}">${ic("pageEdit")}<span>Runbooks</span><small>${count("runbook")}</small></a>` : ""}
+    ${can("doc.view") ? `<a href="#/documentos" class="${on("documentos")}">${ic("page")}<span>Documentos</span><small>${count("doc")}</small></a>` : ""}
     ${can("templates.view") ? `<a href="#/templates" class="${on("templates")}">${ic("templates")}<span>Templates</span></a>` : ""}
     ${canAdmin() ? `<a href="#/admin" class="${on("admin")}">${ic("settings")}<span>Administração</span></a>` : ""}`;
 }
@@ -469,7 +480,15 @@ document.addEventListener("click", e => {
 
 /* ───────── rotas ───────── */
 /* playbook aberto na página atual (documento completo) */
-const currentPb = () => { const m = location.hash.match(/^#\/(pb-\d+)/i), s = m && pbBy(m[1].toLowerCase()); return s ? DETAIL.get(s.id) || null : null; };
+const currentPb = () => { const m = location.hash.match(/^#\/((?:pb|rb|doc)-\d+)/i), s = m && pbBy(m[1].toLowerCase()); return s ? DETAIL.get(s.id) || null : null; };
+/* abas de leitura e de edição de cada tipo: runbook mostra Fluxograma só se tiver; documento não tem */
+function pbTabs(pb) {
+  const t = pb.type || "playbook";
+  if (t === "playbook") return { read: TABS, edit: EDIT_TABS, first: "fluxo" };
+  const read = [["doc", "Documentação"]].concat(pb.hasFlow ? [["fluxo", "Fluxograma"]] : []).concat([["versoes", "Versões"]]);
+  const edit = [["editar", "Editar documento"]].concat(typeInfo(t).flow === "none" ? [] : [["editar-fluxo", pb.hasFlow ? "Editar fluxograma" : "Adicionar fluxograma"]]);
+  return { read, edit, first: "doc" };
+}
 let routeSeq = 0;
 /* playbook: duas visualizações (fluxograma e documentação, que já traz fases, passos e ramos), o histórico e os editores */
 const TABS = [["fluxo", "Fluxograma"], ["doc", "Documentação"], ["versoes", "Versões"]];
@@ -492,6 +511,7 @@ const Tabs = (() => {
     if (key === "admin") return canAdmin() && { title: "Administração", icon: "settings" };
     if (key === "templates") return can("templates.view") && { title: "Templates, times e tags", icon: "templates" };
     if (key === "docs") return { title: "Documentação", icon: "docs" };
+    if (ROUTE_TYPE[key]) return can(`${ROUTE_TYPE[key]}.view`) && { title: typeInfo(ROUTE_TYPE[key]).plural, icon: key === "runbooks" ? "pageEdit" : "page" };
     const pb = pbBy(key);
     return pb && { title: `${pb.id} · ${pb.name}`, dot: STATUS_CLS[pb.gov.status] };
   }
@@ -556,14 +576,21 @@ function route() {
   if (parts[0] === "admin") return canAdmin() ? Admin.render(view, parts[1], parts[2]) : notFound();
   if (parts[0] === "times" || (parts[0] === "templates" && parts[1] === "@times")) { location.replace("#/templates"); return; }
   if (parts[0] === "docs") return Docs.render(view, parts[1]);
+  if (ROUTE_TYPE[parts[0]]) {
+    const t = ROUTE_TYPE[parts[0]];
+    if (!can(`${t}.view`)) return notFound();
+    if (parts[1] === "novo") return can(`${t}.create`) ? DocCreate.render(view, t, parts[2]) : notFound();
+    return LibraryPage.render(view, t, parts[1] === "p" ? parts[2] : "");
+  }
   if (parts[0] === "templates") return can("templates.view") ? TemplatesPage.render(view, parts[1], parts[2]) : notFound();
   if (!parts.length) return renderHome();
   const s = pbBy(parts[0].toLowerCase());
   if (!s) return notFound();
   if (parts[1] === "fases" || parts[1] === "ramos") { location.replace(`#/${s.slug}/doc${parts[2] ? "/" + parts[2] : ""}`); return; }
-  const all = TABS.concat(can("playbook.edit") ? EDIT_TABS : []);
-  const tab = all.some(t => t[0] === parts[1]) ? parts[1] : "fluxo";
-  const show = pb => renderPb(pb, tab, parts[2], parts.slice(3));
+  const show = pb => {
+    const tb = pbTabs(pb), all = tb.read.concat(can(`${pb.type || "playbook"}.edit`) ? tb.edit : []);
+    renderPb(pb, all.some(t => t[0] === parts[1]) ? parts[1] : tb.first, parts[2], parts.slice(3));
+  };
   const ready = DETAIL.get(s.id);
   if (ready && ready.rev === s.rev) return show(ready);
   /* detalhe sob demanda: só o playbook aberto trafega inteiro */
@@ -668,46 +695,60 @@ function govLine(g) {
 /* ───────── página do playbook ───────── */
 function renderPb(pb, tab, extra, rest) {
   useTeams(pb);
-  const props = pb.props, g = pb.gov;
-  const all = TABS.concat(can("playbook.edit") ? EDIT_TABS : []);
+  const props = pb.props, g = pb.gov, T = pb.type || "playbook", ti = typeInfo(T), tb = pbTabs(pb);
+  const all = tb.read.concat(can(`${T}.edit`) ? tb.edit : []);
+  const flowExp = pb.hasFlow !== false;
   view.innerHTML = `<div class="pbbar"><div class="wrap">
-    <div class="pbhead"><span class="pbid">${pb.id}</span><h1>${esc(pb.name)}</h1>${statusPill(g.status)}
+    <div class="pbhead"><span class="pbid">${pb.id}</span><h1>${esc(pb.name)}</h1>${statusPill(g.status, T)}
       <div class="pbactions"><div class="menu-wrap"><button class="btn ghost sm" id="expBtn" aria-haspopup="true">${ic("download")}Exportar${ic("caret", "caret")}</button>
         <div class="dmenu" id="expMenu" hidden>
           <div class="dm-h">Documento</div>
           <a href="api/pb/${pb.id}/export?fmt=md" download><b>Markdown</b><small>.md · Confluence, Git, qualquer editor (.zip se tiver imagens)</small></a>
-          <button data-exp="html"><b>HTML com fluxograma</b><small>.html · abre em qualquer navegador ou no Word</small></button>
-          <button data-exp="print"><b>Imprimir / salvar PDF</b><small>documento completo com o fluxograma</small></button>
-          <div class="dm-h">Fluxograma</div>
+          <button data-exp="html"><b>HTML${flowExp ? " com fluxograma" : ""}</b><small>.html · abre em qualquer navegador ou no Word</small></button>
+          <button data-exp="print"><b>Imprimir / salvar PDF</b><small>documento completo${flowExp ? " com o fluxograma" : ""}</small></button>
+          ${flowExp ? `<div class="dm-h">Fluxograma</div>
           <a href="api/pb/${pb.id}/export?fmt=drawio" download><b>draw.io</b><small>.drawio · editável no draw.io e no Confluence</small></a>
           <a href="api/pb/${pb.id}/export?fmt=mmd" download><b>Mermaid</b><small>.mmd · GitHub, GitLab, mermaid.live</small></a>
           <button data-exp="svg"><b>Imagem SVG</b><small>.svg · vetorial, para wikis</small></button>
-          <button data-exp="jpeg"><b>Imagem JPEG</b><small>.jpg · apresentações, e-mail e tickets</small></button>
+          <button data-exp="jpeg"><b>Imagem JPEG</b><small>.jpg · apresentações, e-mail e tickets</small></button>` : ""}
           <div class="dm-h">Pacote completo</div>
-          <a href="api/pb/${pb.id}/export?fmt=medusa" download><b>Medusa</b><small>.medusa.md · documento + fluxograma, reimportável</small></a>
+          <a href="api/pb/${pb.id}/export?fmt=medusa" download><b>Medusa</b><small>.medusa.md · ${flowExp ? "documento + fluxograma" : "documento, pasta e campos"}, reimportável</small></a>
         </div></div>
-        ${can("playbook.status") ? `<button class="btn ghost sm" id="stBtn">${ic("swap")}Alterar status</button>` : ""}${can("playbook.delete") ? `<button class="btn danger sm" id="delBtn" title="Excluir playbook">${ic("trash")}Excluir</button>` : ""}</div></div>
-    ${govHtml(pb)}
+        ${ti.folders && can(`${T}.edit`) ? `<button class="btn ghost sm" id="mvBtn">${ic("swap")}Mover</button>` : ""}
+        ${can(`${T}.status`) ? `<button class="btn ghost sm" id="stBtn">${ic("swap")}Alterar status</button>` : ""}${can(`${T}.delete`) ? `<button class="btn danger sm" id="delBtn" title="Excluir">${ic("trash")}Excluir</button>` : ""}</div></div>
+    ${fieldChips(pb)}${govHtml(pb)}
     <nav class="tabs">${all.map(([k, l]) => `<a href="#/${pb.slug}/${k}" class="${k === tab ? "on" : ""} ${k.startsWith("editar") ? "edit" : ""}">${k.startsWith("editar") ? ic("edit") : ""}${l}${Editor.hasDraft(pb.id.toLowerCase() + (k === "editar" ? ":doc" : ":flow")) && k.startsWith("editar") ? `<i class="draft-dot" title="Alterações não salvas"></i>` : ""}</a>`).join("")}</nav></div></div>
     <div class="wrap" id="tabview"></div>`;
   if ($("#stBtn")) $("#stBtn").onclick = () => statusDialog(currentPb());
   $("#expBtn").onclick = e => { e.stopPropagation(); $("#expMenu").hidden = !$("#expMenu").hidden; };
   $("#expMenu").onclick = e => { const b = e.target.closest("[data-exp]"); $("#expMenu").hidden = true; if (b) Exporter[b.dataset.exp](currentPb()); };
   if ($("#delBtn")) $("#delBtn").onclick = () => deleteDialog(currentPb());
+  if ($("#mvBtn")) $("#mvBtn").onclick = () => moveDialog(currentPb());
   const tv = $("#tabview");
   if (tab === "editar") return Editor.docEditor(tv, pb);
-  if (tab === "editar-fluxo") { document.body.classList.add("editing"); return Editor.flowEditor(tv, pb); }
+  if (tab === "editar-fluxo") {
+    document.body.classList.add("editing");
+    /* runbook sem fluxograma: o editor abre com uma raia; ao salvar, o .drawio é criado */
+    const start = pb.hasFlow === false ? Object.assign({}, pb, { flow: { subtitle: "", lanes: [JSON.parse(JSON.stringify(App.data.catalog.defaultLanes[0]))], nodes: [], edges: [] }, refs: {} }) : pb;
+    return Editor.flowEditor(tv, start);
+  }
   if (tab === "versoes") Versions.render(pb, tv, extra, rest || []);
   else { ({ fluxo: tabFlow, doc: tabDoc })[tab](pb, tv, extra); linkify(tv, pb); }
   const pend = [["editar", "Editar documento", ":doc"], ["editar-fluxo", "Editar fluxograma", ":flow"]].filter(([, , k]) => Editor.hasDraft(pb.id.toLowerCase() + k));
   if (pend.length) tv.insertAdjacentHTML("afterbegin", `<div class="notice draft-note">${ic("warn")}<span>Alterações não salvas em ${pend.map(([k, l]) => `<a href="#/${pb.slug}/${k}">${l}</a>`).join(" e ")}. Elas ficam guardadas enquanto a aba estiver aberta.</span></div>`);
 }
 
+/* campos do template (runbook e documento) como chips abaixo do título */
+function fieldChips(pb) {
+  const s = PBS.find(p => p.id === pb.id), f = (s && s.fields) || {};
+  const vals = Object.entries(f).flatMap(([k, v]) => (Array.isArray(v) ? v : [v]).filter(Boolean).map(x => [k, x]));
+  return vals.length ? `<div class="field-chips">${vals.map(([k, v]) => `<span class="chip" title="${esc(k)}">${esc(v)}</span>`).join("")}</div>` : "";
+}
 function govHtml(pb) {
-  const g = pb.gov, props = pb.props;
+  const g = pb.gov, props = pb.props, approval = typeInfo(pb.type || "playbook").approval;
   return `<div class="gov">
-      <div><span>Status</span><b>${esc(g.status)}</b></div>
-      <div><span>Aprovador${g.approver && g.status !== "Produção" ? " (últ. publicação)" : ""}</span><b>${esc(g.approver || "—")}</b></div>
+      <div><span>Status</span><b>${esc(statusLabel(pb.type, g.status))}</b></div>
+      ${approval ? `<div><span>Aprovador${g.approver && g.status !== "Produção" ? " (últ. publicação)" : ""}</span><b>${esc(g.approver || "—")}</b></div>` : ""}
       <div><span>Último revisor</span><b>${esc(g.reviewer || "—")}</b></div>
       <div><span>Data de revisão</span><b>${esc(g.reviewed || "—")}</b></div>
       <div><span>Versão</span><b>${esc((props["Versão"] || "—").split(" ")[0])}</b></div>
@@ -717,35 +758,36 @@ function govHtml(pb) {
 }
 function updateHeader(pb) {
   const g = $(".pbbar .gov"); if (g) g.outerHTML = govHtml(pb);
-  const sp = $(".pbhead > .status"); if (sp) sp.outerHTML = statusPill(pb.gov.status);
+  const sp = $(".pbhead > .status"); if (sp) sp.outerHTML = statusPill(pb.gov.status, pb.type);
 }
 
 /* ── ciclo de vida ── */
 async function statusDialog(pb) {
   if (Editor.dirty || Editor.hasDraft(pb.id.toLowerCase())) return toast("Salve ou descarte as alterações dos editores deste playbook antes de mudar o status", "warn");
-  let ap;
-  try { ap = await api("GET", `api/approvers?type=playbook&pid=${encodeURIComponent(pb.id)}`); } catch (e) { return toast(e.message, "err"); }
+  const T = pb.type || "playbook", needAp = typeInfo(T).approval;
+  let ap = { approvers: [], distinct: false };
+  if (needAp) try { ap = await api("GET", `api/approvers?type=${T}&pid=${encodeURIComponent(pb.id)}`); } catch (e) { return toast(e.message, "err"); }
   /* só quem pode aprovar agora: a regra do aprovador diferente tira quem publica e quem fez a última alteração */
   const approvers = ap.approvers.filter(a => !a.excluded);
   const out = ap.approvers.filter(a => a.excluded);
   const apNote = !approvers.length ? `<div class="notice warn small">Ninguém pode aprovar agora${out.length ? `: ${out.map(a => `${esc(a.name)} ${esc(a.excluded)}`).join("; ")}` : ""}. Peça a um administrador para cadastrar outro aprovador${ap.distinct ? " ou para revisar a regra de governança" : ""}.</div>`
     : ap.distinct && out.length ? `<p class="muted small">Não aparece${out.length > 1 ? "m" : ""} ${out.map(a => a.login === App.user.login ? "você" : `${esc(a.name)} (${a.excluded})`).join(" nem ")}.</p>` : "";
   const cur = pb.gov.status, sts = App.data.statuses;
-  const desc = { "Desenvolvimento": "Rascunho em elaboração. Visível só para editores e administradores.",
+  const desc = { "Desenvolvimento": "Rascunho em elaboração. Visível só para quem pode ver rascunhos.",
     "Homologação": "Em validação com o time. Visualizadores já podem ler.",
-    "Produção": "Versão oficial em uso pelo SOC. Exige aprovador." };
+    "Produção": needAp ? "Versão oficial em uso pelo SOC. Exige aprovador." : "Versão oficial, publicada para todos." };
   modal({
     title: `Status do ${pb.id}`, html: `<form id="stForm" class="tform">
       <div class="stepper">${sts.map((s, i) => `<label class="stp ${STATUS_CLS[s]} ${s === cur ? "cur" : ""}"><input type="radio" name="status" value="${esc(s)}" ${s === cur ? "disabled" : ""} ${i === sts.indexOf(cur) + 1 ? "checked" : ""}>
-        <span class="n">${i + 1}</span><b>${esc(s)}</b><small>${desc[s]}</small>${s === cur ? `<em>atual</em>` : ""}</label>`).join("")}</div>
-      <div id="apBox"><label>Aprovador<select class="in" name="approver"><option value="">Selecione…</option>${approvers.map(a => `<option value="${esc(a.login)}" ${a.login === App.user.login || approvers.length === 1 ? "selected" : ""}>${esc(a.name)} (${esc(a.roleName)})</option>`).join("")}</select></label>${apNote}</div>
+        <span class="n">${i + 1}</span><b>${esc(statusLabel(T, s))}</b><small>${desc[s]}</small>${s === cur ? `<em>atual</em>` : ""}</label>`).join("")}</div>
+      <div id="apBox" ${needAp ? "" : "hidden"}><label>Aprovador<select class="in" name="approver"><option value="">Selecione…</option>${approvers.map(a => `<option value="${esc(a.login)}" ${a.login === App.user.login || approvers.length === 1 ? "selected" : ""}>${esc(a.name)} (${esc(a.roleName)})</option>`).join("")}</select></label>${apNote}</div>
       <label>Observação <small>(vai para a auditoria)</small><textarea class="in" name="note" rows="2" placeholder="ex.: validado com o SOC em reunião de 03/10"></textarea></label>
       <div class="err" id="sterr" hidden></div>
       <div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn primary" type="submit">Confirmar mudança</button></div></form>`,
     onMount: (b, close) => {
       const form = $("#stForm", b);
       if (!form.querySelector("input[name=status]:checked")) { const f = form.querySelector("input[name=status]:not(:disabled)"); if (f) f.checked = true; }
-      const sync = () => { $("#apBox", b).hidden = form.status.value !== "Produção"; };
+      const sync = () => { $("#apBox", b).hidden = !needAp || form.status.value !== "Produção"; };
       form.addEventListener("change", sync); sync();
       form.querySelector("[data-cancel]").onclick = close;
       form.onsubmit = async e => {
@@ -753,21 +795,48 @@ async function statusDialog(pb) {
         const f = new FormData(form), status = f.get("status");
         try {
           const r = await api("PUT", `api/pb/${pb.id}/status`, { status, approver: f.get("approver"), note: f.get("note"), rev: pb.rev });
-          replacePlaybook(r.playbook); close(); toast(`${pb.id} agora está em ${status}`); route();
+          replacePlaybook(r.playbook); close(); toast(`${pb.id} agora está em ${statusLabel(T, status)}`); route();
         } catch (x) { $("#sterr", b).textContent = x.message; $("#sterr", b).hidden = false; }
       };
     }
   });
 }
+/* mover para outra pasta (runbook e documento): só muda a organização, sem gerar versão */
+async function moveDialog(pb) {
+  let d; try { d = await api("GET", `api/folders?type=${pb.type}`); } catch (e) { return toast(e.message, "err"); }
+  const s = PBS.find(p => p.id === pb.id) || {};
+  modal({ title: `Mover ${esc(pb.id)}`, html: `<form class="tform" id="mvForm"><label>Pasta<select class="in" name="folder">${folderOptions(d.folders, s.folderId)}</select></label>
+      <div class="err" id="mvErr" hidden></div><div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn primary" type="submit">Mover</button></div></form>`,
+    onMount: (b, close) => {
+      const f = $("#mvForm", b); f.querySelector("[data-cancel]").onclick = close;
+      f.onsubmit = async e => {
+        e.preventDefault();
+        try { await api("PUT", `api/doc/${pb.id}/folder`, { folder_id: f.folder.value || null }); close(); toast("Movido"); await refreshIndex(); route(); }
+        catch (x) { $("#mvErr", b).textContent = x.message; $("#mvErr", b).hidden = false; }
+      };
+    } });
+}
+/* <option> de pastas em árvore (recuo por nível); "" = Sem pasta */
+function folderOptions(folders, sel, none = "Sem pasta") {
+  const kids = {}; folders.forEach(f => (kids[f.parentId ?? "root"] = kids[f.parentId ?? "root"] || []).push(f));
+  const out = [`<option value="" ${sel == null ? "selected" : ""}>${esc(none)}</option>`];
+  const walk = (pid, depth) => (kids[pid] || []).forEach(f => { out.push(`<option value="${f.id}" ${f.id === sel ? "selected" : ""}>${"  ".repeat(depth)}${depth ? "└ " : ""}${esc(f.name)}</option>`); walk(f.id, depth + 1); });
+  walk("root", 0);
+  return out.join("");
+}
+/* rótulos de status por tipo (só interface; o valor gravado é sempre o mesmo) */
+const STATUS_LABELS = { doc: { "Desenvolvimento": "Rascunho", "Homologação": "Em revisão", "Produção": "Publicado" } };
+const statusLabel = (t, st) => ((STATUS_LABELS[t] || {})[st]) || st;
+
 function deleteDialog(pb) {
   if (Editor.dirty) return toast("Salve ou descarte as alterações antes", "warn");
   modal({
     title: `Excluir ${pb.id}`, html: `<form id="delForm" class="tform">
-      <div class="notice danger">O playbook <b>${esc(pb.id)} — ${esc(pb.name)}</b> (${esc(pb.gov.status)}) sai da ferramenta para todos os usuários.
+      <div class="notice danger">O documento <b>${esc(pb.id)} — ${esc(pb.name)}</b> (${esc(pb.gov.status)}) sai da ferramenta para todos os usuários.
         Os arquivos vão para a lixeira do servidor (<code>data/lixeira</code>) e podem ser restaurados por quem administra o servidor.</div>
       <label>Para confirmar, digite <b>${esc(pb.id)}</b><input class="in" name="confirm" autocomplete="off"></label>
       <div class="err" id="delerr" hidden></div>
-      <div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn danger" type="submit" disabled>Excluir playbook</button></div></form>`,
+      <div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn danger" type="submit" disabled>Excluir</button></div></form>`,
     onMount: (b, close) => {
       const form = $("#delForm", b), btn = form.querySelector("[type=submit]");
       form.confirm.oninput = () => { btn.disabled = form.confirm.value.trim().toUpperCase() !== pb.id; };
@@ -1245,10 +1314,256 @@ const Admin = (() => {
   return { render };
 })();
 
+/* ───────── biblioteca (runbooks e documentos) ─────────
+   À esquerda, a árvore de pastas (role="tree": ↑ ↓ andam, ← → recolhem/expandem, Enter abre, F2 renomeia; o ⋯ ou o
+   botão direito abrem as ações). À direita, busca, filtros gerados pelos campos do template (com contagens) e a lista.
+   Documentos e pastas podem ser arrastados para outra pasta. Em telas estreitas a árvore vira um painel recolhível. */
+const LibraryPage = (() => {
+  const st = {};                                  // por tipo: { q, facet: {campo: valor}, open: Set(ids), limit }
+  const S = t => st[t] || (st[t] = { q: "", facet: {}, open: new Set(), limit: 100 });
+  const viewKey = t => `medusa-lib-view:${t}:` + (App.user ? App.user.login : "");
+  const libView = t => { let v = null; try { v = localStorage.getItem(viewKey(t)); } catch { } return v === "list" ? "list" : "cards"; };
+
+  function treeHtml(t, d, sel) {
+    const kids = {}; d.folders.forEach(f => (kids[f.parentId ?? "root"] = kids[f.parentId ?? "root"] || []).push(f));
+    const s = S(t);
+    const node = (f, depth) => {
+      const has = !!(kids[f.id] || []).length, open = s.open.has(f.id);
+      return `<li role="treeitem" aria-level="${depth + 1}" ${has ? `aria-expanded="${open}"` : ""} aria-selected="${String(sel) === String(f.id)}">
+        <div class="tnode ${String(sel) === String(f.id) ? "on" : ""}" data-f="${f.id}" tabindex="-1" draggable="${d.canManage}" style="padding-left:${8 + depth * 14}px">
+          <button class="tw" data-tw="${f.id}" tabindex="-1" aria-hidden="true" ${has ? "" : "style='visibility:hidden'"}>${ic(open ? "down" : "right")}</button>
+          <span class="tname">${esc(f.name)}</span><small>${f.total}</small>
+          ${d.canManage ? `<button class="tmore" data-more="${f.id}" title="Ações da pasta" aria-label="Ações da pasta ${esc(f.name)}" tabindex="-1">${ic("more")}</button>` : ""}</div>
+        ${has && open ? `<ul role="group">${kids[f.id].map(k => node(k, depth + 1)).join("")}</ul>` : ""}</li>`;
+    };
+    const all = d.folders.reduce((n, f) => n + f.count, 0) + d.unfiled;
+    return `<ul class="tree" role="tree" aria-label="Pastas">
+      <li role="treeitem" aria-level="1" aria-selected="${!sel}"><div class="tnode ${!sel ? "on" : ""}" data-f="" tabindex="0">${ic("grid")}<span class="tname">Todos</span><small>${all}</small></div></li>
+      <li role="treeitem" aria-level="1" aria-selected="${sel === "none"}"><div class="tnode ${sel === "none" ? "on" : ""} drop-none" data-f="none" tabindex="-1">${ic("page")}<span class="tname">Sem pasta</span><small>${d.unfiled}</small></div></li>
+      ${(kids.root || []).map(f => node(f, 0)).join("")}</ul>`;
+  }
+
+  function listHtml(t, items, mode) {
+    if (!items.length) return can(`${t}.create`) ? `<div class="empty">Nada aqui. <a href="#/${TYPE_ROUTE[t]}/novo">Criar ${typeInfo(t).label.toLowerCase()}</a></div>` : `<div class="empty">Nada aqui.</div>`;
+    const chips = p => Object.values(p.fields || {}).flatMap(v => Array.isArray(v) ? v : [v]).filter(Boolean).slice(0, 4).map(v => `<span class="chip">${esc(v)}</span>`).join("");
+    if (mode === "list") return `<div class="ptable lib-table" role="table"><div class="pt-row pt-head" role="row"><span>ID</span><span>Nome</span><span>Status</span><span>Versão</span><span class="pt-rev">Revisão</span></div>
+      ${items.map(p => `<a class="pt-row" role="row" href="#/${p.slug}/doc" draggable="true" data-doc="${p.id}"><span class="pt-id">${p.id}</span><span class="pt-name">${esc(p.name)} ${chips(p)}</span>
+        <span><span class="pt-st"><i class="dot ${STATUS_CLS[p.status]}"></i>${esc(statusLabel(t, p.status))}</span></span><span class="pt-ver">v${esc(p.version)}</span>
+        <span class="pt-rev">${esc(p.reviewed || "—")}</span></a>`).join("")}</div>`;
+    return `<div class="cards">${items.map(p => `<a class="card st-${STATUS_CLS[p.status]}" href="#/${p.slug}/doc" draggable="true" data-doc="${p.id}">
+        <div class="card-top"><span class="id">${p.id} · v${esc(p.version)}</span>${statusPill(p.status, t)}</div><h3>${esc(p.name)}</h3>
+        <div class="meta">${chips(p)}${p.hasFlow && t !== "doc" ? `<span class="chip">fluxograma</span>` : ""}</div>
+        <div class="govline">${govLine(p.gov)}</div></a>`).join("")}</div>`;
+  }
+
+  async function render(root, t, sel) {
+    const s = S(t), ti = typeInfo(t), seq = ++routeSeq;
+    sel = sel || "";
+    const qs = new URLSearchParams({ type: t, limit: s.limit });
+    if (sel) { qs.set("folder", sel); if (sel !== "none") qs.set("recursive", "1"); }
+    if (s.q) qs.set("q", s.q);
+    for (const [k, v] of Object.entries(s.facet)) if (v) qs.set("fields." + k, v);
+    let d, tree;
+    try { [d, tree] = await Promise.all([api("GET", "api/library?" + qs), api("GET", `api/folders?type=${t}`), refreshIndex()]); }
+    catch (e) { if (seq === routeSeq && e.status !== 401) root.innerHTML = `<div class="wrap"><div class="err">${esc(e.message)}</div></div>`; return; }
+    if (seq !== routeSeq) return;
+    renderSide(); Tabs.render();
+    const mode = libView(t), selName = sel === "none" ? "Sem pasta" : sel ? (tree.folders.find(f => String(f.id) === sel) || {}).name : "";
+    root.innerHTML = `<div class="wrap">
+      <header class="page-head"><h1>${esc(ti.plural)}</h1><span class="count">${d.all}</span>
+        <div class="home-actions">${can(`${t}.create`) && can(`${t}.import`) ? `<button class="btn ghost sm" id="libImp">${ic("upload")}Importar</button>` : ""}
+          ${can(`${t}.create`) ? `<a class="btn primary sm" href="#/${TYPE_ROUTE[t]}/novo${sel && sel !== "none" ? "/" + sel : ""}">${ic("plus")}Novo ${esc(ti.label.toLowerCase())}</a>` : ""}</div></header>
+      <div class="lib">
+        <details class="lib-side" ${(s.panel ?? !matchMedia("(max-width: 900px)").matches) ? "open" : ""}><summary>${ic("grid")}Pastas${selName ? `: ${esc(selName)}` : ""}</summary>
+          <div class="lib-tree-h">${tree.canManage ? `<button class="btn ghost xs" id="fNew">${ic("plus")}Pasta</button><button class="btn ghost xs" id="fTpl" title="Cria as pastas sugeridas pelo template (o que já existe não é duplicado)">Estrutura do template…</button>` : ""}</div>
+          <div id="libTree">${treeHtml(t, tree, sel)}</div></details>
+        <section class="lib-main">
+          <div class="home-bar lib-bar"><input class="in sm" id="libQ" type="search" placeholder="Filtrar por nome ou ID" value="${esc(s.q)}">
+            ${Object.entries(d.facets || {}).map(([k, f]) => `<select class="in sm" data-facet="${esc(k)}" aria-label="${esc(f.label)}"><option value="">${esc(f.label)}: todos</option>
+              ${Object.entries(f.values).sort((a, b) => b[1] - a[1]).map(([v, n]) => `<option value="${esc(v)}" ${s.facet[k] === v ? "selected" : ""}>${esc(v)} (${n})</option>`).join("")}
+              ${s.facet[k] && !(s.facet[k] in f.values) ? `<option value="${esc(s.facet[k])}" selected>${esc(s.facet[k])} (0)</option>` : ""}</select>`).join("")}
+            <div class="view-seg" role="group" aria-label="Visualização">${[["cards", "Cartões", "grid"], ["list", "Lista", "rows"]].map(([k, n, i]) => `<button class="${k === mode ? "on" : ""}" data-lv="${k}" title="${n}" aria-label="${n}" aria-pressed="${k === mode}">${ic(i)}</button>`).join("")}</div></div>
+          ${listHtml(t, d.items, mode)}
+          ${d.nextCursor ? `<div class="home-more"><button class="btn ghost sm" id="libMore">Carregar mais <span class="muted">(${d.total - d.items.length})</span></button></div>` : ""}
+        </section></div></div>`;
+    const go = f => { location.hash = `#/${TYPE_ROUTE[t]}${f ? "/p/" + f : ""}`; };
+    root.querySelector(".lib-side").ontoggle = e => { s.panel = e.target.open; };      // painel recolhível (telas estreitas) lembra o estado
+    let qt = 0;
+    $("#libQ").oninput = e => { clearTimeout(qt); qt = setTimeout(() => { s.q = e.target.value.trim(); s.limit = 100; render(root, t, sel).then(() => { const q = $("#libQ"); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }); }, 250); };
+    root.querySelectorAll("[data-facet]").forEach(x => x.onchange = () => { s.facet[x.dataset.facet] = x.value; s.limit = 100; render(root, t, sel); });
+    root.querySelector(".view-seg").onclick = e => { const b = e.target.closest("[data-lv]"); if (!b) return; try { localStorage.setItem(viewKey(t), b.dataset.lv); } catch { } render(root, t, sel); };
+    if ($("#libMore")) $("#libMore").onclick = () => { s.limit += 100; render(root, t, sel); };
+    if ($("#libImp")) $("#libImp").onclick = () => importDialog(t);
+    const reload = () => render(root, t, sel);
+    if ($("#fNew")) $("#fNew").onclick = () => folderName(t, null, sel && sel !== "none" ? +sel : null, reload);
+    if ($("#fTpl")) $("#fTpl").onclick = () => fromTemplate(t, reload);
+    bindTree(root, t, tree, sel, go, reload);
+  }
+
+  function bindTree(root, t, tree, sel, go, reload) {
+    const box = $("#libTree"), s = S(t);
+    const nodes = () => [...box.querySelectorAll(".tnode")];
+    box.onclick = e => {
+      const tw = e.target.closest("[data-tw]"); if (tw) { e.preventDefault(); const id = +tw.dataset.tw; s.open.has(id) ? s.open.delete(id) : s.open.add(id); return reload(); }
+      const more = e.target.closest("[data-more]"); if (more) { e.preventDefault(); return folderMenu(t, tree, +more.dataset.more, more, reload, go); }
+      const n = e.target.closest(".tnode"); if (n) go(n.dataset.f);
+    };
+    box.oncontextmenu = e => { const n = e.target.closest(".tnode[data-f]"); if (!n || !tree.canManage || !/^\d+$/.test(n.dataset.f)) return; e.preventDefault(); folderMenu(t, tree, +n.dataset.f, n, reload, go); };
+    box.onkeydown = e => {
+      const list = nodes(), i = list.indexOf(document.activeElement); if (i < 0) return;
+      const cur = list[i], id = cur.dataset.f, f = tree.folders.find(x => String(x.id) === id);
+      const focus = n => { if (!n) return; list.forEach(x => x.tabIndex = -1); n.tabIndex = 0; n.focus(); };
+      if (e.key === "ArrowDown") { e.preventDefault(); focus(list[i + 1]); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); focus(list[i - 1]); }
+      else if (e.key === "ArrowRight" && f && tree.folders.some(x => x.parentId === f.id)) { e.preventDefault(); if (!s.open.has(f.id)) { s.open.add(f.id); reload(); } else focus(list[i + 1]); }
+      else if (e.key === "ArrowLeft" && f) { e.preventDefault(); if (s.open.has(f.id)) { s.open.delete(f.id); reload(); } else focus(list.find(x => x.dataset.f === String(f.parentId))); }
+      else if (e.key === "Enter") { e.preventDefault(); go(id); }
+      else if (e.key === "F2" && f && tree.canManage) { e.preventDefault(); folderName(t, f, f.parentId, reload); }
+    };
+    /* arrastar: documento (cartão/linha) ou pasta para uma pasta, "Sem pasta" ou a raiz */
+    root.querySelectorAll("[data-doc]").forEach(a => a.ondragstart = e => { e.dataTransfer.setData("text/medusa-doc", a.dataset.doc); e.dataTransfer.effectAllowed = "move"; });
+    box.querySelectorAll(".tnode[draggable=true]").forEach(n => n.ondragstart = e => { e.dataTransfer.setData("text/medusa-folder", n.dataset.f); e.dataTransfer.effectAllowed = "move"; });
+    box.querySelectorAll(".tnode").forEach(n => {
+      if (n.dataset.f === "") return;
+      n.ondragover = e => { e.preventDefault(); n.classList.add("over"); };
+      n.ondragleave = () => n.classList.remove("over");
+      n.ondrop = async e => {
+        e.preventDefault(); n.classList.remove("over");
+        const target = n.dataset.f === "none" ? null : +n.dataset.f;
+        const doc = e.dataTransfer.getData("text/medusa-doc"), fol = e.dataTransfer.getData("text/medusa-folder");
+        try {
+          if (doc) { if (!can(`${t}.edit`)) return toast("Seu papel não pode mover documentos", "warn"); await api("PUT", `api/doc/${doc}/folder`, { folder_id: target }); toast(`${doc} movido`); }
+          else if (fol && fol !== n.dataset.f && tree.canManage) { await api("PUT", `api/folders/${fol}`, { parent_id: target }); toast("Pasta movida"); }
+          else return;
+          reload();
+        } catch (x) { toast(x.message, "err"); }
+      };
+    });
+  }
+
+  function folderMenu(t, tree, id, anchor, reload, go) {
+    const f = tree.folders.find(x => x.id === id); if (!f) return;
+    document.querySelectorAll(".fmenu").forEach(m => m.remove());
+    const r = anchor.getBoundingClientRect();
+    const m = document.createElement("div");
+    m.className = "dmenu fmenu"; m.style.cssText = `position:fixed;left:${Math.min(r.left, innerWidth - 220)}px;top:${r.bottom + 4}px;z-index:80`;
+    m.innerHTML = `<button data-a="sub">${ic("plus")}Nova subpasta</button><button data-a="ren">${ic("edit")}Renomear</button><button data-a="mov">${ic("swap")}Mover para…</button><button data-a="del" class="danger">${ic("trash")}Excluir</button>`;
+    document.body.append(m);
+    const close = () => { m.remove(); document.removeEventListener("mousedown", out, true); };
+    const out = e => { if (!m.contains(e.target)) close(); };
+    setTimeout(() => document.addEventListener("mousedown", out, true), 0);
+    m.onclick = e => {
+      const a = (e.target.closest("[data-a]") || {}).dataset; if (!a || !a.a) return; close();
+      if (a.a === "sub") { S(t).open.add(id); return folderName(t, null, id, reload); }
+      if (a.a === "ren") return folderName(t, f, f.parentId, reload);
+      if (a.a === "mov") return folderMove(t, tree, f, reload);
+      if (a.a === "del") return folderDelete(t, tree, f, reload, go);
+    };
+  }
+  function folderName(t, f, parent, done) {
+    modal({ title: f ? "Renomear pasta" : "Nova pasta", html: `<form class="tform" id="fnForm"><label>Nome<input class="in" name="name" maxlength="60" required value="${esc(f ? f.name : "")}"></label>
+        <div class="err" id="fnErr" hidden></div><div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn primary" type="submit">${f ? "Renomear" : "Criar"}</button></div></form>`,
+      onMount: (b, close) => {
+        const form = $("#fnForm", b); form.querySelector("[data-cancel]").onclick = close; form.name.focus(); form.name.select();
+        form.onsubmit = async e => {
+          e.preventDefault();
+          try { f ? await api("PUT", `api/folders/${f.id}`, { name: form.name.value }) : await api("POST", "api/folders", { type: t, name: form.name.value, parent_id: parent }); close(); done(); }
+          catch (x) { $("#fnErr", b).textContent = x.message; $("#fnErr", b).hidden = false; }
+        };
+      } });
+  }
+  function folderMove(t, tree, f, done) {
+    const bad = new Set([f.id]); let grew = true;
+    while (grew) { grew = false; tree.folders.forEach(x => { if (bad.has(x.parentId) && !bad.has(x.id)) { bad.add(x.id); grew = true; } }); }
+    modal({ title: `Mover a pasta ${esc(f.name)}`, html: `<form class="tform" id="fmForm"><label>Para dentro de<select class="in" name="to">${folderOptions(tree.folders.filter(x => !bad.has(x.id)), f.parentId, "Raiz (nenhuma pasta)")}</select></label>
+        <div class="err" id="fmErr" hidden></div><div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn primary" type="submit">Mover</button></div></form>`,
+      onMount: (b, close) => {
+        const form = $("#fmForm", b); form.querySelector("[data-cancel]").onclick = close;
+        form.onsubmit = async e => { e.preventDefault(); try { await api("PUT", `api/folders/${f.id}`, { parent_id: form.to.value || null }); close(); done(); } catch (x) { $("#fmErr", b).textContent = x.message; $("#fmErr", b).hidden = false; } };
+      } });
+  }
+  function folderDelete(t, tree, f, done, go) {
+    const busy = f.total || tree.folders.some(x => x.parentId === f.id);
+    modal({ title: `Excluir a pasta ${esc(f.name)}`, html: `<form class="tform" id="fdForm">
+        ${busy ? `<p>A pasta tem ${f.total} documento(s)${tree.folders.some(x => x.parentId === f.id) ? " e subpastas" : ""}. Para onde vai o conteúdo?</p>
+          <label>Mover para<select class="in" name="to">${folderOptions(tree.folders.filter(x => x.id !== f.id), f.parentId, "Sem pasta / raiz")}</select></label>` : `<p>A pasta está vazia.</p>`}
+        <p class="muted small">Os documentos não são apagados nem ganham versão nova: só mudam de pasta.</p>
+        <div class="err" id="fdErr" hidden></div><div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn danger" type="submit">Excluir pasta</button></div></form>`,
+      onMount: (b, close) => {
+        const form = $("#fdForm", b); form.querySelector("[data-cancel]").onclick = close;
+        form.onsubmit = async e => {
+          e.preventDefault();
+          try { await api("DELETE", `api/folders/${f.id}`, busy ? { moveTo: form.to.value ? +form.to.value : null } : {}); close(); toast("Pasta excluída"); go(""); done(); }
+          catch (x) { $("#fdErr", b).textContent = x.message; $("#fdErr", b).hidden = false; }
+        };
+      } });
+  }
+  async function fromTemplate(t, done) {
+    let ts; try { ts = (await api("GET", `api/templates?kind=${t}`)).templates.filter(x => !x.error && x.folders.length); } catch (e) { return toast(e.message, "err"); }
+    if (!ts.length) return toast("Nenhum template deste tipo sugere pastas (aba Pastas do template)", "warn");
+    modal({ title: "Criar estrutura de pastas do template", html: `<form class="tform" id="ftForm"><label>Template<select class="in" name="tpl">${ts.map(x => `<option value="${esc(x.key)}">${esc(x.name)} (${x.folders.length} pastas)</option>`).join("")}</select></label>
+        <pre class="ft-prev" id="ftPrev"></pre><p class="muted small">Só cria o que falta; pastas existentes ficam como estão.</p>
+        <div class="err" id="ftErr" hidden></div><div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn primary" type="submit">Criar pastas</button></div></form>`,
+      onMount: (b, close) => {
+        const form = $("#ftForm", b), prev = () => { $("#ftPrev", b).textContent = ts.find(x => x.key === form.tpl.value).folders.join("\n"); };
+        form.tpl.onchange = prev; prev(); form.querySelector("[data-cancel]").onclick = close;
+        form.onsubmit = async e => { e.preventDefault(); try { const r = await api("POST", "api/folders/from-template", { type: t, template: form.tpl.value }); close(); toast(`${r.created} pasta(s) criada(s)`); done(); } catch (x) { $("#ftErr", b).textContent = x.message; $("#ftErr", b).hidden = false; } };
+      } });
+  }
+  return { render };
+})();
+
+/* ───────── criação de runbook e documento: template do tipo, nome, ID sugerido, pasta e campos ───────── */
+const DocCreate = (() => {
+  const input = f => {
+    const n = `f_${f.key}`, req = f.required ? "required" : "";
+    if (f.type === "select") return `<select class="in" name="${n}" ${req}><option value="">—</option>${f.options.map(o => `<option>${esc(o)}</option>`).join("")}</select>`;
+    if (f.type === "multiselect") return `<div class="chk-row">${f.options.map(o => `<label class="chk-inline"><input type="checkbox" name="${n}" value="${esc(o)}"> ${esc(o)}</label>`).join("")}</div>`;
+    if (f.type === "date") return `<input class="in" type="date" name="${n}" ${req}>`;
+    if (f.type === "url") return `<input class="in" type="url" name="${n}" placeholder="https://" ${req}>`;
+    return `<input class="in" name="${n}" maxlength="300" ${req}>`;
+  };
+  async function render(root, t, folder) {
+    const ti = typeInfo(t);
+    root.innerHTML = `<div class="wrap"><div class="empty">Carregando…</div></div>`;
+    let tpls, people, next, tree;
+    try { [tpls, people, next, tree] = await Promise.all([api("GET", `api/templates?kind=${t}`), api("GET", "api/people"), api("GET", `api/doc/next-id?type=${t}`), api("GET", `api/folders?type=${t}`)]); }
+    catch (e) { root.innerHTML = `<div class="wrap"><div class="err">${esc(e.message)}</div></div>`; return; }
+    const list = tpls.templates.filter(x => !x.error), def = list.find(x => x.default) || list[0];
+    if (!def) { root.innerHTML = `<div class="wrap"><div class="err">Nenhum template de ${esc(ti.label.toLowerCase())}. Crie um em Templates.</div></div>`; return; }
+    const fieldsOf = key => (list.find(x => x.key === key) || def).fields;
+    root.innerHTML = `<div class="wrap"><header class="page-head"><h1>Novo ${esc(ti.label.toLowerCase())}</h1></header>
+      <form class="ecard tform create-doc" id="dcForm" autocomplete="off">
+        <div class="pp-row"><label>Template<select class="in" name="template">${list.map(x => `<option value="${esc(x.key)}" ${x === def ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>
+          <label style="max-width:140px">ID<input class="in" name="id" value="${esc(next.id)}" pattern="${ti.prefix}-\\d{2,4}" required></label></div>
+        <label>Nome<input class="in" name="name" maxlength="100" required placeholder="${t === "runbook" ? "ex.: Isolar host no EDR" : "ex.: Política de resposta a incidentes"}"></label>
+        <div class="pp-row"><label>Autor<select class="in" name="author">${people.people.map(p => `<option value="${esc(p.login)}" ${p.login === App.user.login ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label>
+          <label>Owner do documento<input class="in" name="owner" maxlength="80"></label></div>
+        ${ti.folders ? `<label>Pasta<select class="in" name="folder">${folderOptions(tree.folders, folder ? +folder : null)}</select></label>` : ""}
+        <div id="dcFields"></div>
+        <div class="err" id="dcErr" hidden></div>
+        <div class="create-actions"><a class="btn ghost" href="#/${TYPE_ROUTE[t]}">Cancelar</a><button class="btn primary" type="submit">Criar ${esc(ti.label.toLowerCase())}</button></div></form></div>`;
+    const form = $("#dcForm");
+    const paint = () => { const fs = fieldsOf(form.template.value); $("#dcFields").innerHTML = fs.length ? `<div class="pp-lbl">Campos</div>${fs.map(f => `<label>${esc(f.label)}${f.required ? " *" : ""}${input(f)}</label>`).join("")}` : ""; };
+    form.template.onchange = paint; paint();
+    form.onsubmit = async e => {
+      e.preventDefault();
+      const fields = {};
+      for (const f of fieldsOf(form.template.value)) fields[f.key] = f.type === "multiselect" ? [...form.querySelectorAll(`[name="f_${f.key}"]:checked`)].map(x => x.value) : (form[`f_${f.key}`] || {}).value || "";
+      try {
+        const r = await api("POST", "api/doc", { type: t, template: form.template.value, id: form.id.value.trim().toUpperCase(), name: form.name.value.trim(),
+          author: form.author.value, owner: form.owner.value, folder_id: form.folder && form.folder.value ? +form.folder.value : null, fields });
+        await refreshIndex(); replacePlaybook(r.playbook); toast(`${r.playbook.id} criado em ${statusLabel(t, "Desenvolvimento")}`); location.hash = `#/${r.playbook.slug}/doc`;
+      } catch (x) { $("#dcErr").textContent = x.message; $("#dcErr").hidden = false; }
+    };
+  }
+  return { render };
+})();
+
 /* ───────── busca ───────── */
 /* No servidor (/api/search: sem acento, título vale mais que passo/ramo, que vale mais que texto), com espera de
    150 ms entre teclas e cancelamento da busca anterior. Times vêm do cadastro já carregado. ↑ ↓ e Enter navegam. */
-const KIND_NAMES = { documento: "Playbook", passo: "Passo", ramo: "Ramo", secao: "Seção", time: "Time" };
+const KIND_NAMES = { documento: "Documento", passo: "Passo", ramo: "Ramo", secao: "Seção", time: "Time" };
 let HITS = [], hitSel = 0, searchTimer = 0, searchCtl = null;
 const q = $("#q"), results = $("#results");
 async function doSearch() {
@@ -1267,7 +1582,7 @@ async function doSearch() {
 }
 function paintHits() {
   results.hidden = false;
-  results.innerHTML = HITS.length ? HITS.map((h, i) => `<button data-i="${i}" class="${i === hitSel ? "on" : ""}"><small>${h.pid ? esc(h.pid) + " · " : ""}${KIND_NAMES[h.kind] || ""}</small><br>${esc(h.title.length > 110 ? h.title.slice(0, 107) + "…" : h.title)}</button>`).join("")
+  results.innerHTML = HITS.length ? HITS.map((h, i) => `<button data-i="${i}" class="${i === hitSel ? "on" : ""}"><small>${h.pid ? esc(h.pid) + " · " : ""}${h.kind === "documento" ? typeInfo(h.type).label : KIND_NAMES[h.kind] || ""}</small><br>${esc(h.title.length > 110 ? h.title.slice(0, 107) + "…" : h.title)}</button>`).join("")
     : `<div class="empty">Nada encontrado.</div>`;
   const on = results.querySelector("button.on"); if (on) on.scrollIntoView({ block: "nearest" });
 }
@@ -1280,7 +1595,7 @@ function goHit(h) {
     location.hash = `#/${slug}/doc`;
     const scroll = (n = 0) => { const el = document.getElementById(h.anchor); if (el) el.scrollIntoView(); else if (n < 30) setTimeout(() => scroll(n + 1), 60); };
     setTimeout(scroll, 60);
-  } else location.hash = `#/${slug}/fluxo`;
+  } else location.hash = `#/${slug}/${h.type === "playbook" ? "fluxo" : "doc"}`;
 }
 q.addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(doSearch, 150); });
 q.addEventListener("keydown", e => {
@@ -1442,10 +1757,11 @@ const Exporter = (() => {
   }
   function html(pb) {
     const g = pb.gov, secs = pb.sections;
-    const body = secs.map(s => /^Fluxograma/.test(s.title)
+    const body = secs.map(s => /^Fluxograma/.test(s.title) && pb.hasFlow !== false
       ? `<h2>${esc(s.title)}</h2>${s.html}<div class="flow">${flowSvg(pb)}</div>`
       : `<h2>${esc(s.title)}</h2>${s.html}${s.subs.map(x => `<h3>${esc(x.title)}</h3>${x.html}`).join("")}`).join("\n");
-    const hasFlowSec = secs.some(s => /^Fluxograma/.test(s.title));
+    const withFlow = pb.hasFlow !== false;
+    const hasFlowSec = !withFlow || secs.some(s => /^Fluxograma/.test(s.title));
     return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${esc(pb.id)} — ${esc(pb.name)}</title><style>${CSS}</style></head><body>
       <h1>${esc(pb.id)} — ${esc(pb.name)}</h1><div class="meta">${esc(pb.byline)} · Status: ${esc(g.status)}${g.approver ? ` · Aprovador: ${esc(g.approver)}` : ""}${g.reviewer ? ` · Revisado por ${esc(g.reviewer)} em ${esc(g.reviewed)}` : ""}</div>
       ${pb.intro || ""}${hasFlowSec ? "" : `<h2>Fluxograma</h2><div class="flow">${flowSvg(pb)}</div>`}${body}
@@ -1741,10 +2057,10 @@ const Versions = (() => {
     el.innerHTML = `<div class="empty">Carregando histórico…</div>`;
     let d; try { d = await api("GET", `api/pb/${pb.id}/versions`); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
     const vs = d.versions;
-    el.innerHTML = `<div class="ver-head"><div><b>Versão atual: ${vpill(d.current)}</b> ${statusPill(d.currentStatus)}</div>
+    el.innerHTML = `<div class="ver-head"><div><b>Versão atual: ${vpill(d.current)}</b> ${statusPill(d.currentStatus, pb.type)}</div>
         <p class="muted small">Desenvolvimento e Homologação somam 1 depois do ponto a cada gravação (0.1 → 0.2). Publicar em Produção gera a próxima versão cheia (0.4 → 1.0). Em Produção, cada alteração é Minor (2.3 → 2.4) ou Major (2.3 → 3.0), com a descrição de quem salvou. ${can("playbook.view_drafts") ? "" : "Você vê as versões que estiveram em Homologação ou Produção."}</p></div>
       ${vs.length ? `<div class="vtimeline">${vs.map((v, i) => `<div class="vitem ${i === 0 ? "latest" : ""}"><div class="vdot"></div>
-          <div class="vbody"><div class="vtop">${vpill(v.version)} ${statusPill(v.status)} <span class="vkind">${esc(v.kindName)}</span>${i === 0 ? `<span class="tag">mais recente</span>` : ""}</div>
+          <div class="vbody"><div class="vtop">${vpill(v.version)} ${statusPill(v.status, pb.type)} <span class="vkind">${esc(v.kindName)}</span>${i === 0 ? `<span class="tag">mais recente</span>` : ""}</div>
             <div class="vmeta">${esc(fmt(v.created_at))} · ${esc(v.author_name)}${v.note ? ` · <span class="vnote">${esc(v.note)}</span>` : ""}</div></div>
           <div class="vact"><a class="btn ghost xs" href="#/${pb.slug}/versoes/${v.id}">Ler</a>
             <a class="btn ghost xs" href="#/${pb.slug}/versoes/${v.id}/comparar/${vs[i + 1] ? vs[i + 1].id : "atual"}" title="${vs[i + 1] ? "Comparar com a versão anterior" : "Comparar com a versão atual"}">Comparar</a>
@@ -1771,7 +2087,7 @@ const Versions = (() => {
     const v = d.version, vp = d.playbook, g = vp.gov;
     vp.slug = pb.slug;
     const secs = vp.sections.filter(s => !/^Fluxograma/.test(s.title));
-    el.innerHTML = `<div class="ver-banner"><div>${ic("history")}Você está lendo a versão ${vpill(v.version)} ${statusPill(v.status)} de <b>${esc(fmt(v.created_at))}</b>, salva por <b>${esc(v.author_name)}</b> (${esc(v.kindName)}${v.note ? `: ${esc(v.note)}` : ""}). Não é necessariamente a versão em uso.</div>
+    el.innerHTML = `<div class="ver-banner"><div>${ic("history")}Você está lendo a versão ${vpill(v.version)} ${statusPill(v.status, pb.type)} de <b>${esc(fmt(v.created_at))}</b>, salva por <b>${esc(v.author_name)}</b> (${esc(v.kindName)}${v.note ? `: ${esc(v.note)}` : ""}). Não é necessariamente a versão em uso.</div>
         <div class="ver-actions"><a class="btn ghost sm" href="#/${pb.slug}/versoes">${ic("left")}Histórico</a><a class="btn ghost sm" href="#/${pb.slug}/versoes/${v.id}/comparar/atual">${ic("compare")}Comparar com a atual</a>
           <button class="btn ghost sm" id="vHtml" title="Baixa esta versão como HTML com o fluxograma">${ic("download")}HTML</button><button class="btn ghost sm" id="vPrint">${ic("print")}Imprimir / PDF</button>
           ${can("playbook.restore") ? `<button class="btn primary sm" id="vRestore">Restaurar esta versão</button>` : ""}</div></div>
@@ -1780,8 +2096,8 @@ const Versions = (() => {
           <div class="gov dv-gov"><div><span>Status na versão</span><b>${esc(g.status)}</b></div><div><span>Aprovador</span><b>${esc(g.approver || "—")}</b></div>
             <div><span>Último revisor</span><b>${esc(g.reviewer || "—")}</b></div><div><span>Data de revisão</span><b>${esc(g.reviewed || "—")}</b></div>
             <div><span>Owner</span><b>${esc(vp.props["Owner do documento"] || "—")}</b></div><div><span>Template</span><b>${esc(vp.templateName || "—")}</b></div></div></header>
-        <div class="docgrid"><nav class="toc"><a href="#" data-go="vfluxo">Fluxograma</a>${secs.map(s => `<a href="#" data-go="vsec-${s.id}">${esc(s.title)}</a>`).join("")}</nav>
-          <div class="doc">${vp.intro ? `<section class="md intro">${vp.intro}</section>` : ""}<section id="vfluxo" class="md"><h2>Fluxograma</h2><p class="muted small">Clique em uma caixa para ler o trecho desta versão da documentação.</p><div class="flowbox viewer dv-flow" id="vflow"></div></section>
+        <div class="docgrid"><nav class="toc">${vp.flow.nodes.length || pb.type === "playbook" ? `<a href="#" data-go="vfluxo">Fluxograma</a>` : ""}${secs.map(s => `<a href="#" data-go="vsec-${s.id}">${esc(s.title)}</a>`).join("")}</nav>
+          <div class="doc">${vp.intro ? `<section class="md intro">${vp.intro}</section>` : ""}<section id="vfluxo" class="md" ${vp.flow.nodes.length || pb.type === "playbook" ? "" : "hidden"}><h2>Fluxograma</h2><p class="muted small">Clique em uma caixa para ler o trecho desta versão da documentação.</p><div class="flowbox viewer dv-flow" id="vflow"></div></section>
             ${secs.map(s => `<section id="vsec-${s.id}" class="md"><h2>${esc(s.title)}</h2>${s.html}${s.subs.map(x => `<h3>${esc(x.title)}</h3>${x.html}`).join("")}</section>`).join("")}</div></div>
       </article>`;
     if (vp.flow.nodes.length) {
@@ -1829,8 +2145,8 @@ const Versions = (() => {
         <span class="dstat"><b class="add">+${d.stats.added}</b> <b class="del">−${d.stats.removed}</b> linhas no documento · ${d.stats.flowChanges} mudança(s) no fluxograma</span></div>
         <div class="ver-actions"><a class="btn ghost sm" href="#/${pb.slug}/versoes">${ic("left")}Histórico</a></div></div>
       <div class="cmp-pick"><label>Versão<select class="in" id="cA">${opt(String(id))}</select></label><span>×</span><label>Comparar com<select class="in" id="cB">${opt(other || "atual")}</select></label></div>
-      <div class="ecard"><div class="ecard-h"><b>Fluxograma</b><span class="muted small">caixas e setas (posição não conta)</span></div>
-        ${d.flow.length ? `<div class="difflines">${d.flow.map(o => line([o.t, o.text])).join("")}</div>` : `<p class="muted">Sem mudanças no fluxograma.</p>`}</div>
+      ${pb.hasFlow === false && !d.flow.length ? "" : `<div class="ecard"><div class="ecard-h"><b>Fluxograma</b><span class="muted small">caixas e setas (posição não conta)</span></div>
+        ${d.flow.length ? `<div class="difflines">${d.flow.map(o => line([o.t, o.text])).join("")}</div>` : `<p class="muted">Sem mudanças no fluxograma.</p>`}</div>`}
       <div class="ecard"><div class="ecard-h"><b>Documento</b><span class="muted small">Markdown, linha a linha</span></div>
         ${d.stats.added || d.stats.removed ? `<div class="difflines">${rows.map(line).join("")}</div>` : `<p class="muted">Sem mudanças no documento.</p>`}</div>`;
     const go = () => { const a = $("#cA", el).value, b = $("#cB", el).value;
@@ -1845,14 +2161,16 @@ const Versions = (() => {
 })();
 
 /* ───────── importar ───────── */
-async function importDialog() {
+async function importDialog(type) {
+  type = typeof type === "string" ? type : "playbook";
+  const ti = typeInfo(type);
   let text = "", fname = "", tpls = [];
-  try { tpls = (await api("GET", "api/templates")).templates.filter(t => !t.error); } catch (x) { return toast(x.message, "err"); }
+  try { tpls = (await api("GET", `api/templates?kind=${type}`)).templates.filter(t => !t.error); } catch (x) { return toast(x.message, "err"); }
   modal({
-    title: "Importar playbook", wide: true, html: `<div class="tform">
+    title: `Importar ${ti.label.toLowerCase()}`, wide: true, html: `<div class="tform">
       <p class="muted small" style="margin-top:0">Aceita arquivos <b>.medusa.md</b> exportados por qualquer instalação do Medusa Docs, ou um <b>.md</b> comum
         (título <code># PB-00 — Nome</code> e seções <code>##</code>). O fluxograma vem do bloco <code>mermaid</code>. O playbook importado entra em <b>Desenvolvimento</b>.</p>
-      <label>Template do playbook <small>(define os times e tags; times do arquivo que faltarem entram nele)</small><select class="in" id="imTpl">${tpls.map(t => `<option value="${esc(t.key)}" ${t.key === "padrao" ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></label>
+      <label>Template <small>(${type === "playbook" ? "define os times e tags; times do arquivo que faltarem entram nele" : "define os campos"})</small><select class="in" id="imTpl">${tpls.map(t => `<option value="${esc(t.key)}" ${t.default ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></label>
       <label class="import-drop" id="imDrop">Arraste o arquivo aqui ou clique para escolher<input type="file" id="imFile" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden></label>
       <details style="margin-top:10px"><summary class="small">…ou cole o conteúdo</summary><textarea class="in code" id="imText" style="min-height:160px;margin-top:8px"></textarea>
         <button class="btn ghost sm" id="imPaste" style="margin-top:6px">Analisar texto colado</button></details>
@@ -1862,13 +2180,14 @@ async function importDialog() {
       async function analyze(id) {
         try {
           const r = await api("POST", "api/import", { text, id, template: $("#imTpl", b).value, dryRun: true }), p = r.preview;
-          const nextId = () => { const used = PBS.filter(x => x.id.startsWith("PB-")).map(x => +x.id.slice(3)); let n = 1; while (used.includes(n)) n++; return "PB-" + String(n).padStart(2, "0"); };
+          const pre = ti.prefix || "PB";
+          const nextId = () => { const used = PBS.filter(x => x.id.startsWith(pre + "-")).map(x => +x.id.slice(pre.length + 1)); let n = 1; while (used.includes(n)) n++; return pre + "-" + String(n).padStart(2, "0"); };
           prev.innerHTML = `<div class="import-sum">
               <span>Arquivo</span><b>${esc(fname || "texto colado")}</b>
-              <span>Playbook</span><b>${esc(p.id)} — ${esc(p.name)}</b>
+              <span>${esc(ti.label)}</span><b>${esc(p.id)} — ${esc(p.name)}</b>${p.folder ? `<span>Pasta</span><b>${esc(p.folder)}</b>` : ""}
               <span>Origem</span><b>${esc(p.origin.gerado_por || "—")}${p.origin.status_origem ? ` · estava em ${esc(p.origin.status_origem)}` : ""}${p.origin.exportado_por ? ` · exportado por ${esc(p.origin.exportado_por)}` : ""}</b>
-              <span>Conteúdo</span><b>${p.sections} seções · ${p.nodes} caixas · ${p.edges} setas${p.images ? ` · ${p.images} imagem(ns)` : ""}</b>
-              <span>Raias</span><b>${p.lanes.map(esc).join(", ")}</b>
+              <span>Conteúdo</span><b>${p.sections} seções${p.nodes ? ` · ${p.nodes} caixas · ${p.edges} setas` : ""}${p.images ? ` · ${p.images} imagem(ns)` : ""}</b>
+              ${p.lanes.length ? `<span>Raias</span><b>${p.lanes.map(esc).join(", ")}</b>` : ""}
               <span>Template</span><b>${esc(p.template)}</b>
               ${p.createTeams.length ? `<span>Times novos</span><b>${p.createTeams.map(esc).join(", ")} <small class="muted">(entram no template ${esc(p.template)})</small></b>` : ""}
             </div>
@@ -1885,7 +2204,7 @@ async function importDialog() {
             try {
               const r2 = await api("POST", "api/import", { text, id: target, mode, template: $("#imTpl", b).value });
               replacePlaybook(r2.playbook); setTeams(r2.teams); close();
-              toast(`${r2.playbook.id} importado em Desenvolvimento`); location.hash = `#/${r2.playbook.slug}/fluxo`;
+              await refreshIndex(); toast(`${r2.playbook.id} importado em ${statusLabel(type, "Desenvolvimento")}`); location.hash = `#/${r2.playbook.slug}/${type === "playbook" ? "fluxo" : "doc"}`;
             } catch (x) { $("#imErr", prev).textContent = x.message; $("#imErr", prev).hidden = false; }
           };
         } catch (x) { prev.innerHTML = `<div class="err">${esc(x.message)}</div>`; }
