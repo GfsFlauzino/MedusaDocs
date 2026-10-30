@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.0.0-beta.2 — 2026-10-30
+
+### Markdown mais completo
+- **Blocos de código** (```` ```bash ```` … ```` ``` ````): nada dentro é interpretado (nem `##`, nem HTML); na leitura,
+  nas versões e no HTML exportado ganham o botão **Copiar**. No editor visual, bloco "Código" com a linguagem opcional;
+  no modo Markdown, o botão de código cria um bloco quando há várias linhas (ou nada) selecionado.
+- **Listas numeradas** (`1.`, `2.` …; a numeração de uma lista continuada, como `4.` depois de um bloco de código, é
+  mantida) e listas com `*` e `+`. Linha recuada logo abaixo de um item continua o item (quebra de linha). Listas
+  aninhadas ainda não existem: o sub-item aparece como continuação do item de cima.
+- **Introdução:** o texto entre a linha de versão e a primeira seção deixou de ser descartado ao salvar. Aparece no
+  topo da documentação e tem um cartão próprio no editor.
+- **Links** `[texto](url)` com `http`, `https`, `mailto` ou `#/…` (outro playbook); links externos abrem em nova aba.
+  Qualquer outro esquema (`javascript:`, `data:`…) é mostrado como texto.
+- Arquivos `.md` existentes **não mudam** até alguém salvar; os 22 playbooks de referência relidos pelo parser novo
+  geram o mesmo Markdown que antes.
+
+### Correções
+- Um bloco de código com linha longa não alarga mais a página (rola dentro do bloco).
+
 ## 3.0.0-beta.1 — 2026-10-30
 
 ### Papéis e permissões personalizados

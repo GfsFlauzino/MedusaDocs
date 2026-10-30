@@ -187,7 +187,7 @@ function linkify(root, pb) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(n) {
       for (let p = n.parentNode; p && p !== root; p = p.parentNode)
-        if (/^(BUTTON|A|CODE|SCRIPT|svg|TEXTAREA|INPUT)$/i.test(p.nodeName) || (p.classList && (p.classList.contains("ref") || p.classList.contains("sid") || p.classList.contains("nolink")))) return NodeFilter.FILTER_REJECT;
+        if (/^(BUTTON|A|CODE|PRE|SCRIPT|svg|TEXTAREA|INPUT)$/i.test(p.nodeName) || (p.classList && (p.classList.contains("ref") || p.classList.contains("sid") || p.classList.contains("nolink")))) return NodeFilter.FILTER_REJECT;
       return REF_TEST.test(n.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
     }
   });
@@ -210,6 +210,14 @@ function linkify(root, pb) {
     n.replaceWith(frag);
   }
 }
+
+/* blocos de código: botão Copiar (leitura, versões e prévias) */
+document.addEventListener("click", e => {
+  const b = e.target.closest(".code-copy"); if (!b) return;
+  const pre = b.parentNode.querySelector("pre"); if (!pre) return;
+  navigator.clipboard.writeText(pre.innerText).then(() => { b.textContent = "Copiado"; setTimeout(() => { b.textContent = "Copiar"; }, 1500); },
+    () => toast("Selecione o código e copie manualmente", "warn"));
+});
 
 document.addEventListener("click", e => {
   const b = e.target.closest("button.ref");
@@ -819,7 +827,7 @@ function tabDoc(pb, el, focus) {
   const secs = pb.sections.filter(s => !/^Fluxograma/.test(s.title));
   el.innerHTML = `<div class="docgrid"><nav class="toc">${secs.map(s => `<a href="#" data-go="${s.id}">${esc(s.title)}</a>
       ${s.subs.length && s.subs.length <= 24 ? `<div class="toc-subs">${s.subs.map(x => `<a href="#" data-sub="${x.id}">${esc(x.title)}</a>`).join("")}</div>` : ""}`).join("")}</nav>
-    <div class="doc">${secs.map(s => `<section id="sec-${s.id}" class="md"><h2>${esc(s.title)}</h2>${s.html}${s.subs.map(x => `<h3 id="sub-${x.id}">${esc(x.title)}</h3>${x.html}`).join("")}</section>`).join("")}</div></div>`;
+    <div class="doc">${pb.intro ? `<section class="md intro">${pb.intro}</section>` : ""}${secs.map(s => `<section id="sec-${s.id}" class="md"><h2>${esc(s.title)}</h2>${s.html}${s.subs.map(x => `<h3 id="sub-${x.id}">${esc(x.title)}</h3>${x.html}`).join("")}</section>`).join("")}</div></div>`;
   el.querySelector(".toc").onclick = e => {
     const a = e.target.closest("[data-go], [data-sub]"); if (!a) return;
     e.preventDefault(); document.getElementById(a.dataset.go ? "sec-" + a.dataset.go : "sub-" + a.dataset.sub).scrollIntoView();
@@ -1394,7 +1402,13 @@ const Exporter = (() => {
     .meta{color:#666;font-size:13px}.flow{overflow:auto;border:1px solid #ddd;border-radius:8px;margin:12px 0}.flow svg{display:block;max-width:100%;height:auto}
     figure.docimg{margin:14px 0;text-align:center}figure.docimg img{max-width:100%;height:auto;border:1px solid #ddd;border-radius:6px}figure.docimg figcaption{font-size:13px;color:#666;margin-top:6px}
     li.chk{list-style:none;margin-left:-20px}li.chk::before{content:"";display:inline-block;width:.75em;height:.75em;border:1.5px solid #777;border-radius:3px;margin-right:7px;vertical-align:-1px}li.chk.done::before{background:#2E7D32;border-color:#2E7D32}
-    @media print{body{margin:0;max-width:none}.flow{border:0;page-break-inside:avoid}h2{page-break-after:avoid}}`;
+    .codeblock{position:relative;margin:10px 0}.codeblock pre{background:#f4f4f6;border:1px solid #ddd;border-radius:6px;padding:10px 12px;overflow:auto;font:12.5px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre}
+    .codeblock pre code{background:none;padding:0}.code-lang{position:absolute;left:10px;top:-9px;font-size:11px;color:#666;background:#fff;padding:0 4px}
+    .code-copy{position:absolute;right:6px;top:6px;font:12px sans-serif;border:1px solid #ccc;background:#fff;border-radius:5px;padding:2px 8px;cursor:pointer}
+    @media print{body{margin:0;max-width:none}.flow{border:0;page-break-inside:avoid}h2{page-break-after:avoid}.code-copy{display:none}}`;
+  /* botão Copiar dos blocos de código no arquivo exportado (fora da aplicação não há o app.js) */
+  const COPY_JS = `document.addEventListener("click",function(e){var b=e.target.closest(".code-copy");if(!b)return;var t=b.parentNode.querySelector("pre").innerText;`
+    + `navigator.clipboard.writeText(t).then(function(){b.textContent="Copiado";setTimeout(function(){b.textContent="Copiar"},1500)})});`;
   const SVG_CSS = `.nodetxt{width:100%;height:100%;display:flex;align-items:center;justify-content:center;text-align:center;font:11px/1.25 Helvetica,Arial,sans-serif;color:#1b2230;padding:2px 4px;box-sizing:border-box;overflow:hidden}.nodetxt .m{color:#666}`;
   function flowSvg(pb) {
     const { svg, vb } = Flow.svg(pb.flow, { badges: badgesFor(pb) });
@@ -1434,8 +1448,9 @@ const Exporter = (() => {
     const hasFlowSec = secs.some(s => /^Fluxograma/.test(s.title));
     return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${esc(pb.id)} — ${esc(pb.name)}</title><style>${CSS}</style></head><body>
       <h1>${esc(pb.id)} — ${esc(pb.name)}</h1><div class="meta">${esc(pb.byline)} · Status: ${esc(g.status)}${g.approver ? ` · Aprovador: ${esc(g.approver)}` : ""}${g.reviewer ? ` · Revisado por ${esc(g.reviewer)} em ${esc(g.reviewed)}` : ""}</div>
-      ${hasFlowSec ? "" : `<h2>Fluxograma</h2><div class="flow">${flowSvg(pb)}</div>`}${body}
-      <p class="meta">Exportado de ${esc(Brand.get().name)} em ${new Date().toLocaleString("pt-BR")} por ${esc(App.user.name)}.</p></body></html>`;
+      ${pb.intro || ""}${hasFlowSec ? "" : `<h2>Fluxograma</h2><div class="flow">${flowSvg(pb)}</div>`}${body}
+      <p class="meta">Exportado de ${esc(Brand.get().name)} em ${new Date().toLocaleString("pt-BR")} por ${esc(App.user.name)}.</p>
+      <script>${COPY_JS}</script></body></html>`;
   }
   function download(name, content, type) {
     const a = document.createElement("a");
@@ -1663,7 +1678,7 @@ const Versions = (() => {
             <div><span>Último revisor</span><b>${esc(g.reviewer || "—")}</b></div><div><span>Data de revisão</span><b>${esc(g.reviewed || "—")}</b></div>
             <div><span>Owner</span><b>${esc(vp.props["Owner do documento"] || "—")}</b></div><div><span>Template</span><b>${esc(vp.templateName || "—")}</b></div></div></header>
         <div class="docgrid"><nav class="toc"><a href="#" data-go="vfluxo">Fluxograma</a>${secs.map(s => `<a href="#" data-go="vsec-${s.id}">${esc(s.title)}</a>`).join("")}</nav>
-          <div class="doc"><section id="vfluxo" class="md"><h2>Fluxograma</h2><p class="muted small">Clique em uma caixa para ler o trecho desta versão da documentação.</p><div class="flowbox viewer dv-flow" id="vflow"></div></section>
+          <div class="doc">${vp.intro ? `<section class="md intro">${vp.intro}</section>` : ""}<section id="vfluxo" class="md"><h2>Fluxograma</h2><p class="muted small">Clique em uma caixa para ler o trecho desta versão da documentação.</p><div class="flowbox viewer dv-flow" id="vflow"></div></section>
             ${secs.map(s => `<section id="vsec-${s.id}" class="md"><h2>${esc(s.title)}</h2>${s.html}${s.subs.map(x => `<h3>${esc(x.title)}</h3>${x.html}`).join("")}</section>`).join("")}</div></div>
       </article>`;
     if (vp.flow.nodes.length) {

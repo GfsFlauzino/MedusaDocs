@@ -998,3 +998,23 @@ blockquote{border-left:3px solid var(--line2);background:var(--surface2)}
 .perm-global{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px 16px;margin:4px 0 8px}
 .linkish{border:0;background:none;padding:0;color:inherit;font:inherit;cursor:pointer;text-align:left}
 .linkish:hover{text-decoration:underline}
+
+/* ── blocos de código e listas numeradas (leitura, prévias e editor) ── */
+.codeblock{position:relative;margin:12px 0}
+.codeblock pre.code{margin:0;background:var(--surface2);border:1px solid var(--line);border-radius:var(--radius-sm);padding:12px 14px;overflow:auto;
+  font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;tab-size:2;color:var(--text)}
+.codeblock pre.code code{background:none;padding:0;border:0;font:inherit}
+.code-lang{position:absolute;left:10px;top:-8px;font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;background:var(--surface);color:var(--muted);border:1px solid var(--line)}
+.code-copy{position:absolute;right:6px;top:6px;border:1px solid var(--line);background:var(--surface);color:var(--muted);border-radius:6px;padding:2px 9px;font-size:12px;cursor:pointer;opacity:.85}
+.code-copy:hover{opacity:1;color:var(--text)}
+.md ol{padding-left:22px}.md ol li{margin:3px 0}
+.md .intro,.md.intro{color:var(--text)}
+.ed-code{display:flex;flex-direction:column;gap:6px}
+.ed-code-lang{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)}
+.ed-code-lang select{width:auto}
+.ta.mono{font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;overflow:auto;background:var(--surface2)}
+.ed-ol .dot{min-width:22px;text-align:right;font-variant-numeric:tabular-nums}
+.ecard.sec.intro .sec-head{display:flex;align-items:baseline;gap:10px}
+/* código longo rola dentro do bloco: as colunas de grid não podem crescer com o conteúdo */
+.docgrid > *,.ed-grid > *,.md-wrap > *{min-width:0}
+.codeblock{max-width:100%}

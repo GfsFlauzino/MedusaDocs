@@ -50,7 +50,7 @@ MAX_THREADS = 32                # requisições processadas ao mesmo tempo; as d
 PBKDF2_ITERS = 310_000
 MIN_PASSWORD = 10
 MAX_BODY = 8 * 1024 * 1024
-APP_VERSION = "3.0.0-beta.1"
+APP_VERSION = "3.0.0-beta.2"
 LOGIN_RE = re.compile(r"^[a-z0-9._@-]{3,80}$")          # @ e até 80 caracteres: logins vindos do SSO (e-mail)
 NO_PASSWORD = "!sso"                                      # hash impossível: conta só entra pelo SSO
 TRUST_PROXY = os.environ.get("MEDUSA_TRUST_PROXY", "").lower() in ("1", "true", "yes", "sim")
@@ -1117,7 +1117,8 @@ def r_md(h, **_):
     if "doc" in b:
         doc = b.get("doc")
         if not isinstance(doc, dict) or not isinstance(doc.get("sections"), list): raise HttpError(400, "documento inválido")
-        return h.send_json({"md": core.doc_to_md({"title": str(doc.get("title", "")), "byline": str(doc.get("byline", "")), "sections": doc["sections"]})})
+        return h.send_json({"md": core.doc_to_md({"title": str(doc.get("title", "")), "byline": str(doc.get("byline", "")),
+                                                  "intro": doc.get("intro") if isinstance(doc.get("intro"), list) else [], "sections": doc["sections"]})})
     text = str(b.get("md", ""))
     if len(text.encode("utf-8")) > MAX_MD: raise HttpError(400, "Documento grande demais (máx. 2 MB)")
     text = text.replace("\r\n", "\n").lstrip("\ufeff")
@@ -1128,7 +1129,7 @@ def r_md(h, **_):
     pid = str(b.get("pid") or "")
     img = f"api/pb/{pid}/img/" if core.ID_RE.fullmatch(pid) else None
     render = lambda bl: core.render_blocks(bl, img)
-    h.send_json({"doc": doc, "sections": [{"title": s["title"], "html": render(s["blocks"]),
+    h.send_json({"doc": doc, "intro": render(doc.get("intro") or []), "sections": [{"title": s["title"], "html": render(s["blocks"]),
                                             "subs": [{"title": x["title"], "html": render(x["blocks"])} for x in s["subs"]]} for s in doc["sections"]]})
 
 def r_flow_parse(h, **_):

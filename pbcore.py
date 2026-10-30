@@ -77,12 +77,34 @@ CATALOG = {"mitre": MITRE, "defaultLanes": DEFAULT_LANES, "nodeTypes": NODE_TYPE
 
 # ───────────────────────── markdown ⇄ doc ─────────────────────────
 
-def inline(s):
-    s = html.escape(s, quote=False)
-    s = re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
+LINK_RE = re.compile(r"(?<!!)\[([^\]\n]+)\]\(([^)\s]+)\)")
+SAFE_URL_RE = re.compile(r"^(?:https?://|mailto:|#/)", re.I)
+
+def _emph(s):
     s = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
-    s = re.sub(r"(?<![\w*])\*([^*\n]+)\*(?![\w*])", r"<em>\1</em>", s)
-    return s
+    return re.sub(r"(?<![\w*])\*([^*\n]+)\*(?![\w*])", r"<em>\1</em>", s)
+
+def _text(s):
+    """Trecho sem código: links [texto](url) só com esquemas permitidos (http, https, mailto e #/ da aplicação);
+    qualquer outro (javascript:, data:…) fica como texto. O resto é escapado e recebe negrito/itálico."""
+    out, last = [], 0
+    for m in LINK_RE.finditer(s):
+        out.append(_emph(html.escape(s[last:m.start()], quote=False)))
+        label, url = m.group(1), m.group(2)
+        if SAFE_URL_RE.match(url):
+            ext = "" if url.startswith("#/") else ' target="_blank" rel="noopener noreferrer"'
+            out.append(f'<a href="{html.escape(url, quote=True)}"{ext}>{_emph(html.escape(label, quote=False))}</a>')
+        else:
+            out.append(html.escape(m.group(0), quote=False))
+        last = m.end()
+    out.append(_emph(html.escape(s[last:], quote=False)))
+    return "".join(out)
+
+def inline(s):
+    """Markdown de uma linha → HTML seguro: `código` (sem interpretação dentro), links e **negrito**/*itálico*."""
+    parts = re.split(r"(`[^`]+`)", s)
+    return "".join(f"<code>{html.escape(p[1:-1], quote=False)}</code>" if p.startswith("`") and p.endswith("`") and len(p) > 1 else _text(p)
+                   for p in parts)
 
 def split_row(line):
     s = line.strip()
@@ -94,22 +116,60 @@ def split_row(line):
 def cell_md(c):
     return c.replace("|", "\\|").replace("\n", " ").strip()
 
+FENCE_RE = re.compile(r"^(`{3,}|~{3,})\s*([\w+#.-]*)\s*$")
+UL_RE = re.compile(r"^[-*+] ")
+OL_RE = re.compile(r"^\d{1,3}[.)] ")
+CODE_LANG_RE = re.compile(r"^[\w+#.-]{0,20}$")
+
+def _is_block_start(ln):
+    s = ln.strip()
+    return (ln.startswith(("|", ">")) or UL_RE.match(ln) or OL_RE.match(ln) or FENCE_RE.match(ln)
+            or IMG_LINE_RE.match(s))
+
+def _list_items(lines, i, item_re):
+    """Itens de uma lista. Linha indentada logo abaixo continua o item anterior (vira quebra de linha);
+    listas aninhadas ainda não existem: o sub-item fica como continuação do item de cima."""
+    items = []
+    while i < len(lines):
+        ln = lines[i]
+        m = item_re.match(ln)
+        if m:
+            items.append(ln[m.end():]); i += 1
+        elif items and ln.strip() and ln[:1] in (" ", "\t") and not _is_block_start(ln.lstrip()):
+            items[-1] += "\n" + ln.strip(); i += 1
+        elif items and ln.strip() and ln[:1] in (" ", "\t") and (UL_RE.match(ln.lstrip()) or OL_RE.match(ln.lstrip())):
+            items[-1] += "\n" + ln.strip(); i += 1
+        else:
+            break
+    return items, i
+
 def parse_blocks(lines):
     blocks, i = [], 0
     while i < len(lines):
         ln = lines[i]
-        if not ln.strip():
+        fence = FENCE_RE.match(ln)
+        if fence:
+            # bloco de código: tudo até a cerca de fechamento é texto literal (nada é interpretado)
+            mark, code = fence.group(1), []
+            i += 1
+            while i < len(lines) and not (lines[i].strip().startswith(mark[0] * len(mark)) and not lines[i].strip().strip(mark[0])):
+                code.append(lines[i]); i += 1
+            i += 1
+            blocks.append({"t": "code", "lang": fence.group(2)[:20], "text": "\n".join(code)})
+        elif not ln.strip():
             i += 1
         elif ln.startswith("|"):
             rows = []
             while i < len(lines) and lines[i].startswith("|"):
                 rows.append(split_row(lines[i])); i += 1
             blocks.append({"t": "table", "head": rows[0], "rows": rows[2:]})
-        elif ln.startswith("- "):
-            items = []
-            while i < len(lines) and lines[i].startswith("- "):
-                items.append(lines[i][2:]); i += 1
+        elif UL_RE.match(ln):
+            items, i = _list_items(lines, i, UL_RE)
             blocks.append({"t": "ul", "items": items})
+        elif OL_RE.match(ln):
+            start = int(re.match(r"\d+", ln).group(0))
+            items, i = _list_items(lines, i, OL_RE)
+            blocks.append({"t": "ol", "items": items, **({"start": start} if start != 1 else {})})
         elif IMG_LINE_RE.match(ln.strip()):
             m = IMG_LINE_RE.match(ln.strip())
             blocks.append({"t": "img", "alt": m.group(1).strip(), "src": m.group(2)}); i += 1
@@ -120,35 +180,66 @@ def parse_blocks(lines):
             blocks.append({"t": "quote", "text": " ".join(q)})
         else:
             p = []
-            while i < len(lines) and lines[i].strip() and not lines[i].startswith(("|", "- ", ">")) and not IMG_LINE_RE.match(lines[i].strip()):
+            while i < len(lines) and lines[i].strip() and not _is_block_start(lines[i]):
                 p.append(lines[i]); i += 1
             blocks.append({"t": "p", "text": " ".join(p)})
     return blocks
 
 def parse_md(text):
+    """Markdown → doc. A primeira linha não vazia depois do título é a linha de versão/autor (byline); o que vem
+    entre ela e a primeira seção (##) é a introdução (doc["intro"]). Dentro de um bloco de código, ## não abre seção."""
     lines = text.replace("\r\n", "\n").split("\n")
     title = lines[0].lstrip("# ").strip()
-    byline, sections, cur, sub = "", [], None, None
+    byline, intro, sections, cur, sub, fence = "", [], [], None, None, None
     for ln in lines[1:]:
-        if ln.startswith("## "):
+        m = FENCE_RE.match(ln)
+        if fence:
+            if ln.strip().startswith(fence[0] * len(fence)) and not ln.strip().strip(fence[0]): fence = None
+        elif m:
+            fence = m.group(1)
+        if fence is None and not m and ln.startswith("## "):
             cur = {"title": ln[3:].strip(), "lines": [], "subs": []}; sections.append(cur); sub = None
-        elif ln.startswith("### ") and cur is not None:
+        elif fence is None and not m and ln.startswith("### ") and cur is not None:
             sub = {"title": ln[4:].strip(), "lines": []}; cur["subs"].append(sub)
         elif cur is not None:
             (sub if sub is not None else cur)["lines"].append(ln)
-        elif ln.strip() and not byline:
+        elif not byline and not intro and ln.strip() and not m:
             byline = ln.strip()
+        elif byline or intro or ln.strip():
+            intro.append(ln)
     for s in sections:
         s["blocks"] = parse_blocks(s.pop("lines"))
         for x in s["subs"]:
             x["blocks"] = parse_blocks(x.pop("lines"))
-    return {"title": title, "byline": byline, "sections": sections}
+    doc = {"title": title, "byline": byline, "sections": sections}
+    intro = parse_blocks(intro)
+    if intro: doc["intro"] = intro
+    return doc
+
+def _fence_for(text):
+    """Cerca maior que qualquer sequência de crases dentro do código (o código pode conter ```)."""
+    n = max([3] + [len(m) + 1 for m in re.findall(r"`{3,}", text)])
+    return "`" * n
+
+def _item_md(marker, item):
+    pad = " " * len(marker)
+    lines = [x.strip() for x in str(item).split("\n") if x.strip()]
+    return marker + lines[0] + "".join("\n" + pad + x for x in lines[1:]) if lines else ""
 
 def blocks_md(blocks):
     out = []
     for b in blocks:
         t = b.get("t")
-        if t == "p" and b.get("text", "").strip():
+        if t == "code":
+            text = str(b.get("text", "")).rstrip("\n")
+            lang = b.get("lang", "") if CODE_LANG_RE.fullmatch(str(b.get("lang", ""))) else ""
+            f = _fence_for(text)
+            out.append(f"{f}{lang}\n{text}\n{f}" if text else f"{f}{lang}\n{f}")
+        elif t == "ol":
+            items = [i for i in b.get("items", []) if str(i).strip()]
+            start = b.get("start") if isinstance(b.get("start"), int) and 1 <= b.get("start") <= 999 else 1
+            if items: out.append("\n".join(_item_md(f"{n}. ", i) for n, i in enumerate(items, start)))
+        elif t == "p" and b.get("text", "").strip():
             out.append(b["text"].strip())
         elif t == "quote" and b.get("text", "").strip():
             out.append("> " + b["text"].strip())
@@ -157,7 +248,7 @@ def blocks_md(blocks):
             out.append(f"![{alt}]({b['src']})")
         elif t == "ul":
             items = [i for i in b.get("items", []) if i.strip()]
-            if items: out.append("\n".join("- " + i.strip() for i in items))
+            if items: out.append("\n".join(_item_md("- ", i) for i in items))
         elif t == "table":
             head = b.get("head") or []
             if not head: continue
@@ -172,6 +263,7 @@ def doc_to_md(doc):
     out = [f"# {doc['title'].strip()}", ""]
     if doc.get("byline", "").strip():
         out += [doc["byline"].strip(), ""]
+    for b in blocks_md(doc.get("intro") or []): out += [b, ""]
     for s in doc["sections"]:
         out += [f"## {s['title'].strip()}", ""]
         for b in blocks_md(s.get("blocks", [])): out += [b, ""]
@@ -183,10 +275,14 @@ def doc_to_md(doc):
 def images_of(doc):
     """Nomes dos arquivos de imagem citados no documento."""
     out = set()
-    for s in doc.get("sections", []):
+    for s in [{"blocks": doc.get("intro") or []}] + doc.get("sections", []):
         for bl in [s.get("blocks", [])] + [x.get("blocks", []) for x in s.get("subs", [])]:
             out |= {b["src"].split("/", 1)[1] for b in bl if b.get("t") == "img" and "/" in b.get("src", "")}
     return out
+
+def _item_html(it):
+    """Item de lista: cada linha de continuação vira uma quebra de linha."""
+    return "<br>".join(inline(x) for x in str(it).split("\n"))
 
 def render_blocks(blocks, img_base=None):
     out = []
@@ -201,16 +297,25 @@ def render_blocks(blocks, img_base=None):
                 out.append(f'<figure class="docimg missing"><span>Imagem não disponível aqui</span>{cap}</figure>')
         elif b["t"] == "p":
             out.append(f"<p>{inline(b['text'])}</p>")
+        elif b["t"] == "code":
+            lang = b.get("lang", "") if CODE_LANG_RE.fullmatch(str(b.get("lang", ""))) else ""
+            cls = f' class="lang-{html.escape(lang)}"' if lang else ""
+            out.append(f'<div class="codeblock">{f'<span class="code-lang">{html.escape(lang)}</span>' if lang else ""}'
+                       f'<button type="button" class="code-copy" title="Copiar código">Copiar</button>'
+                       f'<pre class="code"><code{cls}>{html.escape(b.get("text", ""), quote=False)}</code></pre></div>')
+        elif b["t"] == "ol":
+            st = b.get("start") if isinstance(b.get("start"), int) and 1 < b.get("start") <= 999 else None
+            out.append((f'<ol start="{st}">' if st else "<ol>") + "".join(f"<li>{_item_html(it)}</li>" for it in b["items"]) + "</ol>")
         elif b["t"] == "quote":
             out.append(f"<blockquote>{inline(b['text'])}</blockquote>")
         elif b["t"] == "ul":
             lis = []
             for it in b["items"]:
-                m = re.match(r"\[( |x)\] (.*)", it)
+                m = re.match(r"\[( |x)\] (.*)", it, re.S)
                 if m:
-                    lis.append(f"<li class='chk {'done' if m.group(1) == 'x' else 'open'}'>{inline(m.group(2))}</li>")
+                    lis.append(f"<li class='chk {'done' if m.group(1) == 'x' else 'open'}'>{_item_html(m.group(2))}</li>")
                 else:
-                    lis.append(f"<li>{inline(it)}</li>")
+                    lis.append(f"<li>{_item_html(it)}</li>")
             out.append("<ul>" + "".join(lis) + "</ul>")
         elif b["t"] == "table":
             th = "".join(f"<th>{inline(c)}</th>" for c in b["head"])
@@ -657,7 +762,7 @@ def build_view(pid, folder, doc, flow, refs, teams=None):
         mentions[team] = lst
     name = doc["title"].split("—", 1)[-1].strip()
     return {"id": pid, "slug": pid.lower(), "folder": folder, "name": name, "title": doc["title"], "byline": plain(doc.get("byline", "")),
-            "props": props, "sections": secs, "steps": steps, "ramos": ramos, "states": states, "closing": closing,
+            "intro": render(doc.get("intro") or []), "props": props, "sections": secs, "steps": steps, "ramos": ramos, "states": states, "closing": closing,
             "mentions": mentions, "flow": flow, "refs": refs, "doc": doc, "gov": get_gov(doc)}
 
 # ───────────────────────── arquivos ─────────────────────────

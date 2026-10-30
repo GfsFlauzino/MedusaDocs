@@ -112,9 +112,12 @@ const Editor = (() => {
   const markDirty = (bar) => { E.dirty = true; if (bar) bar.classList.add("dirty"); };
 
   /* ═════════════════════════ DOCUMENTO ═════════════════════════ */
-  const BLOCK_NAMES = { p: "Parágrafo", ul: "Lista", table: "Tabela", quote: "Destaque", img: "Imagem" };
+  const BLOCK_NAMES = { p: "Parágrafo", ul: "Lista", ol: "Lista numerada", table: "Tabela", quote: "Destaque", code: "Código", img: "Imagem" };
+  /* linguagens sugeridas no bloco de código (só muda o rótulo; o texto é guardado como está) */
+  const CODE_LANGS = ["", "bash", "powershell", "python", "sql", "json", "yaml", "kql", "spl", "regex", "text"];
   const IMG_OK = ["image/png", "image/jpeg", "image/webp", "image/gif"], IMG_MAX = 3 * 1024 * 1024;
-  const newBlock = t => t === "table" ? { t, head: ["Coluna 1", "Coluna 2"], rows: [["", ""]] } : t === "ul" ? { t, items: [""] } : { t, text: "" };
+  const newBlock = t => t === "table" ? { t, head: ["Coluna 1", "Coluna 2"], rows: [["", ""]] } : t === "ul" || t === "ol" ? { t, items: [""] }
+    : t === "code" ? { t, lang: "", text: "" } : { t, text: "" };
 
   E.docEditor = (el, pb, mkAd) => {
     mkAd = mkAd || E.playbookAdapter;
@@ -128,7 +131,10 @@ const Editor = (() => {
     if (dr) E.dirty = true;
     let lastTa = null;
 
-    const ownerOf = path => {            // "s3" | "s3u1"
+    /* introdução: o que vem antes da primeira seção (só existe no documento se tiver conteúdo) */
+    const intro = { title: "", get blocks() { return doc.intro || (doc.intro = []); } };
+    const ownerOf = path => {            // "in" | "s3" | "s3u1"
+      if (path === "in") return intro;
       const m = path.match(/^s(\d+)(?:u(\d+))?$/);
       const s = doc.sections[+m[1]];
       return m[2] !== undefined ? s.subs[+m[2]] : s;
@@ -156,6 +162,14 @@ const Editor = (() => {
             <textarea class="ta" data-f="item" data-i="${i}" rows="1" placeholder="Item da lista">${esc(m ? m[2] : it)}</textarea>
             <button data-act="li-del" data-i="${i}" title="Remover item" aria-label="Remover item" class="x">${ic("close")}</button></li>`;
         }).join("")}</ul><div class="row-btns"><button class="btn ghost xs" data-act="li-add">${ic("plus")}Item</button><button class="btn ghost xs" data-act="li-check" title="Transforma a lista em checklist (ou desfaz)">${ic("checklist")}Checklist</button></div>`;
+      else if (b.t === "ol")
+        body = `<ol class="ed-list ed-ol">${b.items.map((it, i) => `<li><span class="dot">${(b.start || 1) + i}.</span>
+            <textarea class="ta" data-f="item" data-i="${i}" rows="1" placeholder="Passo">${esc(it)}</textarea>
+            <button data-act="li-del" data-i="${i}" title="Remover item" aria-label="Remover item" class="x">${ic("close")}</button></li>`).join("")}</ol>
+          <div class="row-btns"><button class="btn ghost xs" data-act="li-add">${ic("plus")}Item</button></div>`;
+      else if (b.t === "code")
+        body = `<div class="ed-code"><label class="ed-code-lang">Linguagem<select class="in xs" data-f="lang">${[...new Set(CODE_LANGS.concat(b.lang || ""))].map(l => `<option value="${esc(l)}" ${l === (b.lang || "") ? "selected" : ""}>${l ? esc(l) : "sem linguagem"}</option>`).join("")}</select></label>
+          <textarea class="ta mono" data-f="code" rows="3" spellcheck="false" placeholder="Comando, consulta ou trecho de configuração">${esc(b.text)}</textarea></div>`;
       else if (b.t === "table") {
         const nc = b.head.length;
         body = `<div class="ed-tw"><table class="ed-table"><thead>
@@ -196,6 +210,8 @@ const Editor = (() => {
         <div class="ed-doc">
           <div class="ecard head"><label>Título do playbook<input class="in big" data-f="title" value="${esc(doc.title)}"></label>
             <label>Linha de versão / autor<input class="in" data-f="byline" value="${esc(doc.byline)}"></label></div>
+          <div class="ecard sec intro" data-o="in"><div class="sec-head"><b>Introdução</b><small class="muted">texto antes da primeira seção (opcional)</small></div>
+            ${(doc.intro || []).map((b, k) => blockHtml(b, "in", k, doc.intro.length)).join("")}${addBar("in", "sub")}</div>
           ${doc.sections.map((s, i) => {
             const ctx = isRamoSec(s) ? "ramos" : /^Fluxo de resposta/.test(s.title) ? "fases" : "sec";
             return `<div class="ecard sec" id="esec-${i}" data-o="s${i}">
@@ -314,6 +330,8 @@ const Editor = (() => {
       else {
         const blk = t.closest(".blk"), b = blockOf(blk.dataset.o, blk.dataset.k);
         if (f === "text") b.text = t.value;
+        else if (f === "code") b.text = t.value;
+        else if (f === "lang") b.lang = t.value;
         else if (f === "alt") b.alt = t.value.replace(/\n/g, " ");
         else if (f === "item") { const i = +t.dataset.i, m = b.items[i].match(/^\[( |x)\] /); b.items[i] = (m ? m[0] : "") + t.value.replace(/\n/g, " "); }
         else if (f === "head") b.head[+t.dataset.c] = t.value.replace(/\n/g, " ");
@@ -368,13 +386,18 @@ const Editor = (() => {
     /* ── modo Markdown: o documento inteiro como texto, com prévia ao lado. O servidor converte nos dois
        sentidos (mesmo parser que lê o .md), então o que a prévia mostra é o que será gravado. */
     const MD_TOOLS = [["bold", "bold", "Negrito (Ctrl+B)"], ["italic", "italic", "Itálico (Ctrl+I)"], ["h2", "H2", "Seção (##)"], ["h3", "H3", "Subseção (###)"],
-      ["list", "list", "Lista"], ["check", "checklist", "Checklist"], ["quote", "quote", "Destaque (>)"], ["table", "table", "Tabela"], ["code", "code", "Código"],
+      ["list", "list", "Lista"], ["olist", "listOl", "Lista numerada"], ["check", "checklist", "Checklist"], ["quote", "quote", "Destaque (>)"], ["table", "table", "Tabela"],
+      ["code", "code", "Código (trecho selecionado em linha; várias linhas ou nada selecionado: bloco)"],
       ...(ad.uploadImage ? [["image", "image", "Imagem (também dá para colar ou arrastar)"]] : [])];
     const MD_HELP = `<table><tbody>
         <tr><td><code># Título</code></td><td>título do playbook (1ª linha)</td></tr>
         <tr><td><code>## Seção</code> · <code>### Subseção</code></td><td>seções e subseções (ramos: <code>### R3 · Nome</code>)</td></tr>
         <tr><td><code>**negrito**</code> · <code>*itálico*</code> · <code>\`código\`</code></td><td>no texto</td></tr>
-        <tr><td><code>- item</code> · <code>- [ ] tarefa</code></td><td>lista e checklist (<code>- [x]</code> = concluído)</td></tr>
+        <tr><td><code>- item</code> · <code>- [ ] tarefa</code></td><td>lista e checklist (<code>- [x]</code> = concluído); <code>*</code> e <code>+</code> também valem</td></tr>
+        <tr><td><code>1. passo</code></td><td>lista numerada; linha recuada logo abaixo continua o item</td></tr>
+        <tr><td><code>\`\`\`bash</code> … <code>\`\`\`</code></td><td>bloco de código (nada dentro é interpretado; na leitura ganha botão Copiar)</td></tr>
+        <tr><td><code>[texto](https://…)</code></td><td>link (http, https, mailto ou <code>#/pb-02</code>)</td></tr>
+        <tr><td>texto antes da 1ª <code>##</code></td><td>introdução do documento</td></tr>
         <tr><td><code>&gt; texto</code></td><td>destaque</td></tr>
         <tr><td><code>| A | B |</code> + <code>| --- | --- |</code></td><td>tabela (passos: colunas ID, Ação, Critério de saída)</td></tr>
         <tr><td><code>![legenda](imagens/…)</code></td><td>imagem, numa linha própria</td></tr></tbody></table>
@@ -407,7 +430,7 @@ const Editor = (() => {
           const r = await parseMd();
           if (seq !== mdSeq || !document.contains(box)) return;
           err.hidden = true; st.textContent = "";
-          box.innerHTML = `<h1 class="md-h1">${esc(r.doc.title)}</h1>` + r.sections.map(x => `<section class="md"><h2>${esc(x.title)}</h2>${x.html}${x.subs.map(u => `<h3>${esc(u.title)}</h3>${u.html}`).join("")}</section>`).join("");
+          box.innerHTML = `<h1 class="md-h1">${esc(r.doc.title)}</h1>` + (r.intro ? `<section class="md intro">${r.intro}</section>` : "") + r.sections.map(x => `<section class="md"><h2>${esc(x.title)}</h2>${x.html}${x.subs.map(u => `<h3>${esc(u.title)}</h3>${u.html}`).join("")}</section>`).join("");
         } catch (x) { if (seq !== mdSeq) return; st.textContent = ""; err.textContent = x.message; err.hidden = false; }
       }, now ? 0 : 350);
     }
@@ -450,7 +473,23 @@ const Editor = (() => {
     function mdTool(k) {
       if (k === "bold") return wrapSel("**", "**", "texto");
       if (k === "italic") return wrapSel("*", "*", "texto");
-      if (k === "code") return wrapSel("`", "`", "código");
+      if (k === "code") {
+        const ta = $("#mdText", el), sel = ta ? ta.value.slice(ta.selectionStart, ta.selectionEnd) : "";
+        if (sel && !sel.includes("\n")) return wrapSel("`", "`", "código");
+        return mdEdit((v, a, b) => {           // bloco de código cercado, ocupando linhas próprias
+          const body = v.slice(a, b) || "comando", before = v.slice(0, a), after = v.slice(b);
+          const pre = before && !before.endsWith("\n") ? "\n" : "", post = after.startsWith("\n") ? "" : "\n";
+          const text = before + pre + "```\n" + body + "\n```" + post + after;
+          const s0 = before.length + pre.length + 4;
+          return [text, s0, s0 + body.length];
+        });
+      }
+      if (k === "olist") return mdEdit((v, a, b) => {
+        const ls = v.lastIndexOf("\n", a - 1) + 1, le = v.indexOf("\n", b), end = le < 0 ? v.length : le;
+        const lines = v.slice(ls, end).split("\n"), numbered = lines.every(l => /^\d+\. /.test(l));
+        const block = lines.map((l, i) => numbered ? l.replace(/^\d+\. /, "") : `${i + 1}. ` + l.replace(/^(- \[[ x]\] |- |\d+\. |> )/, "")).join("\n");
+        return [v.slice(0, ls) + block + v.slice(end), ls, ls + block.length];
+      });
       if (k === "h2") return prefixLines("## ");
       if (k === "h3") return prefixLines("### ");
       if (k === "list") return prefixLines("- ");

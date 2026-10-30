@@ -8,8 +8,8 @@ templates e auditoria.
 - Só Python 3 (biblioteca padrão): nada para instalar além do Python, ou uma imagem Docker pronta.
 - White label: nome do workspace e logo configuráveis no painel administrativo; tema claro e escuro.
 - Formatos abertos: cada playbook é um `.md` + um `.drawio`; troca entre instalações em `.medusa.md` (Markdown + Mermaid).
-- Versão atual: **3.0.0-beta.1** (novidades em [CHANGELOG.md](CHANGELOG.md)): papéis e permissões personalizados e
-  aprovação de Produção por outra pessoa. Na 2.2.0: novo visual com menu lateral recolhível,
+- Versão atual: **3.0.0-beta.2** (novidades em [CHANGELOG.md](CHANGELOG.md)): papéis e permissões personalizados,
+  aprovação de Produção por outra pessoa e Markdown com blocos de código, listas numeradas, links e introdução. Na 2.2.0: novo visual com menu lateral recolhível,
   desempenho (cache de documentos, lista leve, busca no servidor, gzip e cache no navegador) e endurecimento (gravação
   atômica, sessão com duração máxima). Na 2.1: imagens na documentação e reset da aplicação. Na 2.0: versionamento,
   logs em JSON com retenção e login único (SSO) por OpenID Connect.
@@ -196,7 +196,9 @@ Um ramo (R1, R2…) existe nos dois lados e fica sincronizado ao salvar (`ramos.
 
 ## Editores
 
-- **Documento:** seções, subseções, parágrafos, listas, checklists, destaques, tabelas e **imagens**. `Ctrl+S` salva, `Ctrl+B` negrito, o botão de alvo escolhe táticas MITRE ATT&CK. **Descartar** recarrega a versão salva.
+- **Documento:** introdução, seções, subseções, parágrafos, listas (`-`, `*`, `+`), **listas numeradas**, checklists,
+  destaques, tabelas, **blocos de código** (com botão Copiar na leitura e no HTML exportado), links
+  (`[texto](https://…)`, `mailto:` ou `#/pb-02`; outros esquemas viram texto) e **imagens**. `Ctrl+S` salva, `Ctrl+B` negrito, o botão de alvo escolhe táticas MITRE ATT&CK. **Descartar** recarrega a versão salva.
   - **Modo Markdown:** o documento inteiro como texto, com barra de formatação e prévia ao vivo; alterna com o modo Visual a qualquer momento.
   - Imagens: **Imagem**, colar (`Ctrl+V`) ou arrastar para a seção. PNG, JPG, WEBP ou GIF até 3 MB, legenda opcional. Ficam em `imagens/` na pasta do playbook com nome pelo conteúdo (nunca sobrescritas) e entram no `.md` como `![legenda](imagens/img-….png)`. O servidor confere o tipo real do arquivo e aplica as permissões do playbook.
 - **Fluxograma:** só as formas, cores e setas do modelo; arrastar a caixa para outra raia troca o time.
