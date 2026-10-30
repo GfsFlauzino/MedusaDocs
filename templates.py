@@ -39,8 +39,61 @@ VARIABLES = [
 ]
 
 
+# variáveis dos templates de runbook e documento (os campos do template entram como {{campo.<chave>}})
+VARIABLES_DOC = [("id", "ID do documento (RB-00, DOC-00)"), ("nome", "Nome"), ("autor", "Autor escolhido na criação"),
+                 ("data", "Data da criação"), ("owner", "Owner do documento"), ("campo.<chave>", "Valor de um campo do template")]
+
+KINDS = ("playbook", "runbook", "doc")
+DEFAULT_KEYS = {"playbook": "padrao", "runbook": "runbook-padrao", "doc": "documento-padrao"}
+FIELD_TYPES = ("text", "select", "multiselect", "date", "url")
+FIELD_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,24}$")
+MAX_FIELDS, MAX_OPTIONS, MAX_FOLDERS = 20, 50, 200
+
+
 class TemplateError(ValueError):
     pass
+
+
+def default_key(kind):
+    return DEFAULT_KEYS.get(kind or "playbook", DEFAULT_KEYS["playbook"])
+
+
+def clean_fields(fields):
+    """Valida o esquema de campos de um template (o que vem da interface ou de um arquivo importado)."""
+    if fields in (None, ""): return []
+    if not isinstance(fields, list): raise TemplateError("Campos: envie uma lista")
+    if len(fields) > MAX_FIELDS: raise TemplateError(f"No máximo {MAX_FIELDS} campos por template")
+    out, keys = [], set()
+    for f in fields:
+        if not isinstance(f, dict): raise TemplateError("Campo inválido")
+        key, label, ftype = str(f.get("key", "")).strip(), " ".join(str(f.get("label", "")).split())[:60], str(f.get("type", "text"))
+        if not FIELD_KEY_RE.fullmatch(key): raise TemplateError(f"Chave de campo inválida: {key or '(vazia)'} (minúsculas, números e _; começa com letra)")
+        if key in keys: raise TemplateError(f"Chave de campo repetida: {key}")
+        if not label: raise TemplateError(f"Informe o rótulo do campo {key}")
+        if ftype not in FIELD_TYPES: raise TemplateError(f"Tipo de campo inválido: {ftype}")
+        opts = [" ".join(str(o).split())[:80] for o in (f.get("options") or []) if str(o).strip()] if ftype in ("select", "multiselect") else []
+        if len(opts) > MAX_OPTIONS: raise TemplateError(f"Campo {label}: no máximo {MAX_OPTIONS} opções")
+        if ftype in ("select", "multiselect") and not opts: raise TemplateError(f"Campo {label}: informe as opções")
+        if any("," in o for o in opts) and ftype == "multiselect": raise TemplateError(f"Campo {label}: opções não podem ter vírgula")
+        keys.add(key)
+        out.append({"key": key, "label": label, "type": ftype, "options": list(dict.fromkeys(opts)), "required": bool(f.get("required")),
+                    "filter": bool(f.get("filter")) and ftype in ("select", "multiselect")})
+    return out
+
+
+def clean_folders(folders):
+    """Caminhos de pastas sugeridos pelo template ("Por ferramenta/EDR"): cada parte com 1 a 60 caracteres."""
+    if folders in (None, ""): return []
+    if not isinstance(folders, list): raise TemplateError("Pastas: envie uma lista de caminhos")
+    out = []
+    for path in folders[:MAX_FOLDERS]:
+        parts = [" ".join(x.split()) for x in str(path).split("/") if x.strip()]
+        if not parts: continue
+        if len(parts) > 6: raise TemplateError(f"Pasta com mais de 6 níveis: {path}")
+        if any(len(x) > 60 for x in parts): raise TemplateError(f"Nome de pasta com mais de 60 caracteres: {path}")
+        p = "/".join(parts)
+        if p not in out: out.append(p)
+    return out
 
 # ───────────────────────── arquivos ─────────────────────────
 
@@ -54,25 +107,38 @@ def key_for(name):
     while (TPL_DIR / f"{key}{SUFFIX}").exists(): key = f"{base[:36]}-{i}"; i += 1
     return key
 
+def has_flow(t):
+    """Playbook sempre tem fluxograma modelo; runbook só se o template incluir; documento nunca."""
+    kind = t.get("kind") or "playbook"
+    return kind == "playbook" or (kind == "runbook" and bool((t.get("flow") or {}).get("nodes")))
+
 def to_text(t):
-    fm = {"format": "medusa-template", "version": 1, "name": t["name"], "description": t.get("description", ""),
+    kind = t.get("kind") or "playbook"
+    fm = {"format": "medusa-template", "version": 1, "kind": kind, "name": t["name"], "description": t.get("description", ""),
           "owner": t.get("owner", ""), "nist": t.get("nist", ""),
           "updated_at": t.get("updated_at") or datetime.now().isoformat(timespec="seconds"), "updated_by": t.get("updated_by", "")}
     front = "---\n" + "".join(f"{k}: {str(v).replace(chr(10), ' ')}\n" for k, v in fm.items()) + "---\n\n"
-    teams = json.dumps(t.get("teams", {}), ensure_ascii=False, indent=2).replace("-->", "-- >")
-    return (f"{front}{core.doc_to_md(t['doc'])}\n<!-- medusa:teams\n{teams}\n-->\n\n<!-- medusa:flow -->\n"
-            f"```mermaid\n{flowdsl.render(t['flow'], t.get('refs', {}))}```\n")
+    out = f"{front}{core.doc_to_md(t['doc'])}"
+    if t.get("fields"): out += "\n<!-- medusa:fields\n" + json.dumps(t["fields"], ensure_ascii=False, indent=1).replace("-->", "-- >") + "\n-->\n"
+    if t.get("folders"): out += "\n<!-- medusa:folders\n" + json.dumps(t["folders"], ensure_ascii=False, indent=1).replace("-->", "-- >") + "\n-->\n"
+    if has_flow(t):
+        teams = json.dumps(t.get("teams", {}), ensure_ascii=False, indent=2).replace("-->", "-- >")
+        out += (f"\n<!-- medusa:teams\n{teams}\n-->\n\n<!-- medusa:flow -->\n"
+                f"```mermaid\n{flowdsl.render(t['flow'], t.get('refs', {}))}```\n")
+    return out
 
 def from_text(text, catalog):
-    p = bundle.parse(text, catalog)
+    kind = next((ln.split(":", 1)[1].strip() for ln in text.split("\n", 14)[:14] if ln.startswith("kind:")), "playbook")
+    if kind not in KINDS: raise TemplateError(f"Tipo de template desconhecido: {kind}")
+    p = bundle.parse(text, catalog, kind)
     m = p["meta"]
     if m.get("format") not in (None, "medusa-template", bundle.FORMAT):
         raise TemplateError("Arquivo não é um template do Medusa Docs")
     teams = {k: v for k, v in p["teamDefs"].items()}
-    return {"name": (m.get("name") or p["name"] or "Template")[:60], "description": m.get("description", "")[:300],
+    return {"kind": kind, "name": (m.get("name") or p["name"] or "Template")[:60], "description": m.get("description", "")[:300],
             "owner": m.get("owner", "")[:60], "nist": m.get("nist", "")[:200], "doc": p["doc"], "flow": p["flow"],
-            "refs": p["refs"], "teams": teams, "updated_at": m.get("updated_at", ""), "updated_by": m.get("updated_by", ""),
-            "warnings": p["warnings"]}
+            "refs": p["refs"], "teams": teams, "fields": clean_fields(p.get("fields")), "folders": clean_folders(p.get("folders")),
+            "updated_at": m.get("updated_at", ""), "updated_by": m.get("updated_by", ""), "warnings": p["warnings"]}
 
 def load(key, catalog=None):
     f = path_of(key)
@@ -90,14 +156,15 @@ def save(key, t):
     t["updated_at"] = datetime.now().isoformat(timespec="seconds")
     core.atomic_write(path_of(key), to_text(t))
 
-def list_all(catalog=None):
+def list_all(catalog=None, kind=None):
     out = []
     for f in sorted(TPL_DIR.glob(f"*{SUFFIX}")):
         key = f.name[:-len(SUFFIX)]
+        if kind and kind_for(key) != kind: continue
         try:
             t = load(key, catalog)
         except Exception as e:  # arquivo corrompido não derruba a lista
-            out.append({"key": key, "name": key, "error": str(e)}); continue
+            out.append({"key": key, "name": key, "kind": kind_for(key), "error": str(e)}); continue
         out.append(summary(t))
     return out
 
@@ -106,16 +173,19 @@ def uses_ramos(t):
     return bool(RAMO_RE.search(blob))
 
 def summary(t):
-    return {"key": t["key"], "name": t["name"], "description": t.get("description", ""), "owner": t.get("owner", ""),
+    return {"key": t["key"], "kind": t.get("kind") or "playbook", "fields": t.get("fields", []), "folders": t.get("folders", []),
+            "hasFlow": has_flow(t), "default": t["key"] == default_key(t.get("kind")),
+            "name": t["name"], "description": t.get("description", ""), "owner": t.get("owner", ""),
             "nist": t.get("nist", ""), "sections": len(t["doc"]["sections"]), "nodes": len(t["flow"]["nodes"]),
             "lanes": [l["label"] for l in t["flow"]["lanes"]], "teams": sorted(t.get("teams", {})), "usesRamos": uses_ramos(t),
             "updated_at": t.get("updated_at", ""), "updated_by": t.get("updated_by", "")}
 
 def view(t, catalog):
     """Visão no mesmo formato de um playbook, para os editores de documento e de fluxograma."""
-    v = core.build_view("TPL", t["key"], t["doc"], t["flow"], t.get("refs", {}), t.get("teams") or {})
+    v = core.build_view("TPL", t["key"], t["doc"], t["flow"], t.get("refs", {}), t.get("teams") or {}, t.get("kind") or "playbook")
     sm = summary(t)
-    v.update({k: sm[k] for k in ("key", "name", "description", "owner", "nist", "usesRamos", "updated_at", "updated_by")})
+    v.update({k: sm[k] for k in ("key", "kind", "fields", "folders", "hasFlow", "default", "name", "description", "owner", "nist", "usesRamos",
+                                 "updated_at", "updated_by")})
     v.update(id=t["key"], slug=t["key"], rev=t["rev"], template=True, teamDefs=t.get("teams", {}), hasRamos=has_ramos(t))
     d = ramos.doc_ramos(t["doc"])
     if ramos.PROTO in d:   # a aba Ramos e o "ao clicar" do editor enxergam o protótipo
@@ -127,7 +197,7 @@ def view(t, catalog):
 # Toda instalação tem o template "Padrão" (chave fixa, não pode ser excluído): raias SOC N1, SOC N2 e CSIRT,
 # times de apoio de segurança genéricos, ramos e um ciclo de resposta completo. Serve de ponto de partida.
 
-DEFAULT_KEY = "padrao"
+DEFAULT_KEY = "padrao"           # template padrão de playbook (os de runbook e documento estão em DEFAULT_KEYS)
 BASIC_TEAMS = ("SOC N1", "SOC N2", "CSIRT")
 SUPPORT_COLOR = "#5B6673"
 
@@ -370,8 +440,18 @@ def basic_teams():
     except TemplateError: own = {}
     return {k: copy.deepcopy(own.get(k) or DEFAULT_TEAMS[k]) for k in BASIC_TEAMS}
 
-def blank(name, catalog=None):
+def blank_doc(name, kind):
+    """Template em branco de runbook ou documento: só as propriedades e uma seção."""
+    import doctypes as DT
+    doc = {"title": "{{id}} — {{nome}}", "byline": "Versão 0.1 · {{data}} · {{autor}}", "sections": [
+        {"title": DT.info(kind)["props_title"], "subs": [], "blocks": [_props(kind, [])]},
+        {"title": "Conteúdo", "subs": [], "blocks": [_p("")]}]}
+    return {"kind": kind, "name": name, "description": "", "owner": "", "nist": "", "doc": doc,
+            "flow": {"subtitle": "", "lanes": [], "nodes": [], "edges": []}, "refs": {}, "teams": {}, "fields": [], "folders": []}
+
+def blank(name, catalog=None, kind="playbook"):
     """Template em branco: estrutura mínima, só os times SOC N1, SOC N2 e CSIRT, já com ramos."""
+    if kind != "playbook": return blank_doc(name, kind)
     doc = {"title": "{{id}} — {{nome}}", "byline": "Versão 0.1 · {{data}} · {{autor}}", "sections": [
         {"title": "Propriedades do playbook", "subs": [], "blocks": [_tbl(["Campo", "Valor"], [
             ["ID", "{{id}}"], ["Nome", "{{nome}}"], ["Versão", "0.1 (rascunho)"], ["Owner do documento", "{{owner}}"],
@@ -468,9 +548,22 @@ def _key_info(key):
     try: d = json.loads(m.group(1)) if m else {}
     except ValueError: d = {}
     teams = _with_category({k: v for k, v in d.items() if isinstance(v, dict)} if isinstance(d, dict) else {})
-    name = next((ln[5:].strip() for ln in text.split("\n", 12)[:12] if ln.startswith("name:")), key)
-    c = _by_key[key] = (sig, teams, name)
+    head = text.split("\n", 14)[:14]
+    kind = next((ln.split(":", 1)[1].strip() for ln in head if ln.startswith("kind:")), "playbook")
+    fm = re.search(r"<!--\s*medusa:fields\s*\n?(.*?)\n?-->", text, re.S)
+    try: fields = clean_fields(json.loads(fm.group(1))) if fm else []
+    except (ValueError, TemplateError): fields = []
+    name = next((ln[5:].strip() for ln in head if ln.startswith("name:")), key)
+    c = _by_key[key] = (sig, teams, name, kind if kind in KINDS else "playbook", fields)
     return c
+
+def kind_for(key):
+    c = _key_info(key)
+    return c[3] if c else None
+
+def fields_for(key):
+    c = _key_info(key)
+    return c[4] if c else []
 
 def teams_for(key):
     c = _key_info(key)
@@ -482,12 +575,68 @@ def name_for(key):
 
 core.set_teams_provider(all_teams)
 
+# ───────────────────────── templates padrão de runbook e documento ─────────────────────────
+
+NIST_PHASES = ["Preparação", "Detecção e Análise", "Contenção, Erradicação e Recuperação", "Atividade pós-incidente"]
+
+def _props(kind, fields):
+    head = [["ID", "{{id}}"], ["Nome", "{{nome}}"], ["Versão", "0.1 (rascunho)"], ["Owner do documento", "{{owner}}"]]
+    return _tbl(["Campo", "Valor"], head + [[f["label"], "{{campo." + f["key"] + "}}"] for f in fields])
+
+def seed_runbook():
+    fields = [
+        {"key": "ferramenta", "label": "Ferramenta", "type": "select", "options": ["EDR", "SIEM", "SOAR", "Firewall/Proxy", "E-mail", "Identidade", "Cloud", "Outra"],
+         "required": True, "filter": True},
+        {"key": "fase_nist", "label": "Fase NIST", "type": "select", "options": NIST_PHASES, "required": False, "filter": True},
+        {"key": "plataforma", "label": "Plataforma", "type": "text", "options": [], "required": False, "filter": False},
+        {"key": "playbooks", "label": "Playbooks relacionados", "type": "text", "options": [], "required": False, "filter": False}]
+    doc = {"title": "{{id}} — {{nome}}", "byline": "Versão 0.1 · {{data}} · {{autor}}", "sections": [
+        {"title": "Propriedades do runbook", "subs": [], "blocks": [_props("runbook", fields)]},
+        {"title": "Objetivo", "subs": [], "blocks": [_p("O que este runbook resolve, em uma ou duas frases.")]},
+        {"title": "Quando usar", "subs": [], "blocks": [_ul(["Alerta ou situação que leva a este procedimento", "Quem pode executar"])]},
+        {"title": "Pré-requisitos", "subs": [], "blocks": [_ul(["[ ] Acesso à ferramenta com o perfil necessário", "[ ] Número do caso aberto",
+                                                                "[ ] Aprovação do responsável pelo ativo, quando houver impacto"])]},
+        {"title": "Procedimento", "subs": [], "blocks": [
+            {"t": "ol", "items": ["Abrir a console da ferramenta.", "Executar o comando ou a ação:"]},
+            {"t": "code", "lang": "bash", "text": "# comando de exemplo"},
+            {"t": "ol", "start": 3, "items": ["Registrar no caso o horário e o resultado."]}]},
+        {"title": "Validação", "subs": [], "blocks": [_ul(["Como confirmar que deu certo"])]},
+        {"title": "Rollback", "subs": [], "blocks": [_p("Como desfazer, se necessário.")]},
+        {"title": "Troubleshooting", "subs": [], "blocks": [_tbl(["Sintoma", "Causa", "Ação"], [["", "", ""]])]},
+        {"title": "Referências", "subs": [], "blocks": [_ul(["Documentação da ferramenta"])]},
+    ]}
+    return {"kind": "runbook", "name": "Runbook padrão", "description": "Procedimento técnico passo a passo: pré-requisitos, comandos, validação e rollback.",
+            "owner": "", "nist": "", "doc": doc, "flow": {"subtitle": "", "lanes": [], "nodes": [], "edges": []}, "refs": {}, "teams": {},
+            "fields": fields, "updated_by": "sistema",
+            "folders": ["Por ferramenta/EDR", "Por ferramenta/SIEM", "Por ferramenta/Identidade", "Por fase NIST/Preparação",
+                        "Por fase NIST/Detecção e Análise", "Por fase NIST/Contenção e Recuperação", "Pós-incidente"]}
+
+def seed_documento():
+    fields = [
+        {"key": "categoria", "label": "Categoria", "type": "select", "options": ["Política", "Norma", "Procedimento", "Guia", "Registro", "Outro"],
+         "required": True, "filter": True},
+        {"key": "publico", "label": "Público", "type": "multiselect", "options": ["SOC", "CSIRT", "TI", "Todos"], "required": False, "filter": True}]
+    doc = {"title": "{{id}} — {{nome}}", "byline": "Versão 0.1 · {{data}} · {{autor}}", "sections": [
+        {"title": "Propriedades do documento", "subs": [], "blocks": [_props("doc", fields)]},
+        {"title": "Resumo", "subs": [], "blocks": [_p("Do que trata este documento.")]},
+        {"title": "Conteúdo", "subs": [], "blocks": [_p("")]},
+        {"title": "Referências", "subs": [], "blocks": [_ul([""])]},
+    ]}
+    return {"kind": "doc", "name": "Documento padrão", "description": "Política, norma, guia ou material de apoio, organizado em pastas.",
+            "owner": "", "nist": "", "doc": doc, "flow": {"subtitle": "", "lanes": [], "nodes": [], "edges": []}, "refs": {}, "teams": {},
+            "fields": fields, "folders": ["Políticas", "Normas", "Procedimentos", "Guias", "Registros"], "updated_by": "sistema"}
+
+SEEDS = {"padrao": seed_default, "runbook-padrao": seed_runbook, "documento-padrao": seed_documento}
+
 def ensure_seed():
+    """Cria os templates padrão que faltarem (instalações antigas ganham os de runbook e documento no próximo boot;
+    templates existentes não são alterados). Devolve os nomes criados."""
     TPL_DIR.mkdir(parents=True, exist_ok=True)
-    if not path_of(DEFAULT_KEY).exists():
-        save(DEFAULT_KEY, seed_default())
-        return True
-    return False
+    made = []
+    for key, fn in SEEDS.items():
+        if not path_of(key).exists():
+            t = fn(); save(key, t); made.append(t["name"])
+    return made
 
 # ───────────────────────── criação de playbook a partir do template ─────────────────────────
 
@@ -576,8 +725,25 @@ def _expand_flow(flow, refs, rvars):
     flow["nodes"], flow["edges"] = nodes, edges
     return flow, refs
 
+def instantiate_doc(t, m):
+    """Runbook ou documento: variáveis {{id}} {{nome}} {{autor}} {{data}} {{owner}} e {{campo.<chave>}}.
+    m: id, name, author, date, owner, fields {chave: valor}. Fluxograma só se o template de runbook tiver."""
+    vals = m.get("fields") or {}
+    g = {"id": m["id"], "nome": m["name"], "autor": m.get("author", ""), "data": m.get("date", ""), "owner": m.get("owner") or t.get("owner") or ""}
+    for f in t.get("fields", []):
+        v = vals.get(f["key"], "")
+        g["campo." + f["key"]] = ", ".join(v) if isinstance(v, list) else str(v or "")
+    doc = _map(copy.deepcopy(t["doc"]), lambda s: _subst(s, g))
+    flow, refs = copy.deepcopy(t.get("flow") or {}), copy.deepcopy(t.get("refs") or {})
+    if (t.get("kind") or "playbook") == "runbook" and flow.get("nodes"):
+        flow = _map(flow, lambda s: _subst(s, g)); refs = {k: [_subst(r, g) for r in v] for k, v in refs.items()}
+    else:
+        flow, refs = {"subtitle": "", "lanes": [], "nodes": [], "edges": []}, {}
+    return doc, flow, refs, copy.deepcopy(t.get("teams", {}))
+
 def instantiate(t, m):
     """m: id, name, author (nome), date, owner, nist, mitre (texto), objective, question, ramos [{name, q}]."""
+    if (t.get("kind") or "playbook") != "playbook": return instantiate_doc(t, m)
     ramos = [r for r in m.get("ramos", []) if str(r.get("name", "")).strip()]
     if uses_ramos(t) and not ramos: raise TemplateError("Este template usa ramos: informe pelo menos um")
     rvars = [{"ramo.n": str(i + 1), "ramo.id": f"R{i + 1}", "ramo.nome": r["name"].strip(), "ramo.pergunta": str(r.get("q", "")).strip()}

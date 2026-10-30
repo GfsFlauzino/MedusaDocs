@@ -1,5 +1,32 @@
 # Changelog
 
+## 3.0.0-beta.3 — 2026-10-30
+
+### Tipos de documento, pastas, campos e templates por tipo (base)
+- Três tipos: **Playbook** (`PB-`), **Runbook** (`RB-`, fluxograma opcional) e **Documento** (`DOC-`, sem fluxograma
+  e sem aprovador para publicar). Mesmo editor, versões, ciclo de vida, auditoria, exportação e importação. Os IDs
+  são únicos entre os tipos; `/api/doc/{id}` vale para todos e `/api/pb/{id}` continua funcionando.
+- Arquivos em `runbooks/` e `documentos/` dentro de `MEDUSA_HOME` (criadas no boot). **Os playbooks não se movem** e
+  seus arquivos não mudam (teste confere o hash antes e depois do boot).
+- **Pastas** (runbooks e documentos): árvore no banco, sem mexer nos arquivos e sem gerar versão; nome único entre
+  irmãs, até 6 níveis, sem ciclos; pasta só é excluída vazia ou movendo o conteúdo. Permissão "Gerenciar pastas";
+  mover documento exige "Editar". Auditoria: `pasta_criada`, `pasta_renomeada`, `pasta_movida`, `pasta_excluida`,
+  `documento_movido`.
+- **Campos dinâmicos** definidos pelo template (texto, lista, lista múltipla, data, link), gravados como linhas da
+  tabela de propriedades do `.md` (entram no histórico). A biblioteca filtra por tipo, pasta (com subpastas) e
+  campos, e devolve contagens por valor (`facets`).
+- **Templates por tipo**: lista com filtro por tipo; novo template escolhe o tipo; templates de runbook e documento
+  têm abas **Campos** e **Pastas**; o de runbook pode incluir fluxograma modelo. Instalações existentes ganham os
+  templates **Runbook padrão** e **Documento padrão** no próximo boot (os existentes não mudam).
+- Exportar/importar `.medusa.md` leva o tipo, a pasta e os campos; ao importar, a pasta é recriada se você puder
+  gerenciar pastas (senão o documento fica em "Sem pasta", com aviso).
+- Novas rotas: `POST /api/doc`, `GET /api/doc/next-id`, `PUT /api/doc/{id}/folder`, `/api/folders` (lista, criar,
+  renomear/mover, excluir) e `POST /api/folders/from-template`.
+
+### Banco de dados (migração v5, automática)
+- Só acrescenta as tabelas `folders` e `doc_meta`, com a mesma cópia automática antes de migrar
+  (`data/backups/playbooks.db.pre-v4-v5-…`). A 2.2 continua abrindo o banco (ignora as tabelas novas).
+
 ## 3.0.0-beta.2 — 2026-10-30
 
 ### Markdown mais completo

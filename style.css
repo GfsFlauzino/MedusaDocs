@@ -1018,3 +1018,7 @@ blockquote{border-left:3px solid var(--line2);background:var(--surface2)}
 /* código longo rola dentro do bloco: as colunas de grid não podem crescer com o conteúdo */
 .docgrid > *,.ed-grid > *,.md-wrap > *{min-width:0}
 .codeblock{max-width:100%}
+.fields-tbl{width:100%;border-collapse:collapse}
+.fields-tbl th,.fields-tbl td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left}
+.fields-tbl td .in{width:100%;min-width:90px}
+.in.mono,textarea.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}

@@ -117,6 +117,24 @@ def _m4_roles(c):
 MIGRATIONS.append(_m4_roles)
 
 
+def _m5_folders(c):
+    """v5: pastas (árvore por tipo de documento) e a pasta de cada documento. Os arquivos continuam planos no disco:
+    mover ou renomear pasta é só banco (sem reescrever arquivos nem gerar versão)."""
+    c.execute("""CREATE TABLE folders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL,
+        parent_id INTEGER REFERENCES folders(id) ON DELETE RESTRICT,
+        name TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+    c.execute("CREATE INDEX folders_parent ON folders(type, parent_id)")
+    c.execute("""CREATE TABLE doc_meta (
+        pid TEXT PRIMARY KEY, type TEXT NOT NULL,
+        folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL, updated_at TEXT NOT NULL)""")
+    c.execute("CREATE INDEX doc_meta_folder ON doc_meta(folder_id)")
+
+
+MIGRATIONS.append(_m5_folders)
+MAX_FOLDER_DEPTH = 6
+
+
 def now_iso():
     return datetime.now().isoformat(timespec="seconds")
 
@@ -535,6 +553,118 @@ class Store:
         with self._db() as c:
             return c.execute("SELECT COUNT(*) FROM audit").fetchone()[0]
 
+    # ── pastas
+    def folders(self, dtype):
+        with self._db() as c:
+            return [dict(r) for r in c.execute("SELECT * FROM folders WHERE type = ? ORDER BY position, name COLLATE NOCASE", (dtype,))]
+
+    def folder(self, fid):
+        with self._db() as c:
+            r = c.execute("SELECT * FROM folders WHERE id = ?", (fid,)).fetchone()
+            return dict(r) if r else None
+
+    def _folder_check(self, c, dtype, name, parent_id, fid=None):
+        name = " ".join(str(name or "").split())
+        if not name or len(name) > 60 or "/" in name: raise StoreError("Nome de pasta: 1 a 60 caracteres, sem /")
+        if parent_id is not None:
+            par = c.execute("SELECT * FROM folders WHERE id = ?", (parent_id,)).fetchone()
+            if not par or par["type"] != dtype: raise StoreError("Pasta de destino inválida")
+            depth, cur = 1, par
+            while cur["parent_id"] is not None:          # profundidade e ciclo (mover para dentro de si mesma)
+                if fid is not None and cur["id"] == fid: raise StoreError("Uma pasta não pode ir para dentro dela mesma")
+                cur = c.execute("SELECT * FROM folders WHERE id = ?", (cur["parent_id"],)).fetchone(); depth += 1
+            if fid is not None and cur["id"] == fid: raise StoreError("Uma pasta não pode ir para dentro dela mesma")
+            sub = 0
+            if fid is not None:                           # altura da subárvore que vai junto
+                def h(x): return 1 + max([h(r["id"]) for r in c.execute("SELECT id FROM folders WHERE parent_id = ?", (x,))] or [0])
+                sub = h(fid) - 1
+            if depth + 1 + sub > MAX_FOLDER_DEPTH: raise StoreError(f"No máximo {MAX_FOLDER_DEPTH} níveis de pastas")
+        same = c.execute("""SELECT id FROM folders WHERE type = ? AND parent_id IS ? AND name = ? COLLATE NOCASE AND id IS NOT ?""",
+                         (dtype, parent_id, name, fid)).fetchone()
+        if same: raise StoreError(f"Já existe a pasta \"{name}\" neste nível")
+        return name
+
+    def create_folder(self, dtype, name, parent_id=None):
+        ts = now_iso()
+        with self._tx() as c:
+            name = self._folder_check(c, dtype, name, parent_id)
+            pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM folders WHERE type = ? AND parent_id IS ?", (dtype, parent_id)).fetchone()[0]
+            fid = c.execute("INSERT INTO folders (type, parent_id, name, position, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+                            (dtype, parent_id, name, pos, ts, ts)).lastrowid
+        return self.folder(fid)
+
+    def update_folder(self, fid, name=None, parent_id=..., position=None):
+        with self._tx() as c:
+            cur = c.execute("SELECT * FROM folders WHERE id = ?", (fid,)).fetchone()
+            if not cur: raise StoreError("pasta não encontrada")
+            new_parent = cur["parent_id"] if parent_id is ... else parent_id
+            new_name = self._folder_check(c, cur["type"], cur["name"] if name is None else name, new_parent, fid)
+            c.execute("UPDATE folders SET name = ?, parent_id = ?, position = ?, updated_at = ? WHERE id = ?",
+                      (new_name, new_parent, cur["position"] if position is None else int(position), now_iso(), fid))
+        return self.folder(fid)
+
+    def delete_folder(self, fid, move_to=...):
+        """Só pasta vazia; com move_to (id ou None = "Sem pasta"), leva documentos e subpastas antes."""
+        with self._tx() as c:
+            cur = c.execute("SELECT * FROM folders WHERE id = ?", (fid,)).fetchone()
+            if not cur: raise StoreError("pasta não encontrada")
+            docs = c.execute("SELECT COUNT(*) FROM doc_meta WHERE folder_id = ?", (fid,)).fetchone()[0]
+            subs = c.execute("SELECT COUNT(*) FROM folders WHERE parent_id = ?", (fid,)).fetchone()[0]
+            if (docs or subs) and move_to is ...:
+                raise StoreError(f"A pasta não está vazia ({docs} documento(s), {subs} subpasta(s)): escolha para onde mover o conteúdo")
+            if docs or subs:
+                if move_to is not None:
+                    dst = c.execute("SELECT * FROM folders WHERE id = ?", (move_to,)).fetchone()
+                    if not dst or dst["type"] != cur["type"] or dst["id"] == fid: raise StoreError("Pasta de destino inválida")
+                    p = dst
+                    while p["parent_id"] is not None:
+                        if p["parent_id"] == fid: raise StoreError("Pasta de destino inválida (está dentro da pasta excluída)")
+                        p = c.execute("SELECT * FROM folders WHERE id = ?", (p["parent_id"],)).fetchone()
+                for r in c.execute("SELECT id, name FROM folders WHERE parent_id = ?", (fid,)).fetchall():
+                    if c.execute("SELECT 1 FROM folders WHERE type = ? AND parent_id IS ? AND name = ? COLLATE NOCASE", (cur["type"], move_to, r["name"])).fetchone():
+                        raise StoreError(f"Já existe a pasta \"{r['name']}\" no destino")
+                c.execute("UPDATE folders SET parent_id = ?, updated_at = ? WHERE parent_id = ?", (move_to, now_iso(), fid))
+                c.execute("UPDATE doc_meta SET folder_id = ?, updated_at = ? WHERE folder_id = ?", (move_to, now_iso(), fid))
+            c.execute("DELETE FROM folders WHERE id = ?", (fid,))
+        return {"docs": docs, "subs": subs, "name": cur["name"], "type": cur["type"]}
+
+    def doc_folders(self, dtype=None):
+        """{pid: folder_id} dos documentos com pasta (sem linha = "Sem pasta")."""
+        with self._db() as c:
+            q = "SELECT pid, folder_id FROM doc_meta WHERE folder_id IS NOT NULL" + (" AND type = ?" if dtype else "")
+            return dict(c.execute(q, (dtype,) if dtype else ()).fetchall())
+
+    def set_doc_folder(self, pid, dtype, folder_id):
+        with self._tx() as c:
+            if folder_id is not None:
+                f = c.execute("SELECT type FROM folders WHERE id = ?", (folder_id,)).fetchone()
+                if not f or f["type"] != dtype: raise StoreError("Pasta inválida para este tipo de documento")
+            c.execute("""INSERT INTO doc_meta (pid, type, folder_id, updated_at) VALUES (?,?,?,?)
+                         ON CONFLICT(pid) DO UPDATE SET folder_id = excluded.folder_id, type = excluded.type, updated_at = excluded.updated_at""",
+                      (pid, dtype, folder_id, now_iso()))
+
+    def drop_doc_meta(self, pid):
+        with self._db() as c:
+            c.execute("DELETE FROM doc_meta WHERE pid = ?", (pid,))
+
+    def folder_path(self, fid):
+        """"Por ferramenta/EDR" de uma pasta (para exportar)."""
+        parts = []
+        while fid is not None:
+            f = self.folder(fid)
+            if not f: break
+            parts.append(f["name"]); fid = f["parent_id"]
+        return "/".join(reversed(parts))
+
+    def ensure_path(self, dtype, path):
+        """Cria (se faltar) cada nível de "A/B/C" e devolve o id da última pasta. Idempotente."""
+        parent = None
+        for name in [x.strip() for x in str(path).split("/") if x.strip()]:
+            with self._db() as c:
+                r = c.execute("SELECT id FROM folders WHERE type = ? AND parent_id IS ? AND name = ? COLLATE NOCASE", (dtype, parent, name)).fetchone()
+            parent = r["id"] if r else self.create_folder(dtype, name, parent)["id"]
+        return parent
+
     # ── reset da aplicação
     def backup_to(self, path):
         """Cópia consistente do banco (API de backup do SQLite), mesmo com o servidor em uso."""
@@ -551,6 +681,8 @@ class Store:
         with self._tx() as c:
             c.execute("DELETE FROM pb_versions")
             c.execute("DELETE FROM sso_states")
+            c.execute("DELETE FROM doc_meta")
+            c.execute("DELETE FROM folders")
             if settings: c.execute("DELETE FROM settings")
             else: c.execute("DELETE FROM settings WHERE key = 'pb_templates'")
             if users:

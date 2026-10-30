@@ -14,7 +14,8 @@ HERE = Path(__file__).parent
 HOME = Path(os.environ.get("MEDUSA_HOME") or HERE)
 SRC = Path(os.environ.get("PB_SRC") or HOME / "playbooks")
 MAPPINGS_FILE = Path(os.environ.get("PB_MAPPINGS") or HOME / "mappings.json")
-ID_RE = re.compile(r"^PB-\d{2,3}$")
+ID_RE = re.compile(r"^(PB|RB|DOC)-\d{2,4}$")         # playbook, runbook, documento (doctypes.py)
+FOLDER_PID_RE = re.compile(r"^((?:PB|RB|DOC)-\d+)")
 # Imagens do documento: ficam na pasta do playbook (imagens/), com nome pelo conteúdo (nunca sobrescritas),
 # e entram no .md como Markdown comum numa linha própria: ![legenda](imagens/img-0123456789abcdef.png)
 IMG_DIR = "imagens"
@@ -619,14 +620,23 @@ def norm_status(s):
         if _norm(s) == _norm(st): return st
     return STATUSES[0]
 
-def props_table(doc):
-    for sec in doc.get("sections", []):
-        if sec["title"].startswith("Propriedades"):
-            for b in sec["blocks"]:
-                if b["t"] == "table" and len(b.get("head", [])) >= 2: return b
-            b = {"t": "table", "head": ["Campo", "Valor"], "rows": []}
-            sec["blocks"].append(b); return b
-    sec = {"title": "Propriedades do playbook", "blocks": [{"t": "table", "head": ["Campo", "Valor"], "rows": []}], "subs": []}
+def props_section(doc, title=None):
+    """Seção de propriedades: a de título exatamente igual ao do tipo (title) e, sem ela, a primeira que começa com
+    "Propriedades" (compatível com os playbooks antigos)."""
+    secs = doc.get("sections", [])
+    if title:
+        for sec in secs:
+            if _norm(sec["title"]) == _norm(title): return sec
+    return next((sec for sec in secs if sec["title"].startswith("Propriedades")), None)
+
+def props_table(doc, title=None):
+    sec = props_section(doc, title)
+    if sec is not None:
+        for b in sec["blocks"]:
+            if b["t"] == "table" and len(b.get("head", [])) >= 2: return b
+        b = {"t": "table", "head": ["Campo", "Valor"], "rows": []}
+        sec["blocks"].append(b); return b
+    sec = {"title": title or "Propriedades do playbook", "blocks": [{"t": "table", "head": ["Campo", "Valor"], "rows": []}], "subs": []}
     doc.setdefault("sections", []).insert(0, sec)
     return sec["blocks"][0]
 
@@ -709,22 +719,56 @@ def team_regexes(teams):
 def plain(s): return re.sub(r"[*`]", "", s)
 
 def team_of_phase(title):
+    """Time da fase pelo título ("Fase 1 · Triagem — SOC N1"); sem time no título, nenhum."""
     m = re.search(r"—\s*(.+?)\s*$", title)
-    return m.group(1) if m else "CSIRT"
+    return m.group(1) if m else None
 
-def build_view(pid, folder, doc, flow, refs, teams=None):
+# ───────────────────────── campos dinâmicos ─────────────────────────
+# O template do tipo define os campos (ferramenta, fase NIST…); os valores ficam como linhas "Rótulo | valor" na
+# tabela de propriedades do .md (o arquivo continua sendo a fonte da verdade e entra no histórico de versões).
+
+def get_fields(doc, schema, title=None):
+    rows = {_norm(r[0]): (r[1] if len(r) > 1 else "") for r in props_table(clone_doc(doc), title)["rows"] if r}
+    out = {}
+    for f in schema or []:
+        v = rows.get(_norm(f["label"]), "").strip()
+        out[f["key"]] = [x.strip() for x in v.split(",") if x.strip()] if f.get("type") == "multiselect" else v
+    return out
+
+def set_fields(doc, schema, values, title=None):
+    """Grava os valores nas linhas da tabela de propriedades (atualiza a linha do rótulo ou acrescenta no fim)."""
+    t = props_table(doc, title)
+    for f in schema or []:
+        if f["key"] not in values: continue
+        v = values[f["key"]]
+        v = ", ".join(v) if isinstance(v, list) else str(v or "")
+        row = next((r for r in t["rows"] if r and _norm(r[0]) == _norm(f["label"])), None)
+        if row is None: t["rows"].append([f["label"], v] + [""] * (len(t["head"]) - 2))
+        else:
+            while len(row) < 2: row.append("")
+            row[1] = v
+    return doc
+
+def build_view(pid, folder, doc, flow, refs, teams=None, dtype=None):
+    """Visão de leitura. dtype (playbook, runbook, doc) decide o que é interpretado: passos, ramos, estados e
+    critérios de encerramento só existem nos tipos que têm passos e ramos (playbook)."""
+    import doctypes as DT
+    dtype = dtype or DT.type_of(pid) or "playbook"
+    ti = DT.info(dtype)
     props, steps, ramos, states, snippets, closing, secs = {}, [], [], [], [], {}, []
     img = f"api/pb/{pid}/img/" if ID_RE.fullmatch(pid) else None
     render = lambda bl: render_blocks(bl, img)
+    psec = props_section(doc, ti["props_title"])
     for sec in doc["sections"]:
         blocks = sec["blocks"]
-        if sec["title"].startswith("Propriedades"):
+        if sec is psec:
             for b in blocks:
                 if b["t"] == "table": props = {r[0]: (r[1] if len(r) > 1 else "") for r in b["rows"]}
         subs = []
         for sub in sec["subs"]:
             shtml = render(sub["blocks"])
             subs.append({"id": slug(sub["title"]), "title": sub["title"], "html": shtml})
+            if not ti["ramos"] and not ti["steps"]: continue
             if re.match(r"R\d+\s*·", sub["title"]):
                 ramos.append({"id": sub["title"].split()[0], "title": sub["title"], "html": shtml,
                               "short": sub["title"].split("·", 1)[1].strip()})
@@ -733,7 +777,7 @@ def build_view(pid, folder, doc, flow, refs, teams=None):
                     for r in b["rows"]:
                         r = (r + ["", "", ""])[:3]
                         if r[0]: steps.append({"id": r[0], "action": r[1], "exit": r[2], "phase": sub["title"], "team": team_of_phase(sub["title"])})
-        if sec["title"].startswith("Tabela de decisão"):
+        if ti["steps"] and sec["title"].startswith("Tabela de decisão"):
             for b in blocks:
                 if b["t"] == "table":
                     for r in b["rows"]:
@@ -741,12 +785,12 @@ def build_view(pid, folder, doc, flow, refs, teams=None):
                         if m:
                             r = (r + ["", "", "", ""])[:4]
                             states.append({"id": m.group(1), "name": m.group(2), "def": r[1], "dest": r[2], "prio": r[3]})
-        if sec["title"].startswith("Critérios de encerramento"):
+        if ti["steps"] and sec["title"].startswith("Critérios de encerramento"):
             for b in blocks:
                 if b["t"] == "table":
                     for r in b["rows"]:
                         r = (r + ["", "", ""])[:3]; closing[r[0]] = {"closes": r[1], "never": r[2]}
-        if not sec["title"].startswith(("Propriedades", "Itens em aberto", "Fluxograma")):
+        if sec is not psec and not sec["title"].startswith(("Propriedades", "Itens em aberto", "Fluxograma")):
             for ttl, bl in [(sec["title"], blocks)] + [(s["title"], s["blocks"]) for s in sec["subs"]]:
                 for b in bl:
                     if b["t"] == "ul": snippets += [(sec["title"], plain(i)) for i in b["items"]]
@@ -761,7 +805,7 @@ def build_view(pid, folder, doc, flow, refs, teams=None):
                 seen.add(t); lst.append({"section": s, "text": t if len(t) < 420 else t[:417] + "…"})
         mentions[team] = lst
     name = doc["title"].split("—", 1)[-1].strip()
-    return {"id": pid, "slug": pid.lower(), "folder": folder, "name": name, "title": doc["title"], "byline": plain(doc.get("byline", "")),
+    return {"id": pid, "type": dtype, "slug": pid.lower(), "folder": folder, "name": name, "title": doc["title"], "byline": plain(doc.get("byline", "")),
             "intro": render(doc.get("intro") or []), "props": props, "sections": secs, "steps": steps, "ramos": ramos, "states": states, "closing": closing,
             "mentions": mentions, "flow": flow, "refs": refs, "doc": doc, "gov": get_gov(doc)}
 
@@ -784,22 +828,37 @@ def read_json(p, default):
     except FileNotFoundError: return default
 
 def folder_of(pid):
-    for f in sorted(SRC.glob(f"{pid}-*")):
+    """Pasta do documento no diretório do tipo (playbooks/, runbooks/, documentos/)."""
+    import doctypes as DT
+    t = DT.type_of(pid)
+    if not t or not ID_RE.fullmatch(pid): return None
+    for f in sorted(DT.src_dir(t).glob(f"{pid}-*")):
         if f.is_dir(): return f
     return None
+
+def pid_of_folder(folder):
+    return FOLDER_PID_RE.match(Path(folder).name).group(1)
 
 def files_of(folder):
     md = next(iter(sorted(folder.glob("*.md"))), None)
     dio = next(iter(sorted(folder.glob("*.drawio"))), None)
     return md, dio
 
+def empty_flow(dtype="playbook"):
+    """Sem .drawio: playbook mostra as raias padrão (o fluxograma é obrigatório); runbook e documento, nada."""
+    return {"subtitle": "", "lanes": lanes_of({}) if dtype == "playbook" else [], "nodes": [], "edges": [], "none": True}
+
 def load_playbook(folder, teams=None):
-    pid = re.match(r"(PB-\d+)", folder.name).group(1)
+    """Lê um documento de qualquer tipo (o nome ficou por compatibilidade)."""
+    import doctypes as DT
+    pid = pid_of_folder(folder)
+    dtype = DT.type_of(pid) or "playbook"
     md, dio = files_of(folder)
     doc = parse_md(md.read_text("utf-8"))
-    flow = drawio_to_flow(dio) if dio else {"subtitle": "", "lanes": lanes_of({}), "nodes": [], "edges": []}
+    flow = drawio_to_flow(dio) if dio and DT.info(dtype)["flow"] != "none" else empty_flow(dtype)
     refs = read_json(MAPPINGS_FILE, {}).get(pid, {})
-    view = build_view(pid, folder.name, doc, flow, refs, teams)
+    view = build_view(pid, folder.name, doc, flow, refs, teams, dtype)
+    view["hasFlow"] = bool(dio) and DT.info(dtype)["flow"] != "none"
     view["rev"] = revision(folder, refs)
     return view
 
@@ -809,7 +868,7 @@ def revision(folder, refs=None):
     h = hashlib.sha1()
     for f in (md, dio):
         if f and f.exists(): h.update(f.read_bytes())
-    if refs is None: refs = read_json(MAPPINGS_FILE, {}).get(re.match(r"(PB-\d+)", folder.name).group(1), {})
+    if refs is None: refs = read_json(MAPPINGS_FILE, {}).get(pid_of_folder(folder), {})
     h.update(json.dumps(refs, sort_keys=True).encode())
     return h.hexdigest()[:16]
 
@@ -818,8 +877,14 @@ def sort_key(pid):
     m = re.match(r"([A-Za-z]+)-(\d+)", pid or "")
     return (m.group(1).upper(), int(m.group(2))) if m else (str(pid), 0)
 
-def all_folders():
-    fs = [f for f in sorted(SRC.glob("PB-*")) if f.is_dir() and files_of(f)[0]]
+def all_folders(dtype=None):
+    """Pastas de todos os documentos (ou só do tipo), em ordem natural de ID."""
+    import doctypes as DT
+    fs = []
+    for t in ([dtype] if dtype else list(DT.TYPES)):
+        d = DT.src_dir(t)
+        if d.exists():
+            fs += [f for f in sorted(d.glob(f"{DT.TYPES[t]['prefix']}-*")) if f.is_dir() and FOLDER_PID_RE.match(f.name) and files_of(f)[0]]
     return sorted(fs, key=lambda f: sort_key(f.name))
 
 # Times e tags pertencem aos templates (templates.py registra o provedor). Aqui fica a união de todos,

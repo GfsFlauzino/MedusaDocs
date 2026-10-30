@@ -8,8 +8,9 @@ templates e auditoria.
 - Só Python 3 (biblioteca padrão): nada para instalar além do Python, ou uma imagem Docker pronta.
 - White label: nome do workspace e logo configuráveis no painel administrativo; tema claro e escuro.
 - Formatos abertos: cada playbook é um `.md` + um `.drawio`; troca entre instalações em `.medusa.md` (Markdown + Mermaid).
-- Versão atual: **3.0.0-beta.2** (novidades em [CHANGELOG.md](CHANGELOG.md)): papéis e permissões personalizados,
-  aprovação de Produção por outra pessoa e Markdown com blocos de código, listas numeradas, links e introdução. Na 2.2.0: novo visual com menu lateral recolhível,
+- Versão atual: **3.0.0-beta.3** (novidades em [CHANGELOG.md](CHANGELOG.md)): tipos de documento (playbook, runbook,
+  documento) com pastas, campos e templates por tipo; papéis e permissões personalizados; aprovação de Produção por
+  outra pessoa; Markdown com blocos de código, listas numeradas, links e introdução. Na 2.2.0: novo visual com menu lateral recolhível,
   desempenho (cache de documentos, lista leve, busca no servidor, gzip e cache no navegador) e endurecimento (gravação
   atômica, sessão com duração máxima). Na 2.1: imagens na documentação e reset da aplicação. Na 2.0: versionamento,
   logs em JSON com retenção e login único (SSO) por OpenID Connect.
@@ -276,6 +277,7 @@ Tudo fica em `MEDUSA_HOME` (padrão: a pasta da aplicação; no Docker, o volume
 | Caminho | O que é |
 | --- | --- |
 | `playbooks/PB-xx-*/` | `.md` e `.drawio` de cada playbook, e as imagens do documento em `imagens/` |
+| `runbooks/RB-xx-*/` · `documentos/DOC-xx-*/` | Runbooks (`.drawio` só se tiver fluxograma) e documentos |
 | `mappings.json` | Caixa do fluxograma → passos, ramos ou seções |
 | `templates/` | Templates, com os times e tags de cada um |
 | `data/playbooks.db` | SQLite: usuários, sessões, tentativas de login, auditoria, configurações (aparência, logs, SSO), template e histórico de versões de cada playbook |
@@ -329,6 +331,7 @@ python3 tools/bench.py --sizes 10,150,500   # benchmark
 | --- | --- |
 | `server.py` | Servidor HTTP, API, permissões, CLI `adduser` |
 | `perms.py` | Catálogo de permissões e papéis do sistema |
+| `doctypes.py` | Tipos de documento (prefixo, pasta, fluxograma, aprovação, pastas) |
 | `library.py` | Cache dos documentos já interpretados, lista leve e busca |
 | `store.py` | Banco SQLite (usuários, sessões, auditoria, configurações, versões) |
 | `logfwd.py` | Encaminhamento de logs em JSON (HTTP, syslog, arquivo) e retenção |

@@ -9,7 +9,7 @@ Os três papéis do sistema reproduzem exatamente os perfis da 2.x (teste: tests
 """
 
 TYPES = ("playbook", "runbook", "doc")
-ENABLED_TYPES = ("playbook",)          # tipos que aparecem na interface (runbook e doc chegam na Fase 4)
+ENABLED_TYPES = ("playbook", "runbook", "doc")    # tipos que aparecem na interface
 TYPE_LABELS = {"playbook": "Playbooks", "runbook": "Runbooks", "doc": "Documentos"}
 FOLDER_TYPES = ("runbook", "doc")
 

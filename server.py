@@ -27,6 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import bundle
+import doctypes as DT
 import library
 import logfwd
 import ramos
@@ -50,7 +51,7 @@ MAX_THREADS = 32                # requisições processadas ao mesmo tempo; as d
 PBKDF2_ITERS = 310_000
 MIN_PASSWORD = 10
 MAX_BODY = 8 * 1024 * 1024
-APP_VERSION = "3.0.0-beta.2"
+APP_VERSION = "3.0.0-beta.3"
 LOGIN_RE = re.compile(r"^[a-z0-9._@-]{3,80}$")          # @ e até 80 caracteres: logins vindos do SSO (e-mail)
 NO_PASSWORD = "!sso"                                      # hash impossível: conta só entra pelo SSO
 TRUST_PROXY = os.environ.get("MEDUSA_TRUST_PROXY", "").lower() in ("1", "true", "yes", "sim")
@@ -177,22 +178,29 @@ def save_refs(pid, refs):
 
 def today(): return date.today().strftime("%d/%m/%Y")
 
+def not_found_msg(pid):
+    t = DT.type_of(pid)
+    return f"{DT.info(t)['label'].lower() if t else 'documento'} não encontrado"
+
 def get_folder(pid):
-    if not pid or not core.ID_RE.fullmatch(pid): raise HttpError(404, "playbook não encontrado")
+    if not pid or not core.ID_RE.fullmatch(pid): raise HttpError(404, not_found_msg(pid))
     f = core.folder_of(pid)
-    if not f: raise HttpError(404, "playbook não encontrado")
+    if not f: raise HttpError(404, not_found_msg(pid))
     return f
 
 def check_rev(folder, rev):
-    if not rev: raise HttpError(400, "Informe a revisão do playbook (recarregue a página e tente de novo)")
+    if not rev: raise HttpError(400, "Informe a revisão do documento (recarregue a página e tente de novo)")
     if rev != core.revision(folder):
-        raise HttpError(409, "Este playbook foi salvo por outra pessoa depois que você abriu. Recarregue para ver a versão atual.")
+        raise HttpError(409, "Este documento foi salvo por outra pessoa depois que você abriu. Recarregue para ver a versão atual.")
 
 # ───────────────────────── permissões ─────────────────────────
 
 def doc_type(pid):
-    """Tipo do documento pelo prefixo do ID (por enquanto só playbook)."""
-    return "playbook"
+    """Tipo do documento pelo prefixo do ID (PB → playbook, RB → runbook, DOC → doc)."""
+    return DT.type_of(pid) or "playbook"
+
+def type_info(pid):
+    return DT.info(doc_type(pid))
 
 def doc_perm(pid, action):
     return f"{doc_type(pid)}.{action}"
@@ -462,11 +470,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_api(self, method):
         # /api/doc/{id}[/...] é sinônimo de /api/pb/{id}[/...] (a API nova; a antiga continua valendo)
-        path = re.sub(r"^/api/doc/", "/api/pb/", self.path.split("?")[0])
+        path = re.sub(rf"^/api/doc/(?={DT.PID_IN_PATH}(?:/|$))", "/api/pb/", self.path.split("?")[0])
         REQ.ip, REQ.cookie = self.client_ip(), None
         try:
             if method != "GET": self.csrf()
-            key = re.sub(r"/PB-\d{2,3}", "/{pb}", re.sub(r"^/api/users/[^/]+", "/api/users/{u}", path))
+            key = re.sub(rf"/{DT.PID_IN_PATH}(?=/|$)", "/{pb}", re.sub(r"^/api/users/[^/]+", "/api/users/{u}", path))
+            key = re.sub(r"^/api/folders/\d+$", "/api/folders/{f}", key)
             key = re.sub(r"^(/api/pb/\{pb\}/ramos)/[^/]+$", r"\1/{r}", key)
             key = re.sub(r"^(/api/pb/\{pb\}/versions)/\d+", r"\1/{v}", key)
             key = re.sub(r"^(/api/pb/\{pb\}/img)/[^/]+$", r"\1/{f}", key)
@@ -475,7 +484,7 @@ class Handler(BaseHTTPRequestHandler):
             key = re.sub(r"^/api/roles/[^/]+$", "/api/roles/{role}", key)
             route = ROUTES.get((method, key))
             if not route: raise HttpError(404, "não encontrado")
-            m = re.search(r"/(PB-\d{2,3})(?:/|$)", path); u = re.match(r"^/api/users/([^/]+)", path)
+            m = re.search(rf"/({DT.PID_IN_PATH})(?:/|$)", path); u = re.match(r"^/api/users/([^/]+)", path)
             t = re.match(r"^/api/templates/([^/]+)", path)
             return route(self, pid=m.group(1) if m else None, login=urllib.parse.unquote(u.group(1)) if u else None,
                          tkey=t.group(1) if t else None)
@@ -565,8 +574,10 @@ def set_link(pid, key):
     open_db().set_setting("pb_templates", lk)
 
 def template_of(pid, lk=None):
+    """Template do documento (vínculo no banco); sem vínculo, ou se o template sumiu, o padrão do tipo."""
     k = (lk if lk is not None else links()).get(pid)
-    return k if k and tpl.KEY_RE.fullmatch(k) and tpl.path_of(k).exists() else tpl.DEFAULT_KEY
+    t = doc_type(pid)
+    return k if k and tpl.KEY_RE.fullmatch(k) and tpl.path_of(k).exists() and tpl.kind_for(k) == t else tpl.default_key(t)
 
 def template_teams(key):
     """Times do template (cache por arquivo; somente leitura)."""
@@ -576,7 +587,7 @@ def template_name(key):
     return tpl.name_for(key)
 
 def pid_of(folder):
-    return re.match(r"(PB-\d+)", folder.name).group(1)
+    return core.pid_of_folder(folder)
 
 def load_pb_fresh(folder, lk=None):
     """Lê direto do disco, sem cache: usado nas gravações, que precisam do estado do arquivo neste instante."""
@@ -632,33 +643,66 @@ def r_bootstrap(h, **_):
     u = h.require()
     logo = open_db().get_setting("logo")
     h.send_json({"user": public_user(u), "branding": {**brand(), "logo": logo["v"] if logo else None}, "catalog": core.CATALOG,
-                 "statuses": core.STATUSES, "teams": core.load_teams(), "appVersion": APP_VERSION})
+                 "statuses": core.STATUSES, "teams": core.load_teams(), "appVersion": APP_VERSION,
+                 "types": DT.public(), "enabledTypes": list(P.ENABLED_TYPES)})
 
 LIBRARY_SORTS = {"id": lambda s: core.sort_key(s["id"]), "name": lambda s: library.norm(s["name"]),
                  "status": lambda s: (core.STATUSES.index(s["status"]), core.sort_key(s["id"]))}
 
+def folder_descendants(dtype, fid):
+    kids = {}
+    for f in open_db().folders(dtype): kids.setdefault(f["parent_id"], []).append(f["id"])
+    out, stack = set(), [fid]
+    while stack:
+        x = stack.pop(); out.add(x); stack += kids.get(x, [])
+    return out
+
 def r_library(h, **_):
-    """Lista leve, filtrada e paginada: ?type=&status=&q=&sort=id|name|status&limit=&cursor="""
+    """Lista leve, filtrada e paginada: ?type=&status=&q=&sort=id|name|status&limit=&cursor=
+    &folder=<id>|none (&recursive=1) &fields.<chave>=a,b. Devolve também contagens por status e "facets" dos campos
+    marcados como filtro no template (contagem por valor, sobre o que passou pelos demais filtros)."""
     u = h.require(); q = h.query()
     typ, status, text, sort = q.get("type") or "", q.get("status") or "", q.get("q", "").strip()[:200], q.get("sort") or "id"
-    if typ not in ("", "playbook"): raise HttpError(400, "tipo de documento inválido")
+    if typ and typ not in DT.TYPES: raise HttpError(400, "tipo de documento inválido")
     if status and status not in core.STATUSES: raise HttpError(400, "status inválido")
     if sort not in LIBRARY_SORTS: raise HttpError(400, "ordenação inválida")
     try: limit, offset = max(1, min(500, int(q.get("limit") or 100))), max(0, int(q.get("cursor") or 0))
     except ValueError: raise HttpError(400, "paginação inválida")
+    folder = q.get("folder") or ""
+    if folder and folder != "none" and not folder.isdigit(): raise HttpError(400, "pasta inválida")
+    ffilters = {k[7:]: [x for x in v.split(",") if x] for k, v in q.items() if k.startswith("fields.") and v}
     LIB.scan()
-    etag = '"' + hashlib.sha1(json.dumps([LIB.generation, typ, status, text, sort, limit, offset, perms_tag(u)]).encode()).hexdigest()[:20] + '"'
+    etag = '"' + hashlib.sha1(json.dumps([LIB.generation, FOLDER_GEN[0], typ, status, text, sort, limit, offset, folder, q.get("recursive"),
+                                         sorted(ffilters.items()), perms_tag(u)]).encode()).hexdigest()[:20] + '"'
     if h.not_modified(etag): return h.send_json({}, etag=etag)
-    items = LIB.summaries(summary_visible(u))
+    fmap = open_db().doc_folders(typ or None)
+    items = [{**s, "folderId": fmap.get(s["id"])} for s in LIB.summaries(summary_visible(u), dtype=typ or None)]
     counts = {st: sum(1 for s in items if s["status"] == st) for st in core.STATUSES}
     if status: items = [s for s in items if s["status"] == status]
     if text:
         words = library.norm(text).split()
         items = [s for s in items if all(w in library.norm(f"{s['id']} {s['name']} {s['subtitle']}") for w in words)]
+    if folder == "none":
+        items = [s for s in items if s["folderId"] is None]
+    elif folder:
+        if not typ: raise HttpError(400, "informe o tipo para filtrar por pasta")
+        ids = folder_descendants(typ, int(folder)) if q.get("recursive") in ("1", "true") else {int(folder)}
+        items = [s for s in items if s["folderId"] in ids]
+    schema = {f["key"]: f for key in {s["templateKey"] for s in items} for f in tpl.fields_for(key)} if typ else {}
+    facets = {}
+    for k, f in schema.items():
+        if not f.get("filter"): continue
+        cnt = {}
+        for s in items:
+            v = s["fields"].get(k)
+            for x in (v if isinstance(v, list) else [v] if v else []): cnt[x] = cnt.get(x, 0) + 1
+        facets[k] = {"label": f["label"], "values": cnt}
+    for k, wanted in ffilters.items():
+        items = [s for s in items if set(s["fields"].get(k) if isinstance(s["fields"].get(k), list) else [s["fields"].get(k)]) & set(wanted)]
     items = sorted(items, key=LIBRARY_SORTS[sort])
     end = offset + limit
     h.send_json({"items": items[offset:end], "total": len(items), "nextCursor": str(end) if end < len(items) else None,
-                 "counts": counts, "all": sum(counts.values())}, etag=etag)
+                 "counts": counts, "all": sum(counts.values()), "facets": facets}, etag=etag)
 
 def r_search(h, **_):
     u = h.require(); q = h.query()
@@ -725,7 +769,7 @@ def r_pb_doc(h, pid, **_):
         ver = bump(doc, old, change=change)
         view = load_pb_fresh(folder)
         flow, refs = view["flow"], view["refs"]
-        changes = ramos.sync_from_doc(flow, refs, old, doc)
+        changes = ramos.sync_from_doc(flow, refs, old, doc) if type_info(pid)["ramos"] and view["hasFlow"] else []
         backup(pid, md, *( (dio, core.MAPPINGS_FILE) if changes else ()))
         core.atomic_write(md, core.doc_to_md(doc))
         if changes: write_flow(folder, pid, view["name"], flow, refs)
@@ -744,6 +788,7 @@ def write_flow(folder, pid, name, flow, refs):
 def r_pb_flow(h, pid, **_):
     u = h.require(doc_perm(pid, "edit"))
     folder = get_folder(pid); b = h.body()
+    if type_info(pid)["flow"] == "none": raise HttpError(400, f"{type_info(pid)['plural']} não têm fluxograma")
     flow, refs = b.get("flow") or {}, b.get("refs") or {}
     validate_flow(flow)
     refs = {k: [str(x) for x in v] for k, v in refs.items() if isinstance(v, list)}
@@ -755,7 +800,7 @@ def r_pb_flow(h, pid, **_):
         backup(pid, dio, md, core.MAPPINGS_FILE)
         doc = core.parse_md(md.read_text("utf-8")); old = core.clone_doc(doc)
         change = prod_change(b, old)
-        changes = ramos.sync_from_flow(doc, view["flow"], view["refs"], flow, refs)
+        changes = ramos.sync_from_flow(doc, view["flow"], view["refs"], flow, refs) if type_info(pid)["ramos"] else []
         write_flow(folder, pid, view["name"], flow, refs)
         touch_review(doc, u, doc); ver = bump(doc, old, change=change)
         core.atomic_write(md, core.doc_to_md(doc))
@@ -769,6 +814,7 @@ def r_pb_flow(h, pid, **_):
 def r_pb_ramo_add(h, pid, **_):
     u = h.require(doc_perm(pid, "edit"))
     folder = get_folder(pid); b = h.body()
+    if not type_info(pid)["ramos"]: raise HttpError(400, f"{type_info(pid)['plural']} não têm ramos")
     name, q = str(b.get("name", "")).strip()[:80], str(b.get("q", "")).strip()[:200]
     if not name: raise HttpError(400, "Informe o nome do ramo")
     with LOCK:
@@ -793,6 +839,7 @@ def r_pb_ramo_add(h, pid, **_):
 def r_pb_ramo_delete(h, pid, **_):
     u = h.require(doc_perm(pid, "edit"))
     folder = get_folder(pid); b = h.body()
+    if not type_info(pid)["ramos"]: raise HttpError(400, f"{type_info(pid)['plural']} não têm ramos")
     k = ramos.ref_key(h.path.split("?")[0].rsplit("/", 1)[-1])
     if not k or k == ramos.PROTO: raise HttpError(404, "ramo não encontrado")
     with LOCK:
@@ -824,8 +871,9 @@ def r_pb_status(h, pid, **_):
         md, _ = core.files_of(folder)
         doc = core.parse_md(md.read_text("utf-8")); old = core.clone_doc(doc)
         gov = core.get_gov(doc); before = gov["status"]
-        if status == before: raise HttpError(400, f"O playbook já está em {status}")
-        if status == "Produção":
+        if status == before: raise HttpError(400, f"O documento já está em {status}")
+        needs_ap = status == "Produção" and type_info(pid)["approval"]
+        if needs_ap:
             ap = check_approver(pid, u, str(b.get("approver", "")))
             gov["approver"] = ap["name"]
         ensure_baseline(folder, pid)
@@ -836,9 +884,9 @@ def r_pb_status(h, pid, **_):
         core.atomic_write(md, core.doc_to_md(doc))
         LIB.invalidate(pid)
         note = str(b.get("note", ""))[:300]
-        snapshot(folder, pid, u, "status", f"{before} → {status}" + (f" · aprovado por {gov['approver']}" if status == "Produção" else "") + (f" · {note}" if note else ""))
-    audit(u["login"], "status_alterado", pid, de=before, para=status, versao=ver, aprovador=gov.get("approver", "") if status == "Produção" else "",
-          aprovador_login=str(b.get("approver", "")) if status == "Produção" else "", nota=str(b.get("note", ""))[:500])
+        snapshot(folder, pid, u, "status", f"{before} → {status}" + (f" · aprovado por {gov['approver']}" if needs_ap else "") + (f" · {note}" if note else ""))
+    audit(u["login"], "status_alterado", pid, de=before, para=status, versao=ver, aprovador=gov.get("approver", "") if needs_ap else "",
+          aprovador_login=str(b.get("approver", "")) if needs_ap else "", nota=str(b.get("note", ""))[:500])
     h.send_json({"ok": True, "playbook": load_pb(folder)})
 
 # ── aprovação de Produção por outra pessoa (governança)
@@ -876,36 +924,96 @@ def mitre_text(ids):
     if bad: raise HttpError(400, f"Tática MITRE desconhecida: {', '.join(bad)}")
     return " · ".join(f"{i} {by[i]['name']}" for i in ids)
 
-def r_pb_create(h, **_):
-    u = h.require("playbook.create")
-    m = h.body()
-    pid = str(m.get("id", "")).strip().upper(); name = str(m.get("name", "")).strip()[:100]
-    if not core.ID_RE.fullmatch(pid): raise HttpError(400, "ID deve ter o formato PB-00")
-    if not name: raise HttpError(400, "informe o nome do playbook")
+def used_ids():
+    return {pid_of(f) for f in core.all_folders()}
+
+def clean_field_values(schema, raw):
+    """Valores dos campos do template: select/multiselect só com opções válidas; obrigatórios preenchidos."""
+    raw = raw if isinstance(raw, dict) else {}
+    out = {}
+    for f in schema:
+        v = raw.get(f["key"], [] if f["type"] == "multiselect" else "")
+        if f["type"] == "multiselect":
+            v = [str(x) for x in (v if isinstance(v, list) else str(v).split(",")) if str(x).strip()]
+            bad = [x for x in v if x not in f["options"]]
+        else:
+            v = " ".join(str(v or "").split())[:300]
+            bad = [v] if f["type"] == "select" and v and v not in f["options"] else []
+            if f["type"] == "url" and v and not re.match(r"^https?://\S+$", v, re.I): bad = [v]
+            if f["type"] == "date" and v and not re.fullmatch(r"\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}", v): bad = [v]
+        if bad: raise HttpError(400, f"Valor inválido em {f['label']}: {', '.join(bad)[:80]}")
+        if f.get("required") and not v: raise HttpError(400, f"Preencha o campo {f['label']}")
+        out[f["key"]] = v
+    return out
+
+def create_document(h, u, m, dtype):
+    """Cria playbook, runbook ou documento a partir de um template do mesmo tipo."""
+    ti = DT.info(dtype)
+    pid = str(m.get("id") or "").strip().upper() or DT.next_id(dtype, used_ids())
+    name = str(m.get("name", "")).strip()[:100]
+    if not core.ID_RE.fullmatch(pid) or DT.type_of(pid) != dtype: raise HttpError(400, f"ID deve ter o formato {ti['prefix']}-00")
+    if not name: raise HttpError(400, f"informe o nome d{ti['article']} {ti['label'].lower()}")
     author = open_db().get_user(str(m.get("author") or u["login"]))
     if not author or not author["active"]: raise HttpError(400, "Escolha um autor entre os usuários ativos")
-    t = tpl.load(str(m.get("template") or tpl.DEFAULT_KEY))
-    mitre = mitre_text([str(x) for x in (m.get("mitre") or [])][:20])
+    t = tpl.load(str(m.get("template") or tpl.default_key(dtype)))
+    if (t.get("kind") or "playbook") != dtype: raise HttpError(400, f"Escolha um template de {ti['label'].lower()}")
+    folder_id = m.get("folder_id")
+    if folder_id is not None:
+        if not ti["folders"]: raise HttpError(400, f"{ti['plural']} não usam pastas")
+        f = open_db().folder(int(folder_id)) if str(folder_id).isdigit() else None
+        if not f or f["type"] != dtype: raise HttpError(400, "Pasta inválida")
+        folder_id = f["id"]
+    if dtype == "playbook":
+        vars_ = {"id": pid, "name": name, "author": author["name"], "date": today(), "owner": str(m.get("owner", ""))[:80],
+                 "nist": str(m.get("nist", ""))[:200], "mitre": mitre_text([str(x) for x in (m.get("mitre") or [])][:20]),
+                 "objective": str(m.get("objective", ""))[:3000], "question": str(m.get("question", ""))[:300],
+                 "ramos": [r for r in (m.get("ramos") or [])][:20]}
+    else:
+        vars_ = {"id": pid, "name": name, "author": author["name"], "date": today(), "owner": str(m.get("owner", ""))[:80],
+                 "fields": clean_field_values(t.get("fields", []), m.get("fields"))}
     with LOCK:
-        if core.folder_of(pid): raise HttpError(400, f"{pid} já existe")
-        doc, flow, refs, tdefs = tpl.instantiate(t, {
-            "id": pid, "name": name, "author": author["name"], "date": today(), "owner": str(m.get("owner", ""))[:80],
-            "nist": str(m.get("nist", ""))[:200], "mitre": mitre, "objective": str(m.get("objective", ""))[:3000],
-            "question": str(m.get("question", ""))[:300], "ramos": [r for r in (m.get("ramos") or [])][:20]})
-        validate_flow(flow)
+        if core.folder_of(pid) or pid in used_ids(): raise HttpError(400, f"{pid} já existe")
+        doc, flow, refs, tdefs = tpl.instantiate(t, vars_)
+        if flow.get("nodes") or dtype == "playbook": validate_flow(flow)
+        if dtype != "playbook": core.set_fields(doc, t.get("fields", []), vars_["fields"], ti["props_title"])
         base = f"{pid}-{core.slug(name).title()}"
-        folder = core.SRC / base
+        folder = DT.src_dir(dtype) / base
         folder.mkdir(parents=True)
         doc = core.set_gov(doc, {"status": "Desenvolvimento", "approver": "", "reviewer": u["name"], "reviewed": today()})
         core.set_version(doc, (0, 1))
         core.atomic_write(folder / f"{base}.md", core.doc_to_md(doc))
-        core.atomic_write(folder / f"{pid.lower()}-{core.slug(name)}.drawio", core.flow_to_drawio(flow, pid, name))
-        save_refs(pid, refs)
+        if dtype == "playbook" or flow.get("nodes"):
+            core.atomic_write(folder / f"{pid.lower()}-{core.slug(name)}.drawio", core.flow_to_drawio(flow, pid, name))
+            save_refs(pid, refs)
         set_link(pid, t["key"])
+        if folder_id is not None: open_db().set_doc_folder(pid, dtype, folder_id); FOLDER_GEN[0] += 1
         snapshot(folder, pid, u, "criacao", f"Criado com o template {t['name']}")
         LIB.invalidate(pid)
-    audit(u["login"], "playbook_criado", pid, nome=name, template=t["name"], autor=author["login"])
+    audit(u["login"], "playbook_criado" if dtype == "playbook" else "documento_criado", pid, tipo=dtype, nome=name, template=t["name"],
+          autor=author["login"], **({"pasta": open_db().folder_path(folder_id)} if folder_id else {}))
     h.send_json({"ok": True, "playbook": load_pb(folder), "teams": core.load_teams()})
+
+def r_pb_create(h, **_):
+    u = h.require("playbook.create")
+    m = h.body()
+    if not str(m.get("id", "")).strip(): raise HttpError(400, "ID deve ter o formato PB-00")
+    create_document(h, u, m, "playbook")
+
+def r_doc_create(h, **_):
+    """POST /api/doc {type, name, template, folder_id, fields, id?}: cria qualquer tipo (ID livre sugerido se faltar)."""
+    m = h.body()
+    dtype = str(m.get("type") or "")
+    if dtype not in DT.TYPES: raise HttpError(400, "tipo de documento inválido")
+    u = h.require(f"{dtype}.create")
+    create_document(h, u, m, dtype)
+
+def r_doc_next_id(h, **_):
+    h.require(any_of=any_type("create"))
+    dtype = h.query().get("type") or ""
+    if dtype not in DT.TYPES: raise HttpError(400, "tipo de documento inválido")
+    h.send_json({"id": DT.next_id(dtype, used_ids())})
+
+FOLDER_GEN = [0]       # muda quando pastas ou a pasta de um documento mudam (entra no ETag da lista)
 
 def r_pb_delete(h, pid, **_):
     u = h.require(doc_perm(pid, "delete"))
@@ -922,8 +1030,9 @@ def r_pb_delete(h, pid, **_):
         if links().get(pid): (dest / "template.txt").write_text(links()[pid], "utf-8")
         set_link(pid, None)
         open_db().archive_versions(pid, dest.name)
+        open_db().drop_doc_meta(pid); FOLDER_GEN[0] += 1
         LIB.invalidate(pid)
-    audit(u["login"], "playbook_excluido", pid, lixeira=dest.name)
+    audit(u["login"], "playbook_excluido" if doc_type(pid) == "playbook" else "documento_excluido", pid, lixeira=dest.name)
     h.send_json({"ok": True, "trash": dest.name})
 
 # ───────────────────────── imagens do documento ─────────────────────────
@@ -1012,9 +1121,11 @@ def r_pb_export(h, pid, **_):
     if not visible(view, u): raise HttpError(404, "playbook não encontrado")
     fmt = h.query().get("fmt", "medusa")
     if fmt not in EXPORT_FMTS: raise HttpError(400, "formato inválido")
+    if fmt in ("drawio", "mmd") and not view.get("hasFlow", True): raise HttpError(400, "Este documento não tem fluxograma")
     base = view["folder"].lower()
     if fmt == "medusa":
-        data, ctype, fname = (bundle.export(view, {**core.load_teams(), **view["teams"]}, u["name"], brand()["name"], pb_images(folder, view["doc"])).encode(),
+        data, ctype, fname = (bundle.export(view, {**core.load_teams(), **view["teams"]}, u["name"], brand()["name"], pb_images(folder, view["doc"]),
+                                            doc_folder_path(pid)).encode(),
                               "text/markdown; charset=utf-8", f"{base}.medusa.md")
     elif fmt == "md":
         data, ctype, fname = core.doc_to_md(view["doc"]).encode(), "text/markdown; charset=utf-8", f"{base}.md"
@@ -1043,30 +1154,46 @@ def r_export_all(h, **_):
             if not can(u, doc_perm(pid, "export")): continue
             v, f = LIB.view(pid), core.folder_of(pid)
             if not v or not f or not visible(v, u): continue
-            z.writestr(f"{f.name.lower()}.medusa.md", bundle.export(v, {**union, **v["teams"]}, u["name"], name, pb_images(f, v["doc"])))
+            z.writestr(f"{DT.info(doc_type(pid))['dir']}/{f.name.lower()}.medusa.md",
+                       bundle.export(v, {**union, **v["teams"]}, u["name"], name, pb_images(f, v["doc"]), doc_folder_path(pid)))
     audit(u["login"], "playbooks_exportados")
-    h.send_bytes(buf.getvalue(), "application/zip", f"playbooks-{date.today().isoformat()}.zip")
+    h.send_bytes(buf.getvalue(), "application/zip", f"medusa-{date.today().isoformat()}.zip")
+
+def doc_folder_path(pid):
+    fid = open_db().doc_folders().get(pid)
+    return open_db().folder_path(fid) if fid else ""
 
 def r_import(h, **_):
     u = h.require(any_of=any_type("create")); b = h.body()
-    tkey = str(b.get("template") or tpl.DEFAULT_KEY)
+    text = str(b.get("text", ""))
+    # tipo: pelo ID pedido, pelo "type" do cabeçalho do arquivo ou pelo prefixo do ID do arquivo
+    fm = dict(re.findall(r"^(type|id):\s*(\S+)\s*$", text.split("\n---", 1)[0], re.M)) if text.startswith("---") else {}
+    ftype = (fm.get("type") if fm.get("type") in DT.TYPES else None) or DT.type_of(fm.get("id", ""))
+    dtype = DT.type_of(str(b.get("id") or "")) or ftype or "playbook"
+    if ftype and dtype != ftype:
+        raise HttpError(400, f"O arquivo é de {DT.info(ftype)['label'].lower()}: use um ID {DT.info(ftype)['prefix']}-00")
+    tkey = str(b.get("template") or tpl.default_key(dtype))
     if not tpl.KEY_RE.fullmatch(tkey) or not tpl.path_of(tkey).exists(): raise HttpError(400, "Escolha um template existente")
+    if tpl.kind_for(tkey) != dtype: raise HttpError(400, f"Escolha um template de {DT.info(dtype)['label'].lower()}")
     union, teams = core.load_teams(), template_teams(tkey)
     try:
-        p = bundle.parse(str(b.get("text", "")), teams)
+        p = bundle.parse(text, teams, dtype)
     except bundle.BundleError as e:
         raise HttpError(400, str(e))
     for n in p["createTeams"]:      # time que já existe em outro template: leva a definição de lá
         if n not in p["teamDefs"] and n in union: p["createTeams"][n] = {**union[n], "category": p["createTeams"][n]["category"]}
     pid = str(b.get("id") or p["id"]).strip().upper()
-    if not core.ID_RE.fullmatch(pid): raise HttpError(400, "Defina um ID no formato PB-00")
+    if not core.ID_RE.fullmatch(pid) or DT.type_of(pid) != dtype: raise HttpError(400, f"Defina um ID no formato {DT.info(dtype)['prefix']}-00")
     for need in (doc_perm(pid, "create"), doc_perm(pid, "import")):
         if not can(u, need): raise HttpError(403, "Seu perfil não tem permissão para esta ação")
     existing = core.folder_of(pid)
     summary = {"id": pid, "originalId": p["id"], "name": p["name"], "exists": bool(existing),
                "sections": len(p["doc"]["sections"]), "nodes": len(p["flow"]["nodes"]), "edges": len(p["flow"]["edges"]),
                "lanes": [l["label"] for l in p["flow"]["lanes"]], "createTeams": sorted(p["createTeams"]),
-               "warnings": p["warnings"], "origin": p["meta"], "template": tpl.load(tkey)["name"]}
+               "warnings": p["warnings"], "origin": p["meta"], "template": tpl.load(tkey)["name"], "type": dtype,
+               "folder": str(p["meta"].get("folder") or "")[:400]}
+    if summary["folder"] and DT.info(dtype)["folders"] and not can(u, f"{dtype}.folders"):
+        p["warnings"].append(f"Sem permissão para criar pastas: o documento fica em \"Sem pasta\" (no arquivo: {summary['folder']})")
     images = {}
     for n, durl in p["images"].items():
         if not core.IMG_NAME_RE.fullmatch(n): p["warnings"].append(f"Imagem com nome inválido ignorada: {n[:60]}"); continue
@@ -1077,10 +1204,11 @@ def r_import(h, **_):
     summary["images"] = len(images)
     if b.get("dryRun"): return h.send_json({"preview": summary})
     if existing and b.get("mode") == "replace" and not can(u, doc_perm(pid, "delete")):
-        raise HttpError(403, "Substituir um playbook existente equivale a excluí-lo: exige a permissão de excluir. Importe com outro ID.")
+        raise HttpError(403, "Substituir um documento existente equivale a excluí-lo: exige a permissão de excluir. Importe com outro ID.")
     if existing and b.get("mode") != "replace":
         raise HttpError(409, f"{pid} já existe. Escolha substituir ou importe com outro ID.")
-    validate_flow(p["flow"])
+    has_flow = dtype == "playbook" or bool(p["flow"]["nodes"])
+    if has_flow: validate_flow(p["flow"])
     doc = p["doc"]
     if p["id"] and p["id"] != pid and doc["title"].startswith(p["id"]): doc["title"] = pid + doc["title"][len(p["id"]):]
     core.set_gov(doc, {"status": "Desenvolvimento", "approver": "", "reviewer": u["name"], "reviewed": today()})
@@ -1094,17 +1222,22 @@ def r_import(h, **_):
         if p["createTeams"]: add_template_teams(tkey, p["createTeams"], union)
         name = p["name"][:100]
         base = f"{pid}-{core.slug(name).title()}"
-        folder = core.SRC / base
+        folder = DT.src_dir(dtype) / base
         folder.mkdir(parents=True)
         core.atomic_write(folder / f"{base}.md", core.doc_to_md(doc))
-        core.atomic_write(folder / f"{pid.lower()}-{core.slug(name)}.drawio", core.flow_to_drawio(p["flow"], pid, name))
+        if has_flow: core.atomic_write(folder / f"{pid.lower()}-{core.slug(name)}.drawio", core.flow_to_drawio(p["flow"], pid, name))
         for n, data in images.items():
             (folder / core.IMG_DIR).mkdir(exist_ok=True); (folder / core.IMG_DIR / n).write_bytes(data)
-        save_refs(pid, p["refs"])
+        save_refs(pid, p["refs"] if has_flow else None)
         set_link(pid, tkey)
+        open_db().drop_doc_meta(pid)
+        if summary["folder"] and DT.info(dtype)["folders"] and can(u, f"{dtype}.folders"):
+            open_db().set_doc_folder(pid, dtype, open_db().ensure_path(dtype, summary["folder"]))
+        FOLDER_GEN[0] += 1
         LIB.invalidate(pid)
         snapshot(folder, pid, u, "importacao", f"Importado de {p['meta'].get('gerado_por') or 'arquivo'}" + (f" ({p['id']})" if p["id"] and p["id"] != pid else ""))
-    audit(u["login"], "playbook_importado", pid, origem=p["meta"].get("gerado_por", ""), id_original=p["id"], template=tkey,
+    audit(u["login"], "playbook_importado" if dtype == "playbook" else "documento_importado", pid, tipo=dtype,
+          origem=p["meta"].get("gerado_por", ""), id_original=p["id"], template=tkey,
           substituiu="sim" if existing else "", times_no_template=", ".join(sorted(p["createTeams"])))
     h.send_json({"ok": True, "playbook": load_pb(folder), "teams": core.load_teams(), "summary": summary})
 
@@ -1122,7 +1255,7 @@ def r_md(h, **_):
     text = str(b.get("md", ""))
     if len(text.encode("utf-8")) > MAX_MD: raise HttpError(400, "Documento grande demais (máx. 2 MB)")
     text = text.replace("\r\n", "\n").lstrip("\ufeff")
-    if not re.match(r"^\s*#\s+\S", text): raise HttpError(400, "A primeira linha precisa ser o título do playbook: # PB-00 — Nome")
+    if not re.match(r"^\s*#\s+\S", text): raise HttpError(400, "A primeira linha precisa ser o título: # PB-00 — Nome")
     doc = core.parse_md(text.lstrip())
     if not doc["title"].strip(): raise HttpError(400, "O título não pode ficar vazio")
     if not doc["sections"]: raise HttpError(400, "O documento precisa de pelo menos uma seção (## Título da seção)")
@@ -1198,7 +1331,8 @@ def r_logo_get(h, **_):
 def r_admin_summary(h, **_):
     h.require("app.reset")
     db = open_db()
-    h.send_json({"playbooks": len(core.all_folders()), "templates": len(tpl._files()), "users": len(db.list_users()),
+    h.send_json({"playbooks": len(core.all_folders("playbook")), "documents": {t: len(core.all_folders(t)) for t in DT.TYPES},
+                 "templates": len(tpl._files()), "users": len(db.list_users()),
                  "versions": db.count_all_versions(), "audit": db.count_audit(), "word": RESET_WORD})
 
 def r_admin_reset(h, **_):
@@ -1215,10 +1349,11 @@ def r_admin_reset(h, **_):
         dest.mkdir(parents=True)
         db.backup_to(dest / "playbooks.db")
         moved = []
-        for src, name in ((core.SRC, "playbooks"), (tpl.TPL_DIR, "templates"), (core.MAPPINGS_FILE, "mappings.json"), (BACKUPS, ".backups"),
+        for src, name in ((core.SRC, "playbooks"), (DT.src_dir("runbook"), "runbooks"), (DT.src_dir("doc"), "documentos"),
+                          (tpl.TPL_DIR, "templates"), (core.MAPPINGS_FILE, "mappings.json"), (BACKUPS, ".backups"),
                           *(((DATA_DIR / "logs", "logs"),) if opts["audit"] else ())):
             if Path(src).exists(): shutil.move(str(src), str(dest / name)); moved.append(name)
-        core.SRC.mkdir(parents=True, exist_ok=True)
+        for t in DT.TYPES: DT.src_dir(t).mkdir(parents=True, exist_ok=True)
         tpl.ensure_seed()
         db.reset(u["login"], **opts)
         LIB.invalidate()
@@ -1236,7 +1371,10 @@ def r_admin_reset(h, **_):
 
 def r_tpl_list(h, **_):
     h.require(any_of=("templates.view",) + any_type("create"))
-    h.send_json({"templates": tpl.list_all(core.load_teams()), "variables": tpl.VARIABLES})
+    kind = h.query().get("kind") or None
+    if kind and kind not in DT.TYPES: raise HttpError(400, "tipo de template inválido")
+    h.send_json({"templates": tpl.list_all(core.load_teams(), kind), "variables": tpl.VARIABLES, "variablesDoc": tpl.VARIABLES_DOC,
+                 "defaults": tpl.DEFAULT_KEYS})
 
 def r_tpl_get(h, tkey, **_):
     h.require(any_of=("templates.view",) + any_type("create"))
@@ -1264,17 +1402,23 @@ def r_tpl_doc(h, tkey, **_):
         raise HttpError(400, "documento inválido")
     t = tpl.load(tkey); _tpl_check(t, b.get("rev"))
     old, t["doc"] = t["doc"], core.parse_md(core.doc_to_md(doc))
-    changes = ramos.sync_from_doc(t["flow"], t.setdefault("refs", {}), old, t["doc"])
+    changes = ramos.sync_from_doc(t["flow"], t.setdefault("refs", {}), old, t["doc"]) if t.get("kind", "playbook") == "playbook" else []
     _tpl_save(h, u, tkey, t, "template_documento_salvo", sync=changes)
 
 def r_tpl_flow(h, tkey, **_):
     u = h.require("templates.edit"); b = h.body()
     flow, refs = b.get("flow") or {}, b.get("refs") or {}
-    validate_flow(flow)
-    t = tpl.load(tkey); _tpl_check(t, b.get("rev"))
+    t = tpl.load(tkey)
+    kind = t.get("kind", "playbook")
+    if kind == "doc": raise HttpError(400, "Templates de documento não têm fluxograma")
+    _tpl_check(t, b.get("rev"))
+    if kind == "runbook" and not flow.get("nodes"):         # "Incluir fluxograma" desmarcado: o template volta a não ter
+        flow = {"subtitle": "", "lanes": [], "nodes": [], "edges": []}
+    else:
+        validate_flow(flow)
     ids = {n["id"] for n in flow["nodes"]}
     refs = {k: [str(x) for x in v] for k, v in refs.items() if k in ids and isinstance(v, list) and v}
-    changes = ramos.sync_from_flow(t["doc"], t["flow"], t.get("refs", {}), flow, refs)
+    changes = ramos.sync_from_flow(t["doc"], t["flow"], t.get("refs", {}), flow, refs) if kind == "playbook" else []
     t["flow"], t["refs"] = flow, refs
     added = tpl.sync_teams(t, core.load_teams())
     _tpl_save(h, u, tkey, t, "template_fluxograma_salvo", sync=changes, **({"times_adicionados": ", ".join(added)} if added else {}))
@@ -1282,6 +1426,7 @@ def r_tpl_flow(h, tkey, **_):
 def r_tpl_ramos(h, tkey, **_):
     u = h.require("templates.edit"); b = h.body()
     t = tpl.load(tkey); _tpl_check(t, b.get("rev"))
+    if t.get("kind", "playbook") != "playbook": raise HttpError(400, "Só templates de playbook têm ramos")
     if tpl.has_ramos(t): raise HttpError(400, "Este template já tem ramos")
     tpl.add_ramos(t)
     _tpl_save(h, u, tkey, t, "template_ramos_adicionados", sync=["ramo-protótipo criado no documento e no fluxograma"])
@@ -1293,7 +1438,16 @@ def r_tpl_meta(h, tkey, **_):
     if not name: raise HttpError(400, "informe o nome do template")
     t.update(name=name, description=str(b.get("description", t.get("description", "")))[:300],
              owner=str(b.get("owner", t.get("owner", "")))[:60], nist=str(b.get("nist", t.get("nist", "")))[:200])
-    _tpl_save(h, u, tkey, t, "template_alterado")
+    detail = {}
+    if "fields" in b and t.get("kind", "playbook") != "playbook":
+        old = {f["key"] for f in t.get("fields", [])}
+        t["fields"] = tpl.clean_fields(b["fields"])
+        new = {f["key"] for f in t["fields"]}
+        detail.update(campos_adicionados=", ".join(sorted(new - old)), campos_removidos=", ".join(sorted(old - new)))
+    if "folders" in b and t.get("kind", "playbook") != "playbook":
+        t["folders"] = tpl.clean_folders(b["folders"])
+        detail["pastas"] = len(t["folders"])
+    _tpl_save(h, u, tkey, t, "template_alterado", **detail)
 
 def r_tpl_teams(h, tkey, **_):
     """Times e tags do template (lista completa). Não deixa tirar um time em uso no template ou nos playbooks dele."""
@@ -1317,7 +1471,9 @@ def r_tpl_create(h, **_):
     u = h.require("templates.edit"); b = h.body()
     name = str(b.get("name", "")).strip()[:60]
     if not name: raise HttpError(400, "informe o nome do template")
-    base = tpl.load(b["from"]) if b.get("from") else tpl.blank(name)
+    kind = str(b.get("kind") or "playbook")
+    if kind not in DT.TYPES: raise HttpError(400, "tipo de template inválido")
+    base = tpl.load(b["from"]) if b.get("from") else tpl.blank(name, kind=kind)
     t = {k: v for k, v in base.items() if k not in ("key", "rev")}
     t.update(name=name, description=str(b.get("description", "")).strip()[:300] or (f"Cópia de {base['name']}" if b.get("from") else ""))
     key = tpl.key_for(name)
@@ -1327,13 +1483,15 @@ def r_tpl_delete(h, tkey, **_):
     u = h.require("templates.delete")
     f = tpl.path_of(tkey)
     if not f.exists(): raise HttpError(404, "template não encontrado")
-    if tkey == tpl.DEFAULT_KEY: raise HttpError(400, "O template Padrão não pode ser excluído (é o template inicial da instalação)")
+    if tkey in tpl.DEFAULT_KEYS.values(): raise HttpError(400, "Os templates padrão não podem ser excluídos (são os iniciais de cada tipo)")
+    kind = tpl.kind_for(tkey) or "playbook"
+    to = tpl.default_key(kind)
     with LOCK:
-        # playbooks do template excluído passam para o Padrão, que recebe os times e tags que faltarem
+        # documentos do template excluído passam para o padrão do tipo, que recebe os times e tags que faltarem
         lk, moved = links(), []
         for pid, k in list(lk.items()):
-            if k == tkey: lk[pid] = tpl.DEFAULT_KEY; moved.append(pid)
-        if moved: add_template_teams(tpl.DEFAULT_KEY, tpl.teams_of_file(f))
+            if k == tkey: lk[pid] = to; moved.append(pid)
+        if moved and kind != "doc": add_template_teams(to, tpl.teams_of_file(f))
         open_db().set_setting("pb_templates", lk)
         dest = TRASH / "templates"; dest.mkdir(parents=True, exist_ok=True)
         shutil.move(str(f), str(dest / f"{f.name}__{time.strftime('%Y%m%d-%H%M%S')}"))
@@ -1549,6 +1707,101 @@ def r_role_delete(h, **_):
     n = db.delete_role(key, reassign)
     audit(u["login"], "papel_excluido", f"papel:{key}", nome=cur["name"], usuarios=n, **({"realocados_para": reassign} if n else {}))
     h.send_json({"ok": True, "moved": n})
+
+# ───────────────────────── rotas: pastas ─────────────────────────
+# Árvore por tipo de documento (runbook, doc). Estrutura: permissão T.folders. Mover documento: T.edit.
+# Mover não gera versão: a pasta é do banco, o arquivo continua no mesmo lugar.
+
+def folder_type(t):
+    if t not in DT.TYPES or not DT.info(t)["folders"]: raise HttpError(400, "Este tipo de documento não usa pastas")
+    return t
+
+def folder_id(h):
+    m = re.search(r"/api/folders/(\d+)", h.path)
+    f = open_db().folder(int(m.group(1))) if m else None
+    if not f: raise HttpError(404, "pasta não encontrada")
+    return f
+
+def parent_arg(v):
+    if v in (None, "", "none"): return None
+    if not str(v).isdigit(): raise HttpError(400, "pasta inválida")
+    return int(v)
+
+def r_folders(h, **_):
+    u = h.require(); t = folder_type(h.query().get("type") or "")
+    if not can(u, f"{t}.view"): raise HttpError(403, "Seu perfil não tem permissão para esta ação")
+    vis = summary_visible(u)
+    fmap = open_db().doc_folders(t)
+    direct = {}
+    unfiled = 0
+    for s in LIB.summaries(vis, dtype=t):
+        fid = fmap.get(s["id"])
+        if fid is None: unfiled += 1
+        else: direct[fid] = direct.get(fid, 0) + 1
+    fs = open_db().folders(t)
+    kids = {}
+    for f in fs: kids.setdefault(f["parent_id"], []).append(f["id"])
+    def total(fid): return direct.get(fid, 0) + sum(total(k) for k in kids.get(fid, []))
+    h.send_json({"folders": [{"id": f["id"], "name": f["name"], "parentId": f["parent_id"], "position": f["position"],
+                              "count": direct.get(f["id"], 0), "total": total(f["id"])} for f in fs],
+                 "unfiled": unfiled, "canManage": can(u, f"{t}.folders")})
+
+def r_folder_create(h, **_):
+    b = h.body(); t = folder_type(str(b.get("type") or ""))
+    u = h.require(f"{t}.folders")
+    f = open_db().create_folder(t, b.get("name"), parent_arg(b.get("parent_id")))
+    FOLDER_GEN[0] += 1
+    audit(u["login"], "pasta_criada", f"pasta:{f['id']}", tipo=t, caminho=open_db().folder_path(f["id"]))
+    h.send_json({"folder": f})
+
+def r_folder_update(h, **_):
+    cur = folder_id(h); b = h.body()
+    u = h.require(f"{cur['type']}.folders")
+    before = open_db().folder_path(cur["id"])
+    kw = {}
+    if "name" in b: kw["name"] = b["name"]
+    if "parent_id" in b: kw["parent_id"] = parent_arg(b["parent_id"])
+    if "position" in b:
+        try: kw["position"] = int(b["position"])
+        except (TypeError, ValueError): raise HttpError(400, "posição inválida")
+    f = open_db().update_folder(cur["id"], **kw)
+    FOLDER_GEN[0] += 1
+    after = open_db().folder_path(f["id"])
+    if f["name"] != cur["name"]: audit(u["login"], "pasta_renomeada", f"pasta:{f['id']}", de=before, para=after)
+    if f["parent_id"] != cur["parent_id"]: audit(u["login"], "pasta_movida", f"pasta:{f['id']}", de=before, para=after)
+    h.send_json({"folder": f})
+
+def r_folder_delete(h, **_):
+    cur = folder_id(h); b = h.body()
+    u = h.require(f"{cur['type']}.folders")
+    path = open_db().folder_path(cur["id"])
+    r = open_db().delete_folder(cur["id"], parent_arg(b["moveTo"]) if "moveTo" in b else ...)
+    FOLDER_GEN[0] += 1
+    audit(u["login"], "pasta_excluida", f"pasta:{cur['id']}", caminho=path, documentos_movidos=r["docs"], subpastas_movidas=r["subs"])
+    h.send_json({"ok": True, **r})
+
+def r_doc_move(h, pid, **_):
+    u = h.require(doc_perm(pid, "edit")); b = h.body()
+    t = folder_type(doc_type(pid))
+    get_folder(pid)
+    before = doc_folder_path(pid)
+    open_db().set_doc_folder(pid, t, parent_arg(b.get("folder_id")))
+    FOLDER_GEN[0] += 1
+    audit(u["login"], "documento_movido", pid, de=before or "Sem pasta", para=doc_folder_path(pid) or "Sem pasta")
+    h.send_json({"ok": True, "folderId": parent_arg(b.get("folder_id"))})
+
+def r_folders_from_template(h, **_):
+    b = h.body(); t = folder_type(str(b.get("type") or ""))
+    u = h.require(f"{t}.folders")
+    key = str(b.get("template") or tpl.default_key(t))
+    tt = tpl.load(key)
+    if tt.get("kind") != t: raise HttpError(400, "Template de outro tipo")
+    before = len(open_db().folders(t))
+    for path in tt.get("folders", []): open_db().ensure_path(t, path)
+    made = len(open_db().folders(t)) - before
+    FOLDER_GEN[0] += 1
+    audit(u["login"], "pastas_do_template", f"template:{key}", tipo=t, criadas=made)
+    h.send_json({"ok": True, "created": made})
 
 # ───────────────────────── rotas: governança ─────────────────────────
 
@@ -1804,7 +2057,7 @@ def version_meta(v):
 
 def version_view(folder, pid, v):
     doc = core.parse_md(v["md"])
-    flow = core.drawio_to_flow(v["drawio"]) if v["drawio"].strip() else {"subtitle": "", "lanes": core.lanes_of({}), "nodes": [], "edges": []}
+    flow = core.drawio_to_flow(v["drawio"]) if v["drawio"].strip() else core.empty_flow(doc_type(pid))
     key = v.get("template") if v.get("template") and tpl.KEY_RE.fullmatch(v["template"]) and tpl.path_of(v["template"]).exists() else template_of(pid)
     teams = template_teams(key)
     view = core.build_view(pid, folder.name, doc, flow, v["refs"], teams)
@@ -1924,6 +2177,9 @@ ROUTES = {
     ("GET", "/api/roles"): r_roles, ("POST", "/api/roles"): r_role_create,
     ("PUT", "/api/roles/{role}"): r_role_update, ("DELETE", "/api/roles/{role}"): r_role_delete,
     ("GET", "/api/governance"): r_governance_get, ("PUT", "/api/governance"): r_governance_put,
+    ("POST", "/api/doc"): r_doc_create, ("GET", "/api/doc/next-id"): r_doc_next_id, ("PUT", "/api/pb/{pb}/folder"): r_doc_move,
+    ("GET", "/api/folders"): r_folders, ("POST", "/api/folders"): r_folder_create, ("POST", "/api/folders/from-template"): r_folders_from_template,
+    ("PUT", "/api/folders/{f}"): r_folder_update, ("DELETE", "/api/folders/{f}"): r_folder_delete,
     ("GET", "/api/pb/{pb}/export"): r_pb_export, ("GET", "/api/export"): r_export_all, ("POST", "/api/import"): r_import,
     ("POST", "/api/flow/parse"): r_flow_parse, ("POST", "/api/md"): r_md, ("POST", "/api/flow/render"): r_flow_render,
     ("GET", "/api/branding"): r_brand_get, ("PUT", "/api/branding"): r_brand_put,
@@ -1987,9 +2243,9 @@ def main():
     a = p.parse_args()
     SECURE_COOKIES = a.secure_cookies
     port = a.port_pos or a.port
-    if tpl.ensure_seed():
-        print("Template \"Padrão\" criado em", tpl.TPL_DIR)
-    core.SRC.mkdir(parents=True, exist_ok=True)
+    made = tpl.ensure_seed()
+    if made: print("Templates criados em", tpl.TPL_DIR, ":", ", ".join(made))
+    for t in DT.TYPES: DT.src_dir(t).mkdir(parents=True, exist_ok=True)
     bootstrap_admin()
     global FWD
     FWD = logfwd.Forwarder(log_cfg, DATA_DIR / "logs")

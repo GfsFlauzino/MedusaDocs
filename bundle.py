@@ -44,21 +44,39 @@ def referenced_teams(view, teams):
     return {n: teams[n] for n in sorted(names) if n in teams}
 
 
-def export(view, teams, user_name, app_name, images=None):
+def export(view, teams, user_name, app_name, images=None, folder_path=""):
+    """folder_path: caminho da pasta do documento ("Por ferramenta/EDR"), para a importação recriar a organização."""
     g = view["gov"]
-    fm = {"format": FORMAT, "version": VERSION, "id": view["id"], "name": view["name"],
+    dtype = view.get("type") or "playbook"
+    fm = {"format": FORMAT, "version": VERSION, "id": view["id"], "type": dtype, "name": view["name"], **({"folder": folder_path} if folder_path else {}),
           "status_origem": g["status"], "aprovador_origem": g.get("approver") or "",
           "exportado_em": datetime.now().isoformat(timespec="seconds"), "exportado_por": user_name, "gerado_por": app_name}
     front = "---\n" + "".join(f"{k}: {str(v).replace(chr(10), ' ')}\n" for k, v in fm.items()) + "---\n\n"
     md = core.doc_to_md(view["doc"])
+    imgs = f"\n<!-- medusa:images\n{json.dumps(images, indent=0)}\n-->\n" if images else ""
+    if not view["flow"].get("nodes") and dtype != "playbook":       # runbook sem fluxograma, documento
+        return f"{front}{md}{imgs}"
     tm = json.dumps(referenced_teams(view, teams), ensure_ascii=False, indent=2).replace("-->", "-- >")
     flow = flowdsl.render(view["flow"], view["refs"])
-    imgs = f"\n<!-- medusa:images\n{json.dumps(images, indent=0)}\n-->\n" if images else ""
     return f"{front}{md}\n<!-- medusa:teams\n{tm}\n-->\n\n<!-- medusa:flow -->\n```mermaid\n{flow}```\n{imgs}"
 
 
-def parse(text, teams):
-    """Lê um .medusa.md (ou .md comum). Não grava nada: devolve o que seria importado."""
+def _json_block(text, name, warns, kind):
+    """Bloco <!-- medusa:<name> … --> com JSON: devolve (valor, texto sem o bloco)."""
+    m = re.search(rf"<!--\s*medusa:{name}\s*\n?(.*?)\n?-->", text, re.S)
+    if not m: return None, text
+    try:
+        v = json.loads(m.group(1))
+        if not isinstance(v, kind): raise ValueError
+    except ValueError:
+        warns.append(f"Bloco {name} ilegível; ignorado."); v = None
+    return v, text[:m.start()] + text[m.end():]
+
+
+def parse(text, teams, dtype=None):
+    """Lê um .medusa.md (ou .md comum). Não grava nada: devolve o que seria importado.
+    dtype: tipo de documento esperado (playbook, runbook, doc); sem fluxograma no arquivo, só o playbook ganha o
+    fluxo inicial (caixa "Alerta")."""
     if len(text.encode("utf-8")) > MAX_SIZE: raise BundleError(f"Arquivo grande demais (máx. {MAX_SIZE // 1024 // 1024} MB)")
     text = text.replace("\r\n", "\n").lstrip("﻿")
     meta, warns = {}, []
@@ -80,6 +98,9 @@ def parse(text, teams):
         except ValueError:
             warns.append("Bloco de imagens ilegível; ignorado.")
         text = text[:im.start()] + text[im.end():]
+    # campos e pastas (templates de runbook e documento)
+    fields, text = _json_block(text, "fields", warns, list)
+    folders, text = _json_block(text, "folders", warns, list)
     # times
     team_defs = {}
     tm = re.search(r"<!--\s*medusa:teams\s*\n(.*?)\n-->", text, re.S)
@@ -102,7 +123,7 @@ def parse(text, teams):
     # documento
     if not re.match(r"^\s*#\s+\S", text): raise BundleError("O documento precisa começar com um título (# PB-00 — Nome)")
     doc = core.parse_md(text.strip() + "\n")
-    tid = re.match(r"(PB-\d{2,3})\s*[—-]\s*(.+)$", doc["title"])
+    tid = re.match(r"((?:PB|RB|DOC)-\d{2,4})\s*[—-]\s*(.+)$", doc["title"])
     pid = (meta.get("id") or (tid.group(1) if tid else "")).upper()
     name = meta.get("name") or (tid.group(2).strip() if tid else doc["title"])
     if not doc["sections"]: warns.append("O documento não tem seções (##).")
@@ -113,11 +134,13 @@ def parse(text, teams):
         except flowdsl.FlowSyntaxError as e:
             raise BundleError(f"Fluxograma: {e}")
         warns += [w for w in fw if "não existe no cadastro" not in w]
-    else:
+    elif (dtype or meta.get("type") or "playbook") == "playbook":
         flow, refs = {"subtitle": "", "lanes": core.lanes_of({}), "edges": [],
                       "nodes": [{"id": "alerta", "lane": "n1", "x": 68.0, "y": 34.0, "w": 96.0, "h": 48.0, "type": "start",
                                  "lines": [{"t": "Alerta", "s": "n"}]}]}, {}
         warns.append("Sem fluxograma no arquivo: será criado um fluxo inicial vazio.")
+    else:
+        flow, refs = {"subtitle": "", "lanes": [], "nodes": [], "edges": []}, {}
     # times que precisam ser criados
     needed = {l["team"]: "central" for l in flow["lanes"] if l.get("team")}
     needed.update({n["team"]: "apoio" for n in flow["nodes"] if n.get("team") and n["team"] not in needed})
@@ -133,4 +156,4 @@ def parse(text, teams):
                          "never": [str(x)[:300] for x in d.get("never", [])][:30] if isinstance(d.get("never"), list) else [],
                          "category": cat}
     return {"meta": meta, "id": pid, "name": name, "doc": doc, "flow": flow, "refs": refs, "createTeams": create, "warnings": warns,
-            "teamDefs": team_defs, "images": images}
+            "teamDefs": team_defs, "images": images, "fields": fields, "folders": folders}

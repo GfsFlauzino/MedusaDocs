@@ -13,14 +13,16 @@ As estruturas devolvidas são compartilhadas: quem chama não pode alterá-las.
 Resumos e textos de busca também são gravados em data/cache/biblioteca.json: depois de reiniciar, os
 documentos cuja assinatura não mudou não precisam ser interpretados de novo (o boot fica instantâneo).
 """
-import hashlib, json, os, re, sys, threading, time, unicodedata
+import hashlib, json, os, re, sys, threading, time
+
+import doctypes as DT, unicodedata
 from collections import OrderedDict
 from pathlib import Path
 
-PID_RE = re.compile(r"^(PB-\d+)-")
+PID_RE = re.compile(r"^((?:PB|RB|DOC)-\d+)-")
 SCAN_EVERY = 1.0
 VIEW_CACHE = 256
-PERSIST_FORMAT = 1
+PERSIST_FORMAT = 2              # 2: resumos com tipo, campos e fluxograma opcional
 PERSIST_EVERY = 30              # segundos entre gravações do cache em disco (só se algo mudou)
 
 
@@ -47,13 +49,16 @@ class Entry:
     __slots__ = ("pid", "type", "sig", "summary", "search_docs")
 
     def __init__(self, pid, sig, summary, search_docs):
-        self.pid, self.type, self.sig, self.summary, self.search_docs = pid, "playbook", sig, summary, search_docs
+        self.pid, self.type, self.sig, self.summary, self.search_docs = pid, DT.type_of(pid) or "playbook", sig, summary, search_docs
 
 
-def summary_of(v):
+def summary_of(v, fields_schema=None, core=None):
     g = v["gov"]
     props = v.get("props", {})
-    return {"id": v["id"], "type": "playbook", "slug": v["slug"], "name": v["name"], "status": g["status"],
+    t = v.get("type") or "playbook"
+    fields = core.get_fields(v["doc"], fields_schema, DT.info(t)["props_title"]) if fields_schema and core else {}
+    return {"id": v["id"], "type": t, "slug": v["slug"], "name": v["name"], "status": g["status"], "fields": fields,
+            "hasFlow": bool(v.get("hasFlow", True)),
             "version": (props.get("Versão") or "").split(" ")[0], "templateKey": v.get("templateKey"), "templateName": v.get("templateName"),
             "reviewed": g.get("reviewed", ""), "reviewer": g.get("reviewer", ""), "approver": g.get("approver", ""),
             "gov": g, "ramos": len(v["ramos"]), "steps": len(v["steps"]), "rev": v.get("rev"),
@@ -117,10 +122,11 @@ class Library:
             now = time.monotonic()
             if not force and now - self._scanned < SCAN_EVERY: return
             self._scanned = now
-            try:
-                dirs = sorted((e for e in os.scandir(self.core.SRC) if e.is_dir()), key=lambda e: e.name)
-            except FileNotFoundError:
-                dirs = []
+            dirs = []
+            for t in DT.TYPES:
+                try: dirs += [e for e in os.scandir(DT.src_dir(t)) if e.is_dir() and e.name.startswith(DT.TYPES[t]["prefix"] + "-")]
+                except FileNotFoundError: pass
+            dirs.sort(key=lambda e: e.name)
             _, _, hashes = self._mappings()
             lk = self.links()
             tsigs, found = {}, {}
@@ -181,7 +187,7 @@ class Library:
                     if self._found.get(pid, (None, None))[1] == sig: self._entries[pid] = e
                 return e, None
             v = self._build(pid, folder, sig)
-            e = Entry(pid, sig, summary_of(v), search_docs_of(v))
+            e = Entry(pid, sig, summary_of(v, self.tpl.fields_for(sig[3]), self.core), search_docs_of(v))
             with self._lock:
                 if self._found.get(pid, (None, None))[1] == sig:
                     self._entries[pid] = e
@@ -224,7 +230,9 @@ class Library:
             self.ready.wait(timeout=30)
         return [e for e in (self.entry(p) for p in self.pids()) if e]
 
-    def summaries(self, visible=None, status=None):
+    def summaries(self, visible=None, status=None, dtype=None):
+        if dtype: return [e.summary for e in self.entries() if e.type == dtype and (visible is None or visible(e.summary))
+                          and (not status or e.summary["status"] == status)]
         return [e.summary for e in self.entries() if (visible is None or visible(e.summary)) and (not status or e.summary["status"] == status)]
 
     def search(self, q, visible=None, limit=30):

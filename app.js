@@ -406,7 +406,7 @@ async function logout() {
 function renderSide() {
   const key = (location.hash.replace(/^#\/?/, "").split("/")[0] || "").toLowerCase();
   const on = k => (k === "home" ? (!key || /^pb-\d+$/.test(key) || key === "novo") : key === k) ? "on" : "";
-  $("#sideNav").innerHTML = !App.user ? "" : `<a href="#/" class="${on("home")}">${ic("playbooks")}<span>Playbooks</span><small>${PBS.length}</small></a>
+  $("#sideNav").innerHTML = !App.user ? "" : `<a href="#/" class="${on("home")}">${ic("playbooks")}<span>Playbooks</span><small>${PBS.filter(p => p.type === "playbook").length}</small></a>
     ${can("templates.view") ? `<a href="#/templates" class="${on("templates")}">${ic("templates")}<span>Templates</span></a>` : ""}
     ${canAdmin() ? `<a href="#/admin" class="${on("admin")}">${ic("settings")}<span>Administração</span></a>` : ""}`;
 }
@@ -634,7 +634,7 @@ async function renderHome() {
   const seq = ++routeSeq, st = homeFilter === "Todos" ? "" : homeFilter;
   let d;
   try {
-    [d] = await Promise.all([api("GET", `api/library?limit=${homeLimit}${st ? "&status=" + encodeURIComponent(st) : ""}`), refreshIndex()]);
+    [d] = await Promise.all([api("GET", `api/library?type=playbook&limit=${homeLimit}${st ? "&status=" + encodeURIComponent(st) : ""}`), refreshIndex()]);
   } catch (e) { if (seq === routeSeq && e.status !== 401) view.innerHTML = `<div class="wrap"><div class="err">${esc(e.message)}</div></div>`; return; }
   if (seq !== routeSeq) return;
   renderSide(); Tabs.render();
@@ -1479,7 +1479,8 @@ const Exporter = (() => {
 
 /* ───────── templates ───────── */
 const TemplatesPage = (() => {
-  let current = null, vars = [];
+  let current = null, vars = [], varsDoc = [], kindFilter = "";
+  const KIND_LBL = { playbook: "Playbook", runbook: "Runbook", doc: "Documento" };
   const adapter = v => ({
     saveDoc: (doc, rev) => api("PUT", `api/templates/${v.key}/doc`, { doc, rev }).then(Editor.withSync),
     saveFlow: (flow, refs, rev) => api("PUT", `api/templates/${v.key}/flow`, { flow, refs, rev }).then(r => { if (r.allTeams) setTeams(r.allTeams); return Editor.withSync(r); }),
@@ -1500,36 +1501,47 @@ const TemplatesPage = (() => {
       <div class="wrap" id="tlist"><div class="empty">Carregando…</div></div>`;
     let data;
     try { data = await api("GET", "api/templates"); } catch (e) { $("#tlist").innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
-    vars = data.variables;
-    $("#tlist").innerHTML = `<div class="cards">${data.templates.map(t => t.error ? `<div class="card"><h3>${esc(t.name)}</h3><div class="err">${esc(t.error)}</div></div>` : `
-      <div class="card tpl-card"><div class="card-top"><span class="id">TEMPLATE</span>${t.key === "padrao" ? `<span class="tag">padrão</span>` : ""}</div>
+    vars = data.variables; varsDoc = data.variablesDoc || [];
+    const shown = data.templates.filter(t => !kindFilter || t.kind === kindFilter);
+    $("#tlist").innerHTML = `<div class="home-bar"><div class="filters">${[["", "Todos"], ["playbook", "Playbooks"], ["runbook", "Runbooks"], ["doc", "Documentos"]].map(([k, l]) =>
+        `<button class="${k === kindFilter ? "on" : ""}" data-kf="${k}">${l} <span class="cnt">${data.templates.filter(t => !k || t.kind === k).length}</span></button>`).join("")}</div></div>
+      <div class="cards">${shown.map(t => t.error ? `<div class="card"><h3>${esc(t.name)}</h3><div class="err">${esc(t.error)}</div></div>` : `
+      <div class="card tpl-card"><div class="card-top"><span class="id">${esc(KIND_LBL[t.kind] || "Template").toUpperCase()}</span>${t.default ? `<span class="tag">padrão</span>` : ""}</div>
         <h3>${esc(t.name)}</h3><p>${esc(t.description || "Sem descrição.")}</p>
-        <div class="meta"><span class="chip">${t.sections} seções</span><span class="chip">${t.nodes} caixas</span><span class="chip">${t.teams.length} times</span>${t.usesRamos ? `<span class="chip">usa ramos</span>` : ""}</div>
-        <div class="govline">${t.lanes.map(esc).join(" · ")}<br><span class="muted">${esc(upd(t))}</span></div>
+        <div class="meta"><span class="chip">${t.sections} seções</span>${t.hasFlow ? `<span class="chip">${t.nodes} caixas</span><span class="chip">${t.teams.length} times</span>` : ""}${t.usesRamos ? `<span class="chip">usa ramos</span>` : ""}${t.fields.length ? `<span class="chip">${t.fields.length} campos</span>` : ""}${t.folders.length ? `<span class="chip">${t.folders.length} pastas</span>` : ""}</div>
+        <div class="govline">${t.hasFlow ? t.lanes.map(esc).join(" · ") + "<br>" : ""}<span class="muted">${esc(upd(t))}</span></div>
         <div class="row-btns" style="margin-top:12px"><a class="btn primary xs" href="#/templates/${esc(t.key)}/geral">Abrir</a>
           <button class="btn ghost xs" data-dup="${esc(t.key)}">Duplicar</button><a class="btn ghost xs" href="api/templates/${esc(t.key)}/export" download>${ic("download")}Exportar</a>
-          ${can("templates.delete") && t.key !== "padrao" ? `<button class="btn danger xs" data-del="${esc(t.key)}">Excluir</button>` : ""}</div></div>`).join("")}</div>`;
+          ${can("templates.delete") && !t.default ? `<button class="btn danger xs" data-del="${esc(t.key)}">Excluir</button>` : ""}</div></div>`).join("")}</div>`;
     const reload = () => list(root);
+    $("#tlist").querySelector(".filters").onclick = e => { const b = e.target.closest("[data-kf]"); if (b) { kindFilter = b.dataset.kf; reload(); } };
     $("#tNew").onclick = () => newDialog(data.templates, null, reload);
     $("#tImp").onclick = () => importDialog(reload);
     root.querySelectorAll("[data-dup]").forEach(b => b.onclick = () => newDialog(data.templates, b.dataset.dup, reload));
     root.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
-      if (!(await ask("Excluir este template? Ele vai para a lixeira do servidor. Os playbooks criados com ele passam para o template Padrão, que recebe os times que eles usam.", { title: "Excluir template", ok: "Excluir", danger: true }))) return;
-      try { const r = await api("DELETE", `api/templates/${b.dataset.del}`); toast(`Template excluído${r.moved.length ? ` · ${r.moved.join(", ")} agora usa(m) o Padrão` : ""}`); refreshData(); } catch (e) { toast(e.message, "err"); }
+      if (!(await ask("Excluir este template? Ele vai para a lixeira do servidor. Os documentos criados com ele passam para o template padrão do tipo, que recebe os times que eles usam.", { title: "Excluir template", ok: "Excluir", danger: true }))) return;
+      try { const r = await api("DELETE", `api/templates/${b.dataset.del}`); toast(`Template excluído${r.moved.length ? ` · ${r.moved.join(", ")} agora usa(m) o padrão` : ""}`); refreshData(); } catch (e) { toast(e.message, "err"); }
     });
   }
   function newDialog(all, from, done) {
+    const src = all.find(t => t.key === from);
+    const kind0 = src ? src.kind : (kindFilter || "playbook");
+    const fromOpts = k => `<option value="">${k === "playbook" ? "Em branco (alerta, ramos e times SOC N1, SOC N2 e CSIRT)" : "Em branco (propriedades e uma seção)"}</option>` +
+      all.filter(t => !t.error && t.kind === k).map(t => `<option value="${esc(t.key)}" ${t.key === (from || "") ? "selected" : ""}>Cópia de ${esc(t.name)}</option>`).join("");
     modal({ title: from ? "Duplicar template" : "Novo template", html: `<form id="tnForm" class="tform">
-        <label>Nome<input class="in" name="name" required maxlength="60" value="${from ? esc((all.find(t => t.key === from) || {}).name + " (cópia)") : ""}" placeholder="ex.: CSIRT parceiro, Fraude, OT"></label>
-        <label>Começar de<select class="in" name="from"><option value="">Em branco (alerta, ramos e times SOC N1, SOC N2 e CSIRT)</option>${all.filter(t => !t.error).map(t => `<option value="${esc(t.key)}" ${t.key === (from || "") ? "selected" : ""}>Cópia de ${esc(t.name)}</option>`).join("")}</select></label>
+        <label>Nome<input class="in" name="name" required maxlength="60" value="${from ? esc((src || {}).name + " (cópia)") : ""}" placeholder="ex.: CSIRT parceiro, Fraude, OT"></label>
+        <label>Tipo de documento<select class="in" name="kind" ${from ? "disabled" : ""}>${Object.entries(KIND_LBL).map(([k, l]) => `<option value="${k}" ${k === kind0 ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+        <label>Começar de<select class="in" name="from">${fromOpts(kind0)}</select></label>
         <label>Descrição<input class="in" name="description" maxlength="300"></label>
         <div class="err" id="tnErr" hidden></div>
         <div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn primary" type="submit">Criar</button></div></form>`,
       onMount: (b, close) => {
         b.querySelector("[data-cancel]").onclick = close;
-        $("#tnForm", b).onsubmit = async e => {
+        const form = $("#tnForm", b);
+        form.kind.onchange = () => { form.from.innerHTML = fromOpts(form.kind.value); };
+        form.onsubmit = async e => {
           e.preventDefault(); const f = new FormData(e.target);
-          try { const r = await api("POST", "api/templates", { name: f.get("name"), from: f.get("from") || null, description: f.get("description") });
+          try { const r = await api("POST", "api/templates", { name: f.get("name"), kind: form.kind.value, from: f.get("from") || null, description: f.get("description") });
             close(); toast("Template criado"); location.hash = `#/templates/${r.template.key}/geral`; }
           catch (x) { $("#tnErr", b).textContent = x.message; $("#tnErr", b).hidden = false; }
         };
@@ -1555,7 +1567,64 @@ const TemplatesPage = (() => {
       } });
   }
 
+  const MIN_FLOW = { subtitle: "", lanes: [{ key: "n1", label: "SOC N1", team: "SOC N1", color: "#1D62D1", kind: "team" }],
+    nodes: [{ id: "inicio", lane: "n1", x: 68, y: 34, w: 96, h: 48, type: "start", lines: [{ t: "Início", s: "n" }] }], edges: [] };
+  const FIELD_TYPES = [["text", "Texto"], ["select", "Lista (um)"], ["multiselect", "Lista (vários)"], ["date", "Data"], ["url", "Link"]];
+
+  /* campos do template (runbook e documento): ficam na tabela de propriedades de cada documento criado com ele */
+  function fieldsTab(el, t) {
+    let fs = JSON.parse(JSON.stringify(t.fields || []));
+    const paint = () => {
+      el.innerHTML = `<div class="ecard"><div class="ecard-h"><b>Campos</b><span class="muted small">aparecem no formulário de criação, como linhas da tabela de propriedades e, se marcados como filtro, na biblioteca</span></div>
+        <div class="tw"><table class="fields-tbl"><thead><tr><th>Rótulo</th><th>Chave</th><th>Tipo</th><th>Opções <small>(uma por linha)</small></th><th>Obrigatório</th><th>Filtro</th><th></th></tr></thead><tbody>
+        ${fs.map((f, i) => `<tr data-i="${i}"><td><input class="in sm" data-k="label" value="${esc(f.label)}" maxlength="60"></td>
+          <td><input class="in sm mono" data-k="key" value="${esc(f.key)}" maxlength="25" pattern="[a-z][a-z0-9_]{0,24}"></td>
+          <td><select class="in sm" data-k="type">${FIELD_TYPES.map(([k, l]) => `<option value="${k}" ${k === f.type ? "selected" : ""}>${l}</option>`).join("")}</select></td>
+          <td>${f.type === "select" || f.type === "multiselect" ? `<textarea class="in sm" data-k="options" rows="3">${esc((f.options || []).join("\n"))}</textarea>` : `<span class="muted small">—</span>`}</td>
+          <td><input type="checkbox" data-k="required" ${f.required ? "checked" : ""}></td>
+          <td>${f.type === "select" || f.type === "multiselect" ? `<input type="checkbox" data-k="filter" ${f.filter ? "checked" : ""}>` : ""}</td>
+          <td class="rowctl"><button type="button" data-up="${i}" title="Subir" aria-label="Subir" ${i ? "" : "disabled"}>${ic("up")}</button><button type="button" class="x" data-rm="${i}" title="Remover" aria-label="Remover">${ic("close")}</button></td></tr>`).join("")
+          || `<tr><td colspan="7" class="muted">Nenhum campo.</td></tr>`}</tbody></table></div>
+        <div class="row-btns"><button class="btn ghost xs" id="fAdd">${ic("plus")}Campo</button></div>
+        <p class="muted small">Use <code>{{campo.chave}}</code> no documento modelo para levar o valor a outros trechos. Mudar a chave de um campo em uso faz os documentos existentes deixarem de mostrar o valor na biblioteca.</p>
+        <div class="err" id="fErr" hidden></div>
+        <div class="create-actions"><button class="btn primary" id="fSave">Salvar campos</button></div></div>`;
+      el.querySelectorAll("tr[data-i]").forEach(tr => {
+        const f = fs[+tr.dataset.i];
+        tr.querySelectorAll("[data-k]").forEach(inp => inp.oninput = inp.onchange = () => {
+          const k = inp.dataset.k;
+          if (k === "required" || k === "filter") f[k] = inp.checked;
+          else if (k === "options") f.options = inp.value.split("\n").map(x => x.trim()).filter(Boolean);
+          else { f[k] = inp.value; if (k === "label" && !f._keyTouched && !f._saved) f.key = norm(inp.value).replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").replace(/^(\d)/, "c$1").slice(0, 25); if (k === "key") f._keyTouched = true; }
+          if (k === "type" || k === "label") { const at = document.activeElement && document.activeElement.dataset.k; paint(); if (at === "label") { const x = el.querySelector(`tr[data-i="${fs.indexOf(f)}"] [data-k=label]`); x.focus(); x.setSelectionRange(x.value.length, x.value.length); } }
+        });
+      });
+      el.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => { fs.splice(+b.dataset.rm, 1); paint(); });
+      el.querySelectorAll("[data-up]").forEach(b => b.onclick = () => { const i = +b.dataset.up; [fs[i - 1], fs[i]] = [fs[i], fs[i - 1]]; paint(); });
+      $("#fAdd", el).onclick = () => { fs.push({ key: "", label: "", type: "text", options: [], required: false, filter: false }); paint(); };
+      $("#fSave", el).onclick = async () => {
+        try { current = (await api("PUT", `api/templates/${t.key}/meta`, { rev: t.rev, fields: fs.map(({ _keyTouched, _saved, ...f }) => f) })).template; toast("Campos salvos"); route(); }
+        catch (x) { $("#fErr", el).textContent = x.message; $("#fErr", el).hidden = false; }
+      };
+    };
+    fs.forEach(f => { f._saved = true; });
+    paint();
+  }
+  function foldersTab(el, t) {
+    el.innerHTML = `<div class="ecard"><div class="ecard-h"><b>Estrutura de pastas sugerida</b></div>
+      <p class="muted small" style="margin-top:0">Um caminho por linha, com <code>/</code> entre os níveis (ex.: <code>Por ferramenta/EDR</code>), até 6 níveis. A estrutura não é aplicada sozinha: na biblioteca, o botão "Criar estrutura de pastas do template" cria o que faltar, sem duplicar.</p>
+      <textarea class="in mono" id="flText" rows="10">${esc((t.folders || []).join("\n"))}</textarea>
+      <div class="err" id="flErr" hidden></div>
+      <div class="create-actions"><button class="btn primary" id="flSave">Salvar pastas</button></div></div>`;
+    $("#flSave", el).onclick = async () => {
+      const folders = $("#flText", el).value.split("\n").map(x => x.trim()).filter(Boolean);
+      try { current = (await api("PUT", `api/templates/${t.key}/meta`, { rev: t.rev, folders })).template; toast("Pastas salvas"); route(); }
+      catch (x) { $("#flErr", el).textContent = x.message; $("#flErr", el).hidden = false; }
+    };
+  }
+
   function general(el, t) {
+    if (t.kind && t.kind !== "playbook") return generalDoc(el, t);
     el.innerHTML = `<div class="appearance"><div class="ecard"><div class="ecard-h"><b>Dados do template</b></div>
         <form id="tgForm" class="tform">
           <label>Nome<input class="in" name="name" maxlength="60" value="${esc(t.name)}" required></label>
@@ -1583,6 +1652,36 @@ const TemplatesPage = (() => {
       catch (x) { $("#tgErr", el).textContent = x.message; $("#tgErr", el).hidden = false; }
     };
   }
+  /* geral de template de runbook/documento: sem NIST e ramos; no runbook, a opção de incluir fluxograma */
+  function generalDoc(el, t) {
+    const fv = (t.fields || []).map(f => [`campo.${f.key}`, f.label]);
+    el.innerHTML = `<div class="appearance"><div class="ecard"><div class="ecard-h"><b>Dados do template</b><span class="tag">${esc(KIND_LBL[t.kind])}</span></div>
+        <form id="tgForm" class="tform">
+          <label>Nome<input class="in" name="name" maxlength="60" value="${esc(t.name)}" required></label>
+          <label>Descrição<textarea class="in" name="description" rows="2" maxlength="300">${esc(t.description || "")}</textarea></label>
+          <label>Owner padrão<input class="in" name="owner" value="${esc(t.owner || "")}"></label>
+          ${t.kind === "runbook" ? `<label class="chk-inline"><input type="checkbox" id="tgFlow" ${t.hasFlow ? "checked" : ""}> Incluir fluxograma modelo (runbooks criados com ele já começam com um fluxograma)</label>` : ""}
+          <div class="err" id="tgErr" hidden></div>
+          <div class="create-actions"><a class="btn ghost" href="api/templates/${esc(t.key)}/export" download>${ic("download")}Exportar template</a><button class="btn primary" type="submit">Salvar</button></div></form>
+        <div class="meta" style="margin-top:14px"><span class="chip">${t.sections.length} seções</span><span class="chip">${(t.fields || []).length} campos</span><span class="chip">${(t.folders || []).length} pastas</span></div></div>
+      <div class="ecard"><div class="ecard-h"><b>Variáveis disponíveis</b></div>
+        <table class="vars"><tbody>${varsDoc.filter(([k]) => k !== "campo.<chave>").concat(fv).map(([k, d]) => `<tr><td><code>{{${esc(k)}}}</code></td><td>${esc(d)}</td></tr>`).join("")}</tbody></table></div></div>`;
+    $("#tgForm", el).onsubmit = async e => {
+      e.preventDefault(); const f = new FormData(e.target);
+      try { current = (await api("PUT", `api/templates/${t.key}/meta`, { name: f.get("name"), description: f.get("description"), owner: f.get("owner"), rev: t.rev })).template; toast("Template salvo"); route(); }
+      catch (x) { $("#tgErr", el).textContent = x.message; $("#tgErr", el).hidden = false; }
+    };
+    if ($("#tgFlow", el)) $("#tgFlow", el).onchange = async e => {
+      const on = e.target.checked;
+      if (!on && !(await ask("Tirar o fluxograma do template? Runbooks já criados não mudam.", { title: "Fluxograma modelo", ok: "Tirar", danger: true }))) { e.target.checked = true; return; }
+      try {
+        current = (await api("PUT", `api/templates/${t.key}/flow`, { flow: on ? MIN_FLOW : { subtitle: "", lanes: [], nodes: [], edges: [] }, refs: {}, rev: t.rev })).template;
+        toast(on ? "Fluxograma incluído: edite na aba Fluxograma modelo" : "Fluxograma retirado do template");
+        location.hash = on ? `#/templates/${t.key}/fluxograma` : `#/templates/${t.key}/geral`; route();
+      } catch (x) { toast(x.message, "err"); e.target.checked = !on; }
+    };
+  }
+
   function teams(el, t) {
     const own = t.teamDefs || {};
     const used = new Set(t.flow.lanes.map(l => l.team).filter(Boolean).concat(t.flow.nodes.map(n => n.team).filter(Boolean)));
@@ -1611,20 +1710,24 @@ const TemplatesPage = (() => {
     el.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => teamDialog({ tpl: t.key }, b.dataset.edit, () => route()));
   }
   async function detail(root, key, sub) {
-    sub = ["geral", "documento", "fluxograma", "times"].includes(sub) ? sub : "geral";
     root.innerHTML = `<div class="wrap"><div class="empty">Carregando template…</div></div>`;
     try {
-      if (!vars.length) vars = (await api("GET", "api/templates")).variables;
+      if (!vars.length) { const d = await api("GET", "api/templates"); vars = d.variables; varsDoc = d.variablesDoc || []; }
       current = (await api("GET", `api/templates/${key}`)).template;
     } catch (e) { root.innerHTML = `<div class="wrap"><div class="err">${esc(e.message)}</div></div>`; return; }
-    const t = current;
-    root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead tplhead"><a class="pbid" href="#/templates" title="Voltar à lista">${ic("templates")}</a><h1>${esc(t.name)}</h1><small class="muted">${esc(upd(t))}</small></div>
-      <nav class="tabs">${[["geral", "Geral"], ["documento", "Documento modelo", "edit"], ["fluxograma", "Fluxograma modelo", "edit"], ["times", "Times e tags"]].map(([k, l, i]) =>
+    const t = current, kind = t.kind || "playbook";
+    /* abas por tipo: campos e pastas só em runbook e documento; fluxograma e times onde há fluxograma */
+    const subs = [["geral", "Geral"], ["documento", "Documento modelo", "edit"]]
+      .concat(kind !== "playbook" ? [["campos", "Campos"], ["pastas", "Pastas"]] : [])
+      .concat(t.hasFlow ? [["fluxograma", "Fluxograma modelo", "edit"], ["times", "Times e tags"]] : []);
+    sub = subs.some(x => x[0] === sub) ? sub : "geral";
+    root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead tplhead"><a class="pbid" href="#/templates" title="Voltar à lista">${ic("templates")}</a><h1>${esc(t.name)}</h1><span class="tag">${esc(KIND_LBL[kind])}</span><small class="muted">${esc(upd(t))}</small></div>
+      <nav class="tabs">${subs.map(([k, l, i]) =>
         `<a href="#/templates/${esc(key)}/${k}" class="${k === sub ? "on" : ""}">${i ? ic(i) : ""}${l}</a>`).join("")}</nav></div></div><div class="wrap" id="tplview"></div>`;
     const tv = $("#tplview");
     if (sub === "documento") return Editor.docEditor(tv, t, adapter);
     if (sub === "fluxograma") { document.body.classList.add("editing"); return Editor.flowEditor(tv, t, adapter); }
-    (sub === "times" ? teams : general)(tv, t);
+    ({ times: teams, campos: fieldsTab, pastas: foldersTab })[sub] ? ({ times: teams, campos: fieldsTab, pastas: foldersTab })[sub](tv, t) : general(tv, t);
   }
   return { render: (root, key, sub) => key ? detail(root, key, sub) : list(root) };
 })();
@@ -1759,7 +1862,7 @@ async function importDialog() {
       async function analyze(id) {
         try {
           const r = await api("POST", "api/import", { text, id, template: $("#imTpl", b).value, dryRun: true }), p = r.preview;
-          const nextId = () => { const used = PBS.map(x => +x.id.slice(3)); let n = 1; while (used.includes(n)) n++; return "PB-" + String(n).padStart(2, "0"); };
+          const nextId = () => { const used = PBS.filter(x => x.id.startsWith("PB-")).map(x => +x.id.slice(3)); let n = 1; while (used.includes(n)) n++; return "PB-" + String(n).padStart(2, "0"); };
           prev.innerHTML = `<div class="import-sum">
               <span>Arquivo</span><b>${esc(fname || "texto colado")}</b>
               <span>Playbook</span><b>${esc(p.id)} — ${esc(p.name)}</b>
