@@ -5,10 +5,14 @@
    Administrador→ tudo do editor + usuários, auditoria e exclusão de playbooks
    As permissões valem no servidor; aqui só escondemos o que o perfil não pode usar. */
 const App = { data: null, user: null };
+/* PBS: resumos de todos os playbooks visíveis (lista leve de /api/library: nome, status, versão, contagens).
+   DETAIL: documentos completos já abertos (/api/doc/{id}), buscados sob demanda ao abrir um playbook. */
 let PBS = [], TEAMS = {};
+const DETAIL = new Map();
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const pbBy = slug => PBS.find(p => p.slug === slug);
+const norm = s => String(s || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 const TEAM_COLOR = n => (TEAMS[n] && TEAMS[n].color) || "#5B6673";
 const TEAM_ORDER = ["SOC N1", "SOC N2", "CSIRT"];
 const LEVEL = { viewer: 1, editor: 2, admin: 3 };
@@ -18,34 +22,62 @@ const statusPill = st => `<span class="status ${STATUS_CLS[st] || "dev"}">${esc(
 
 /* ───────── API ───────── */
 class ApiError extends Error { constructor(msg, status) { super(msg); this.status = status; } }
-async function api(method, url, body) {
+async function api(method, url, body, opts = {}) {
   const r = await fetch(url, {
-    method, credentials: "same-origin",
+    method, credentials: "same-origin", signal: opts.signal,
     headers: { "Content-Type": "application/json", "X-Requested-With": "playbooks" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const j = await r.json().catch(() => ({}));
-  if (r.status === 401 && App.user && !url.endsWith("api/login")) { Editor.dirty = false; Editor.unmount(); showLogin("Sua sessão expirou. Entre novamente."); }
+  /* sessão vencida no meio da edição: o rascunho é guardado antes de fechar o editor (volta depois do login) */
+  if (r.status === 401 && App.user && !url.endsWith("api/login")) { Editor.stash(); Editor.dirty = false; Editor.unmount(); showLogin("Sua sessão expirou. Entre novamente."); }
   if (r.status === 403 && /senha temporária/.test(j.error || "")) forcePassword();
   if (!r.ok) throw new ApiError(j.error || `Erro ${r.status}`, r.status);
   return j;
 }
 
+/* dados de abertura (/api/bootstrap): catálogo do fluxograma, status e times; a lista vem de refreshIndex() */
 function setData(d) {
-  App.data = d; PBS = d.playbooks; TEAMS = d.teams;
+  App.data = { catalog: d.catalog, statuses: d.statuses, teams: d.teams }; TEAMS = d.teams;
   Flow.setCatalog(d.catalog); buildRefRegex();
-  buildIndex();
+}
+const byId = (a, b) => a.id.localeCompare(b.id, undefined, { numeric: true });
+/* resumo montado no navegador a partir do documento completo (mesmos campos de /api/library) */
+function summaryOf(v) {
+  const g = v.gov, props = v.props || {};
+  return { id: v.id, type: "playbook", slug: v.slug, name: v.name, status: g.status, version: (props["Versão"] || "").split(" ")[0],
+    templateKey: v.templateKey, templateName: v.templateName, reviewed: g.reviewed || "", reviewer: g.reviewer || "", approver: g.approver || "",
+    gov: g, ramos: v.ramos.length, steps: v.steps.length, rev: v.rev, subtitle: props["Tática MITRE principal"] || props["Fase NIST"] || "" };
+}
+/* lista leve completa (paginada no servidor; o navegador revalida com ETag e recebe 304 quando nada mudou) */
+async function refreshIndex() {
+  let all = [], cursor = "";
+  do {
+    const r = await api("GET", `api/library?limit=500${cursor ? "&cursor=" + cursor : ""}`);
+    all = all.concat(r.items); cursor = r.nextCursor;
+  } while (cursor);
+  PBS = all;
+  for (const id of [...DETAIL.keys()]) if (!PBS.some(p => p.id === id)) DETAIL.delete(id);
+}
+/* documento completo; reaproveita o já aberto se a revisão for a mesma do resumo */
+async function ensureDetail(slug) {
+  const s = pbBy(slug); if (!s) return null;
+  const d = DETAIL.get(s.id);
+  if (d && d.rev === s.rev) return d;
+  const r = await api("GET", `api/doc/${s.id}`);
+  replacePlaybook(r.playbook);
+  return r.playbook;
 }
 function replacePlaybook(pb) {
-  const i = PBS.findIndex(p => p.id === pb.id);
-  if (i >= 0) PBS[i] = pb; else { PBS.push(pb); PBS.sort((a, b) => a.id.localeCompare(b.id)); }
-  buildIndex();
+  DETAIL.set(pb.id, pb);
+  const sm = summaryOf(pb), i = PBS.findIndex(p => p.id === pb.id);
+  if (i >= 0) PBS[i] = sm; else { PBS.push(sm); PBS.sort(byId); }
 }
-function removePlaybook(id) { PBS = PBS.filter(p => p.id !== id); App.data.playbooks = PBS; buildIndex(); }
-function setTeams(t) { TEAMS = t; App.data.teams = t; buildRefRegex(); buildIndex(); }
+function removePlaybook(id) { PBS = PBS.filter(p => p.id !== id); DETAIL.delete(id); }
+function setTeams(t) { TEAMS = t; App.data.teams = t; buildRefRegex(); }
 /* times do playbook = times do template dele (prevalecem) + os dos demais templates */
 function useTeams(pb) { TEAMS = Object.assign({}, App.data.teams, (pb && pb.teams) || {}); buildRefRegex(); }
-async function refreshData() { try { setData(await api("GET", "api/data")); } catch { } route(); }
+async function refreshData() { try { DETAIL.clear(); await refreshIndex(); } catch { } route(); }
 
 function toast(msg, kind = "ok") {
   const t = document.createElement("div");
@@ -292,7 +324,7 @@ function showTeam(pb, name, keep) {
 /* ───────── sessão e usuário ───────── */
 async function showLogin(msg) {
   App.user = null;
-  document.body.className = "auth";
+  document.body.classList.remove("editing", "viewer-role", "side-open"); document.body.classList.add("auth");
   closeDrawer();
   // erro devolvido pelo SSO (/?sso_error=…): mostra e limpa da barra de endereço
   const ssoErr = new URLSearchParams(location.search).get("sso_error");
@@ -346,7 +378,7 @@ function bindPasswordForm(root, done) {
 }
 function forcePassword() {
   if ($("#pwForm")) return;
-  document.body.className = "auth";
+  document.body.classList.remove("editing", "viewer-role", "side-open"); document.body.classList.add("auth");
   view.innerHTML = `<div class="login-wrap"><div class="login"><div class="login-brand">${Brand.loginBrand()}</div><h1>Defina sua senha</h1>${passwordForm(true)}
     <button class="btn ghost block" id="lo2" style="margin-top:8px">Sair</button></div></div>`;
   bindPasswordForm(view, () => start());
@@ -367,10 +399,42 @@ function renderSide() {
     ${can("editor") ? `<a href="#/templates" class="${on("templates")}">${ic("templates")}<span>Templates</span></a>` : ""}
     ${can("admin") ? `<a href="#/admin" class="${on("admin")}">${ic("settings")}<span>Administração</span></a>` : ""}`;
 }
-/* telas estreitas: a barra lateral vira uma gaveta */
-const sideOpen = v => { document.body.classList.toggle("side-open", v); $("#sideScrim").hidden = !v; };
-$("#sideScrim").onclick = () => sideOpen(false);
-document.addEventListener("click", e => { if (e.target.closest("#sideOpen")) sideOpen(true); });
+/* Menu lateral. Desktop (> 900 px): o botão recolhe/expande (body.side-collapsed), estado salvo no navegador; atalho [.
+   Telas estreitas: o menu vira gaveta (body.side-open) com fundo escurecido; Esc ou o botão de fechar fecham e o foco
+   volta ao botão do menu; o conteúdo atrás fica inerte enquanto ela está aberta. */
+const narrow = matchMedia("(max-width: 900px)");
+const SIDE_KEY = "medusa-side";
+function syncSideAria() {
+  const b = $("#sideToggle"); if (!b) return;
+  const open = narrow.matches ? document.body.classList.contains("side-open") : !document.body.classList.contains("side-collapsed");
+  b.setAttribute("aria-expanded", String(open));
+  b.title = (open ? "Ocultar menu" : "Mostrar menu") + (narrow.matches ? "" : " ( [ )");
+}
+function setCollapsed(v) {
+  document.body.classList.toggle("side-collapsed", v);
+  try { localStorage.setItem(SIDE_KEY, v ? "recolhido" : "aberto"); } catch { }
+  syncSideAria();
+}
+function sideOpen(v, refocus = false) {
+  const was = document.body.classList.contains("side-open");
+  document.body.classList.toggle("side-open", v); $("#sideScrim").hidden = !v;
+  $(".shell").inert = v;
+  if (v && !was) setTimeout(() => $("#q").focus(), 0);
+  if (!v && was && refocus) { const b = $("#sideToggle"); if (b) b.focus(); }
+  syncSideAria();
+}
+const toggleSide = () => narrow.matches ? sideOpen(!document.body.classList.contains("side-open")) : setCollapsed(!document.body.classList.contains("side-collapsed"));
+try { document.body.classList.toggle("side-collapsed", localStorage.getItem(SIDE_KEY) === "recolhido"); } catch { }
+/* alargar a janela com a gaveta aberta: fecha a gaveta (nada fica inerte nem escondido) */
+narrow.addEventListener("change", () => { if (!narrow.matches) sideOpen(false); syncSideAria(); });
+$("#sideScrim").onclick = () => sideOpen(false, true);
+$("#sideClose").onclick = () => sideOpen(false, true);
+document.addEventListener("click", e => { if (e.target.closest("#sideToggle")) toggleSide(); });
+document.addEventListener("keydown", e => {
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName) || document.activeElement.isContentEditable;
+  if (e.key === "Escape" && document.body.classList.contains("side-open")) sideOpen(false, true);
+  else if (e.key === "[" && !typing && !e.ctrlKey && !e.metaKey && !e.altKey && App.user && !document.querySelector(".modal-bg")) { e.preventDefault(); toggleSide(); }
+});
 
 function renderUserMenu() {
   const u = App.user, box = $("#usermenu");
@@ -393,7 +457,9 @@ document.addEventListener("click", e => {
 });
 
 /* ───────── rotas ───────── */
-const currentPb = () => { const m = location.hash.match(/^#\/(pb-\d+)/i); return m ? pbBy(m[1].toLowerCase()) : null; };
+/* playbook aberto na página atual (documento completo) */
+const currentPb = () => { const m = location.hash.match(/^#\/(pb-\d+)/i), s = m && pbBy(m[1].toLowerCase()); return s ? DETAIL.get(s.id) || null : null; };
+let routeSeq = 0;
 /* playbook: duas visualizações (fluxograma e documentação, que já traz fases, passos e ramos), o histórico e os editores */
 const TABS = [["fluxo", "Fluxograma"], ["doc", "Documentação"], ["versoes", "Versões"]];
 const EDIT_TABS = [["editar", "Editar documento"], ["editar-fluxo", "Editar fluxograma"]];
@@ -430,11 +496,12 @@ const Tabs = (() => {
   }
   function render() {
     list = list.filter(t => info(t.key));
-    $("#tabbar").innerHTML = `<button class="side-open" id="sideOpen" title="Menu" aria-label="Abrir menu">${ic("menu")}</button><a class="tab home ${!activeKey ? "on" : ""}" href="#/" title="Início">${ic("home")}Início</a>` +
+    $("#tabbar").innerHTML = `<button class="side-toggle" id="sideToggle" aria-label="Menu" aria-controls="side" aria-expanded="true">${ic("menu")}</button><a class="tab home ${!activeKey ? "on" : ""}" href="#/" title="Início">${ic("home")}Início</a>` +
       list.map(t => {
         const i = info(t.key);
         return `<a class="tab ${t.key === activeKey ? "on" : ""}" href="${esc(t.path)}" data-k="${esc(t.key)}" title="${esc(i.title)}">${i.dot ? `<i class="dot ${i.dot}"></i>` : ic(i.icon)}<span class="ttl">${esc(i.title)}</span>${Editor.hasDraft(t.key) ? `<i class="draft-dot" title="Alterações não salvas"></i>` : ""}<button class="tx" data-close="${esc(t.key)}" title="Fechar aba" aria-label="Fechar aba">${ic("close")}</button></a>`;
       }).join("") + `<button class="tab-new" id="tabNew" title="Nova aba (página inicial)" aria-label="Nova aba">${ic("plus")}</button>`;
+    syncSideAria();
     const on = $("#tabbar .tab.on"); if (on) on.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
   async function close(key) {
@@ -471,19 +538,28 @@ function route() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   Tabs.sync();
   window.scrollTo(0, 0);
-  document.body.className = can("editor") ? "" : "viewer-role";
+  /* classes da página (o estado do menu lateral, side-collapsed, é preservado) */
+  document.body.classList.remove("auth", "editing");
+  document.body.classList.toggle("viewer-role", !can("editor"));
   if (parts[0] === "novo") return can("editor") ? Editor.createForm(view) : notFound();
   if (parts[0] === "admin") return can("admin") ? Admin.render(view, parts[1]) : notFound();
   if (parts[0] === "times" || (parts[0] === "templates" && parts[1] === "@times")) { location.replace("#/templates"); return; }
   if (parts[0] === "docs") return Docs.render(view, parts[1]);
   if (parts[0] === "templates") return can("editor") ? TemplatesPage.render(view, parts[1], parts[2]) : notFound();
   if (!parts.length) return renderHome();
-  const pb = pbBy(parts[0].toLowerCase());
-  if (!pb) return notFound();
-  if (parts[1] === "fases" || parts[1] === "ramos") { location.replace(`#/${pb.slug}/doc${parts[2] ? "/" + parts[2] : ""}`); return; }
+  const s = pbBy(parts[0].toLowerCase());
+  if (!s) return notFound();
+  if (parts[1] === "fases" || parts[1] === "ramos") { location.replace(`#/${s.slug}/doc${parts[2] ? "/" + parts[2] : ""}`); return; }
   const all = TABS.concat(can("editor") ? EDIT_TABS : []);
   const tab = all.some(t => t[0] === parts[1]) ? parts[1] : "fluxo";
-  renderPb(pb, tab, parts[2], parts.slice(3));
+  const show = pb => renderPb(pb, tab, parts[2], parts.slice(3));
+  const ready = DETAIL.get(s.id);
+  if (ready && ready.rev === s.rev) return show(ready);
+  /* detalhe sob demanda: só o playbook aberto trafega inteiro */
+  const seq = ++routeSeq;
+  view.innerHTML = `<div class="wrap"><div class="empty">Carregando…</div></div>`;
+  ensureDetail(s.slug).then(pb => { if (seq === routeSeq) pb ? show(pb) : notFound(); })
+    .catch(e => { if (seq === routeSeq && e.status !== 401) e.status === 404 ? notFound() : view.innerHTML = `<div class="wrap"><div class="err">${esc(e.message)}</div></div>`; });
 }
 window.addEventListener("hashchange", route);
 window.addEventListener("beforeunload", e => { if (Editor.dirty || Editor.hasDraft()) { e.preventDefault(); e.returnValue = ""; } });
@@ -505,14 +581,14 @@ function homeView() {
   let v = null; try { v = localStorage.getItem(homeViewKey()); } catch { }
   return HOME_VIEWS.some(x => x[0] === v) ? v : "cards";
 }
-const pbVersion = p => (p.props["Versão"] || "").split(" ")[0];
-const pbSubtitle = p => p.props["Tática MITRE principal"] || p.props["Fase NIST"] || "";
+const pbVersion = p => p.version;
+const pbSubtitle = p => p.subtitle;
 
 function homeCards(list) {
   return `<div class="cards">${list.map(p => `<a class="card st-${STATUS_CLS[p.gov.status]}" href="#/${p.slug}/fluxo">
       <div class="card-top"><span class="id">${p.id} · v${esc(pbVersion(p))}</span>${statusPill(p.gov.status)}</div><h3>${esc(p.name)}</h3>
       <p>${esc(pbSubtitle(p))}</p>
-      <div class="meta"><span class="chip">${p.ramos.length} ramos</span><span class="chip">${p.steps.length} passos</span></div>
+      <div class="meta"><span class="chip">${p.ramos} ramos</span><span class="chip">${p.steps} passos</span></div>
       <div class="govline">${govLine(p.gov)}</div></a>`).join("")}
     ${can("editor") ? addCard() : ""}</div>`;
 }
@@ -523,7 +599,7 @@ function homeLarge(list) {
         <div class="pr-top"><span class="id">${p.id}</span><span class="pr-ver">v${esc(pbVersion(p))}</span>${p.templateName ? `<span class="pr-tpl" title="Template">${esc(p.templateName)}</span>` : ""}</div>
         <h3>${esc(p.name)}</h3>${pbSubtitle(p) ? `<p>${esc(pbSubtitle(p))}</p>` : ""}
         <div class="pr-gov">${govLine(p.gov)}</div></div>
-      <div class="pr-stats"><div><b>${p.ramos.length}</b><span>ramos</span></div><div><b>${p.steps.length}</b><span>passos</span></div></div>
+      <div class="pr-stats"><div><b>${p.ramos}</b><span>ramos</span></div><div><b>${p.steps}</b><span>passos</span></div></div>
       <div class="pr-status">${statusPill(p.gov.status)}</div></a>`).join("")}</div>`;
 }
 function homeSmall(list) {
@@ -533,32 +609,42 @@ function homeSmall(list) {
       ${list.map(p => `<a class="pt-row st-${STATUS_CLS[p.gov.status]}" role="row" href="#/${p.slug}/fluxo">
         <span class="pt-id" role="cell">${p.id}</span><span class="pt-name" role="cell" title="${esc(p.name)}">${esc(p.name)}</span>
         <span role="cell"><span class="pt-st"><i class="dot ${STATUS_CLS[p.gov.status]}"></i>${esc(p.gov.status)}</span></span><span role="cell" class="pt-ver">v${esc(pbVersion(p))}</span>
-        <span role="cell" class="pt-num">${p.ramos.length}</span><span role="cell" class="pt-num">${p.steps.length}</span>
+        <span role="cell" class="pt-num">${p.ramos}</span><span role="cell" class="pt-num">${p.steps}</span>
         <span role="cell" class="pt-rev">${p.gov.reviewed ? esc(p.gov.reviewed) + (p.gov.reviewer ? ` · ${esc(p.gov.reviewer)}` : "") : `<span class="muted">—</span>`}</span></a>`).join("")}</div>`;
 }
 const addCard = () => `<a class="card add" href="#/novo"><span class="plus">${ic("plus")}</span><h3>Criar playbook</h3><p>Preencha o essencial; a ferramenta gera o documento no padrão e o fluxograma inicial. Começa em Desenvolvimento.</p></a>`;
 /* lista vazia: só a opção de criar (para quem pode criar); sem mensagem de "nenhum playbook" */
 const homeEmpty = () => can("editor") ? `<div class="cards">${addCard()}</div>` : "";
 
-function renderHome() {
-  const counts = s => PBS.filter(p => p.gov.status === s).length;
-  const list = PBS.filter(p => homeFilter === "Todos" || p.gov.status === homeFilter);
-  const hv = homeView();
+/* a lista vem filtrada e paginada do servidor (/api/library); "Carregar mais" traz os próximos 100 */
+const HOME_PAGE = 100;
+let homeLimit = HOME_PAGE;
+async function renderHome() {
+  const seq = ++routeSeq, st = homeFilter === "Todos" ? "" : homeFilter;
+  let d;
+  try {
+    [d] = await Promise.all([api("GET", `api/library?limit=${homeLimit}${st ? "&status=" + encodeURIComponent(st) : ""}`), refreshIndex()]);
+  } catch (e) { if (seq === routeSeq && e.status !== 401) view.innerHTML = `<div class="wrap"><div class="err">${esc(e.message)}</div></div>`; return; }
+  if (seq !== routeSeq) return;
+  renderSide(); Tabs.render();
+  const list = d.items, hv = homeView();
   view.innerHTML = `<div class="wrap">
-    <header class="page-head"><h1>Playbooks</h1><span class="count">${PBS.length}</span>
+    <header class="page-head"><h1>Playbooks</h1><span class="count">${d.all}</span>
       <div class="home-actions">${can("editor") ? `<button class="btn ghost sm" id="impBtn" title="Importar .medusa.md ou .md">${ic("upload")}Importar</button>` : ""}<a class="btn ghost sm" href="api/export" download title="Baixar todos (.zip de .medusa.md)">${ic("download")}Exportar</a>
         ${can("editor") ? `<a class="btn primary sm" href="#/novo">${ic("plus")}Novo playbook</a>` : ""}</div></header>
     <div class="home-bar"><div class="filters">${["Todos", ...App.data.statuses.filter(s => can("editor") || s !== "Desenvolvimento")].map(s =>
-      `<button class="${s === homeFilter ? "on" : ""}" data-hf="${esc(s)}">${s === "Todos" ? "Todos" : `<i class="dot ${STATUS_CLS[s]}"></i>${esc(s)}`} <span class="cnt">${s === "Todos" ? PBS.length : counts(s)}</span></button>`).join("")}</div>
+      `<button class="${s === homeFilter ? "on" : ""}" data-hf="${esc(s)}">${s === "Todos" ? "Todos" : `<i class="dot ${STATUS_CLS[s]}"></i>${esc(s)}`} <span class="cnt">${s === "Todos" ? d.all : d.counts[s] || 0}</span></button>`).join("")}</div>
       <div class="view-seg" role="group" aria-label="Visualização da lista">${HOME_VIEWS.map(([k, n, ic]) =>
         `<button class="${k === hv ? "on" : ""}" data-hv="${k}" title="${n}" aria-label="${n}" aria-pressed="${k === hv}">${ic}</button>`).join("")}</div></div>
-    ${hv === "lg" ? homeLarge(list) : hv === "sm" ? homeSmall(list) : homeCards(list)}</div>`;
-  view.querySelector(".filters").onclick = e => { const b = e.target.closest("[data-hf]"); if (b) { homeFilter = b.dataset.hf; renderHome(); } };
+    ${hv === "lg" ? homeLarge(list) : hv === "sm" ? homeSmall(list) : homeCards(list)}
+    ${d.nextCursor ? `<div class="home-more"><button class="btn ghost sm" id="homeMore">Carregar mais <span class="muted">(${d.total - list.length})</span></button></div>` : ""}</div>`;
+  view.querySelector(".filters").onclick = e => { const b = e.target.closest("[data-hf]"); if (b) { homeFilter = b.dataset.hf; homeLimit = HOME_PAGE; renderHome(); } };
   view.querySelector(".view-seg").onclick = e => {
     const b = e.target.closest("[data-hv]"); if (!b) return;
     try { localStorage.setItem(homeViewKey(), b.dataset.hv); } catch { }
     renderHome();
   };
+  if ($("#homeMore")) $("#homeMore").onclick = () => { homeLimit += HOME_PAGE; renderHome(); };
   if ($("#impBtn")) $("#impBtn").onclick = importDialog;
 }
 function govLine(g) {
@@ -1047,31 +1133,53 @@ const Admin = (() => {
 })();
 
 /* ───────── busca ───────── */
-let INDEX = [];
-function buildIndex() {
-  INDEX = [];
-  const strip = h => h.replace(/<[^>]+>/g, " ");
-  for (const p of PBS) {
-    p.steps.forEach(s => INDEX.push({ pb: p, type: "Passo", title: `${s.id} · ${s.action}`, text: `${s.id} ${s.action} ${s.exit}`, go: () => { location.hash = `#/${p.slug}/doc/${encodeURIComponent(s.id)}`; } }));
-    p.ramos.forEach(r => INDEX.push({ pb: p, type: "Ramo", title: r.title, text: r.title + " " + strip(r.html), go: () => { location.hash = `#/${p.slug}/doc/${encodeURIComponent(r.id)}`; } }));
-    p.sections.forEach(s => INDEX.push({ pb: p, type: "Seção", title: s.title, text: s.title + " " + strip(s.html) + s.subs.map(x => x.title + strip(x.html)).join(" "), go: () => { location.hash = `#/${p.slug}/doc`; setTimeout(() => { const el = document.getElementById("sec-" + s.id); el && el.scrollIntoView(); }, 60); } }));
-  }
-  Object.keys(TEAMS).forEach(t => INDEX.push({ pb: null, type: "Time", title: t, text: t + " " + TEAMS[t].summary, go: () => showTeam(currentPb(), t, false) }));
-}
+/* No servidor (/api/search: sem acento, título vale mais que passo/ramo, que vale mais que texto), com espera de
+   150 ms entre teclas e cancelamento da busca anterior. Times vêm do cadastro já carregado. ↑ ↓ e Enter navegam. */
+const KIND_NAMES = { documento: "Playbook", passo: "Passo", ramo: "Ramo", secao: "Seção", time: "Time" };
+let HITS = [], hitSel = 0, searchTimer = 0, searchCtl = null;
 const q = $("#q"), results = $("#results");
-q.addEventListener("input", () => {
-  const v = q.value.trim().toLowerCase();
-  if (v.length < 2) return results.hidden = true;
-  const hits = INDEX.filter(i => i.text.toLowerCase().includes(v)).sort((a, b) => (b.title.toLowerCase().includes(v)) - (a.title.toLowerCase().includes(v))).slice(0, 30);
+async function doSearch() {
+  const v = q.value.trim();
+  if (v.length < 2) { results.hidden = true; HITS = []; return; }
+  if (searchCtl) searchCtl.abort();
+  searchCtl = new AbortController();
+  let hits = [];
+  try { hits = (await api("GET", `api/search?q=${encodeURIComponent(v)}&limit=30`, undefined, { signal: searchCtl.signal })).hits; }
+  catch (e) { if (e.name === "AbortError") return; }
+  const nv = norm(v).split(/\s+/);
+  const teams = Object.keys(TEAMS).filter(t => { const x = norm(t + " " + (TEAMS[t].summary || "")); return nv.every(w => x.includes(w)); })
+    .map(t => ({ kind: "time", title: t, team: t }));
+  HITS = hits.concat(teams).slice(0, 30); hitSel = 0;
+  paintHits();
+}
+function paintHits() {
   results.hidden = false;
-  results.innerHTML = hits.length ? hits.map(h => `<button data-i="${INDEX.indexOf(h)}"><small>${h.pb ? h.pb.id + " · " : ""}${h.type}</small><br>${esc(h.title.length > 110 ? h.title.slice(0, 107) + "…" : h.title)}</button>`).join("") : `<div class="empty">Nada encontrado.</div>`;
+  results.innerHTML = HITS.length ? HITS.map((h, i) => `<button data-i="${i}" class="${i === hitSel ? "on" : ""}"><small>${h.pid ? esc(h.pid) + " · " : ""}${KIND_NAMES[h.kind] || ""}</small><br>${esc(h.title.length > 110 ? h.title.slice(0, 107) + "…" : h.title)}</button>`).join("")
+    : `<div class="empty">Nada encontrado.</div>`;
+  const on = results.querySelector("button.on"); if (on) on.scrollIntoView({ block: "nearest" });
+}
+function goHit(h) {
+  results.hidden = true; q.value = ""; q.blur();
+  if (h.kind === "time") return showTeam(currentPb(), h.team, false);
+  const slug = h.pid.toLowerCase();
+  if (h.kind === "passo" || h.kind === "ramo") location.hash = `#/${slug}/doc/${encodeURIComponent(h.anchor)}`;
+  else if (h.kind === "secao") {
+    location.hash = `#/${slug}/doc`;
+    const scroll = (n = 0) => { const el = document.getElementById(h.anchor); if (el) el.scrollIntoView(); else if (n < 30) setTimeout(() => scroll(n + 1), 60); };
+    setTimeout(scroll, 60);
+  } else location.hash = `#/${slug}/fluxo`;
+}
+q.addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(doSearch, 150); });
+q.addEventListener("keydown", e => {
+  if (results.hidden || !HITS.length) return;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); hitSel = (hitSel + (e.key === "ArrowDown" ? 1 : HITS.length - 1)) % HITS.length; paintHits(); }
+  else if (e.key === "Enter") { e.preventDefault(); goHit(HITS[hitSel]); }
 });
 results.addEventListener("click", e => {
-  const b = e.target.closest("button"); if (!b) return;
-  results.hidden = true; q.value = ""; INDEX[+b.dataset.i].go();
+  const b = e.target.closest("button[data-i]"); if (b) goHit(HITS[+b.dataset.i]);
 });
 document.addEventListener("keydown", e => {
-  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName) || document.activeElement.isContentEditable;
   if (e.key === "/" && !typing && App.user) { e.preventDefault(); q.focus(); }
   if (e.key === "Escape") { results.hidden = true; if (!drawer.hidden) closeDrawer(); if (document.activeElement === q) q.blur(); }
 });
@@ -1577,7 +1685,9 @@ async function importDialog() {
 
 async function start() {
   try {
-    setData(await api("GET", "api/data"));
+    const b = await api("GET", "api/bootstrap");
+    App.user = b.user; setData(b);
+    await refreshIndex();
   } catch (e) { if (e.status !== 401 && e.status !== 403) view.innerHTML = `<div class="wrap"><div class="err">${esc(e.message)}</div></div>`; return; }
   renderUserMenu();
   Tabs.load();

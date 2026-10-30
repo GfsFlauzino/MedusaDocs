@@ -8,8 +8,8 @@ const Docs = (() => {
       <p>O Medusa Docs é a base interativa dos playbooks de resposta a incidentes. Cada playbook tem um <b>documento</b> (as regras, fases, ramos e critérios) e um <b>fluxograma</b> (o mapa de operação por time).</p>
       <ul><li><b>Fonte da verdade:</b> cada playbook é um par de arquivos <code>.md</code> + <code>.drawio</code> na pasta <code>playbooks/PB-xx-…/</code>, que podem ir para o Confluence, Git ou draw.io. A ferramenta lê e grava esses arquivos.</li>
         <li><b>Abas:</b> cada playbook ou página aberta vira uma aba no topo, como num navegador. ${K(ic("close"))} fecha; clique do meio também. As abas ficam guardadas no seu navegador. Se você sair de uma aba de edição sem salvar, nada se perde: a aba ganha um ponto e as alterações voltam quando você retorna a ela (só fechar a aba ou descartar apagam o rascunho).</li>
-        <li><b>Busca:</b> ${K("/")} foca a busca; encontra passos (T0, A3…), ramos, seções e times em todos os playbooks que você pode ver.</li>
-        <li><b>Barra lateral:</b> logo e nome do workspace, busca, <b>Playbooks</b>, <b>Templates</b> (editores) e <b>Administração</b> (administradores). Em telas estreitas ela vira uma gaveta, aberta pelo ${ic("menu")} no canto da barra de abas.</li>
+        <li><b>Busca:</b> ${K("/")} foca a busca; encontra playbooks, passos (T0, A3…), ramos, seções e times em todos os playbooks que você pode ver, sem precisar de acento. ${K("↑")} ${K("↓")} escolhem o resultado e ${K("Enter")} abre.</li>
+        <li><b>Menu lateral:</b> logo e nome do workspace, busca, <b>Playbooks</b>, <b>Templates</b> (editores) e <b>Administração</b> (administradores). O ${ic("menu")} no canto da barra de abas (ou a tecla ${K("[")}) recolhe e expande o menu; a escolha fica guardada no navegador. Em telas estreitas o menu vira uma gaveta: ${K("Esc")} ou o ${ic("close")} fecham.</li>
         <li><b>Menu do perfil</b> (seu nome, no rodapé da barra lateral): documentação, troca de senha e sair.</li>
         <li><b>Tema:</b> o botão ${ic("sun")}/${ic("moon")}, ao lado do perfil, alterna claro e escuro (vale para você, neste navegador). As cores do fluxograma seguem o modelo e não mudam com o tema.</li>
         <li><b>Página inicial:</b> os botões ao lado de "Novo playbook" alternam a lista entre <b>cartões</b>, <b>lista grande</b> (com template, revisão, ramos e passos) e <b>lista pequena</b> (uma linha por playbook, boa para muitos playbooks). A escolha fica guardada no seu navegador.</li></ul>` },
@@ -118,7 +118,7 @@ const Docs = (() => {
         <li>Usar no fluxograma um time de outro template o acrescenta ao template ao salvar.</li></ul>` },
     { id: "importar", role: "editor", title: "Importar", html: `
       <p><b>${ic("upload")}Importar</b> na página inicial aceita <code>.medusa.md</code> de qualquer instalação ou um <code>.md</code> comum (título <code># PB-00 — Nome</code> e seções <code>##</code>). A tela mostra uma prévia (seções, caixas, raias, times novos e avisos) antes de gravar.</p>
-      <ul><li>Se o ID já existir: importar com outro ID ou substituir (o atual vai para a lixeira).</li>
+      <ul><li>Se o ID já existir: importar com outro ID ou, só administradores, substituir (o atual vai para a lixeira). Substituir equivale a excluir, por isso editores não podem.</li>
         <li>Escolha o <b>template</b> do playbook importado; times citados no arquivo que faltarem nele são acrescentados ao template, com a cor e a descrição do arquivo.</li>
         <li>O playbook importado entra em Desenvolvimento.</li></ul>` },
     { id: "mermaid", role: "editor", title: "Linguagem de fluxo (Mermaid)", html: `
@@ -138,7 +138,7 @@ const Docs = (() => {
         <li><b>Redefinir senha</b> gera outra temporária e encerra as sessões. <b>Encerrar</b> derruba as sessões abertas.</li>
         <li><b>Desativar</b> bloqueia o acesso sem perder o histórico; <b>excluir</b> remove o usuário.</li>
         <li>Sempre há pelo menos um administrador ativo: a ferramenta não deixa rebaixar, desativar ou excluir o último.</li>
-        <li>5 senhas erradas seguidas bloqueiam o login por 5 minutos. Sessões expiram após 8 h sem uso.</li></ul>` },
+        <li>5 senhas erradas seguidas bloqueiam o login por 5 minutos. Sessões expiram após 8 h sem uso e, mesmo em uso, 24 h depois do login (ajustável em <code>MEDUSA_SESSION_IDLE_HOURS</code> e <code>MEDUSA_SESSION_MAX_HOURS</code>).</li></ul>` },
     { id: "logs", role: "admin", title: "Logs, encaminhamento e retenção", html: `
       <p><b>${ic("settings")}Administração → Logs e retenção</b>.</p>
       <ul><li><b>Retenção:</b> a auditoria é guardada por 30 dias (padrão, ajustável de 1 a 3650). O que for mais antigo é apagado automaticamente, assim como os arquivos de log do mesmo período. O histórico de versões dos playbooks não é afetado.</li>
@@ -180,7 +180,8 @@ python3 server.py --host 0.0.0.0 --port 8765 --secure-cookies      # rede, atrá
         <tr><td><code>MEDUSA_HOST</code> · <code>MEDUSA_PORT</code></td><td>endereço e porta</td></tr>
         <tr><td><code>MEDUSA_SECURE_COOKIES</code></td><td><code>1</code> atrás de HTTPS</td></tr>
         <tr><td><code>MEDUSA_TRUST_PROXY</code></td><td><code>1</code> atrás de proxy reverso: usa o IP real do <code>X-Forwarded-For</code></td></tr>
-        <tr><td><code>MEDUSA_ADMIN_LOGIN</code> · <code>MEDUSA_ADMIN_NAME</code> · <code>MEDUSA_ADMIN_PASSWORD</code></td><td>administrador inicial (só quando não há nenhum)</td></tr></tbody></table>
+        <tr><td><code>MEDUSA_ADMIN_LOGIN</code> · <code>MEDUSA_ADMIN_NAME</code> · <code>MEDUSA_ADMIN_PASSWORD</code></td><td>administrador inicial (só quando não há nenhum)</td></tr>
+        <tr><td><code>MEDUSA_SESSION_IDLE_HOURS</code> · <code>MEDUSA_SESSION_MAX_HOURS</code></td><td>sessão: horas sem uso (padrão 8) e duração máxima (padrão 24)</td></tr></tbody></table>
       <p>Dentro de <code>MEDUSA_HOME</code>:</p>
       <table><thead><tr><th>Caminho</th><th>Conteúdo</th></tr></thead><tbody>
         <tr><td><code>playbooks/PB-xx-*/</code></td><td><code>.md</code> e <code>.drawio</code> de cada playbook, e as imagens do documento em <code>imagens/</code></td></tr>
@@ -189,17 +190,20 @@ python3 server.py --host 0.0.0.0 --port 8765 --secure-cookies      # rede, atrá
         <tr><td><code>data/playbooks.db</code></td><td>SQLite: usuários, sessões, auditoria, configurações (aparência, logs, SSO), template e <b>histórico de versões</b> de cada playbook</td></tr>
         <tr><td><code>data/logs/</code></td><td>auditoria em JSON Lines (se o destino "arquivo" estiver ligado)</td></tr>
         <tr><td><code>data/lixeira/</code></td><td>playbooks e templates excluídos e o conteúdo de cada reset (<code>reset__…</code>); para restaurar, mova de volta e reinicie</td></tr>
+        <tr><td><code>data/cache/biblioteca.json</code></td><td>resumos e índice de busca, para o servidor subir rápido (pode ser apagado: é refeito)</td></tr>
         <tr><td><code>.backups/&lt;PB&gt;/&lt;data-hora&gt;/</code></td><td>versão anterior de cada arquivo, a cada gravação</td></tr></tbody></table>
-      <p><b>Backup do banco:</b> copie <code>data/playbooks.db</code> com o servidor parado ou use <code>sqlite3 data/playbooks.db ".backup copia.db"</code>. Novas versões do esquema são aplicadas sozinhas ao iniciar.</p>
+      <p><b>Backup do banco:</b> o banco usa WAL (gravações recentes ficam em <code>playbooks.db-wal</code>). Com o servidor parado, copie a pasta <code>data/</code> inteira; com ele rodando, use <code>sqlite3 data/playbooks.db ".backup copia.db"</code>. Copiar só o <code>.db</code> com o servidor no ar pode perder as últimas alterações. Novas versões do esquema são aplicadas sozinhas ao iniciar.</p>
       <p><b>Ambiente de teste:</b> aponte <code>MEDUSA_HOME</code> para uma cópia da pasta de dados.</p>` },
     { id: "seguranca", role: "admin", title: "Segurança", html: `
       <table><tbody>
         <tr><td>Senhas</td><td>PBKDF2-SHA256 com 310 mil iterações; nunca em texto</td></tr>
-        <tr><td>Sessão</td><td>cookie HttpOnly + SameSite=Strict; no banco só o SHA-256 do token</td></tr>
+        <tr><td>Sessão</td><td>cookie HttpOnly + SameSite=Strict; no banco só o SHA-256 do token; expira após 8 h sem uso ou 24 h depois do login</td></tr>
         <tr><td>Requisições</td><td>alterações exigem o cabeçalho <code>X-Requested-With</code> (anti-CSRF)</td></tr>
         <tr><td>Navegador</td><td>CSP sem script inline, X-Frame-Options, nosniff; logo servida em sandbox</td></tr>
         <tr><td>Arquivos</td><td>só o front-end é servido; <code>.md</code>, <code>.drawio</code>, banco e backups não ficam acessíveis pela web</td></tr>
-        <tr><td>Concorrência</td><td>gravação sobre versão desatualizada é recusada (409)</td></tr></tbody></table>` },
+        <tr><td>Concorrência</td><td>toda gravação informa a revisão que estava aberta; sobre versão desatualizada é recusada (409)</td></tr>
+        <tr><td>Arquivos gravados</td><td>escrita atômica (arquivo temporário + troca): uma queda no meio da gravação não corrompe o playbook</td></tr>
+        <tr><td>Servidor</td><td>conexões paradas são encerradas após 30 s; até 32 requisições processadas ao mesmo tempo, as demais aguardam</td></tr></tbody></table>` },
     { id: "problemas", role: "editor", title: "Solução de problemas", html: `
       <table><thead><tr><th>Sintoma</th><th>O que fazer</th></tr></thead><tbody>
         <tr><td>"Foi salvo por outra pessoa"</td><td>copie o que precisar, clique em Recarregar e reaplique</td></tr>

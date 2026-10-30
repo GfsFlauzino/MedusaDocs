@@ -5,7 +5,7 @@ O editor trabalha sobre dois modelos JSON:
   doc   = {title, byline, sections:[{title, blocks, subs:[{title, blocks}]}]}
   flow  = {subtitle, nodes:[{id, lane, x, y, w, h, type, lines, team?}], edges:[{id, from, to, label, type, exit, entry, wps}]}
 """
-import hashlib, html, json, os, re, unicodedata
+import hashlib, html, json, os, re, threading, unicodedata
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -270,9 +270,9 @@ def infer_edge(st):
         if v["color"].upper() == c: return k
     return "flow"
 
-def infer_team(lines):
+def infer_team(lines, teams=None):
     text = " ".join(l["t"] for l in lines)
-    for k in sorted(load_teams(), key=len, reverse=True):
+    for k in sorted(teams if teams is not None else load_teams(), key=len, reverse=True):
         if re.search(rf"(?<![\w/]){re.escape(k)}(?![\w/])", text): return k
     return None
 
@@ -302,7 +302,7 @@ def drawio_to_flow(path):
             lanes_abs[cid] = (lane["key"], float(g.get("x", 0)), float(g.get("y", 0)), float(g.get("height", 0)))
         if cid == "title":
             subtitle = html.unescape(re.sub("<[^>]+>", "", (c.get("value") or "").split("—", 1)[-1])).strip() if "—" in (c.get("value") or "") else ""
-    nodes = []
+    nodes, union = [], None
     for cid, c in verts.items():
         st = style_dict(c.get("style"))
         g = c.find("mxGeometry")
@@ -312,7 +312,9 @@ def drawio_to_flow(path):
         t = infer_type(st)
         n = {"id": cid, "lane": lanes_abs[c.get("parent")][0], "x": float(g.get("x", 0)), "y": float(g.get("y", 0)),
              "w": float(g.get("width", 120)), "h": float(g.get("height", 48)), "type": t, "lines": lines}
-        if t == "support": n["team"] = infer_team(lines)
+        if t == "support":
+            if union is None: union = load_teams()         # lido uma vez por fluxograma, não por caixa
+            n["team"] = infer_team(lines, union)
         nodes.append(n)
     ids = {n["id"] for n in nodes}
     lane_rows = sorted(lanes_abs.values(), key=lambda r: r[2])
@@ -587,6 +589,18 @@ EXTRA_ALIASES = {"SOC N1": [r"\bN1\b"], "SOC N2": [r"\bN2\b"]}
 def team_patterns(teams):
     return {t: [rf"(?<![\w/]){re.escape(t)}(?![\w/])"] + EXTRA_ALIASES.get(t, []) for t in teams}
 
+_team_rx = {}
+
+def team_regexes(teams):
+    """Um regex compilado por time (nome + apelidos), reaproveitado entre documentos com os mesmos times."""
+    key = tuple(sorted(teams))
+    rx = _team_rx.get(key)
+    if rx is None:
+        rx = {t: re.compile("|".join(f"(?:{p})" for p in pats)) for t, pats in team_patterns(teams).items()}
+        if len(_team_rx) > 64: _team_rx.clear()
+        _team_rx[key] = rx
+    return rx
+
 def plain(s): return re.sub(r"[*`]", "", s)
 
 def team_of_phase(title):
@@ -635,10 +649,10 @@ def build_view(pid, folder, doc, flow, refs, teams=None):
                     elif b["t"] in ("p", "quote"): snippets.append((sec["title"], plain(b["text"])))
         secs.append({"id": slug(sec["title"]), "title": sec["title"], "html": render(blocks), "subs": subs})
     mentions = {}
-    for team, pats in team_patterns(teams if teams is not None else load_teams()).items():
+    for team, rx in team_regexes(teams if teams is not None else load_teams()).items():
         seen, lst = set(), []
         for s, t in snippets:
-            if any(re.search(p, t) for p in pats) and t not in seen:
+            if t not in seen and rx.search(t):
                 seen.add(t); lst.append({"section": s, "text": t if len(t) < 420 else t[:417] + "…"})
         mentions[team] = lst
     name = doc["title"].split("—", 1)[-1].strip()
@@ -647,6 +661,18 @@ def build_view(pid, folder, doc, flow, refs, teams=None):
             "mentions": mentions, "flow": flow, "refs": refs, "doc": doc, "gov": get_gov(doc)}
 
 # ───────────────────────── arquivos ─────────────────────────
+
+def atomic_write(path, text):
+    """Grava num .tmp da mesma pasta e troca de uma vez (os.replace): quem lê nunca vê o arquivo pela metade,
+    e uma queda no meio da gravação deixa o arquivo anterior intacto."""
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text); f.flush(); os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists(): tmp.unlink()
 
 def read_json(p, default):
     try: return json.loads(Path(p).read_text("utf-8"))
@@ -682,8 +708,14 @@ def revision(folder, refs=None):
     h.update(json.dumps(refs, sort_keys=True).encode())
     return h.hexdigest()[:16]
 
+def sort_key(pid):
+    """Ordem natural dos IDs: PB-11 antes de PB-100."""
+    m = re.match(r"([A-Za-z]+)-(\d+)", pid or "")
+    return (m.group(1).upper(), int(m.group(2))) if m else (str(pid), 0)
+
 def all_folders():
-    return [f for f in sorted(SRC.glob("PB-*")) if f.is_dir() and files_of(f)[0]]
+    fs = [f for f in sorted(SRC.glob("PB-*")) if f.is_dir() and files_of(f)[0]]
+    return sorted(fs, key=lambda f: sort_key(f.name))
 
 # Times e tags pertencem aos templates (templates.py registra o provedor). Aqui fica a união de todos,
 # usada onde não há um template definido (reconhecer nomes de times em textos e caixas de apoio).
@@ -694,10 +726,8 @@ def set_teams_provider(fn):
     _teams_provider = fn
 
 def load_teams():
-    teams = _teams_provider() if _teams_provider else {}
-    for name, t in teams.items():
-        t.setdefault("category", "central" if name in ("SOC N1", "SOC N2", "CSIRT") else "apoio")
-    return teams
+    """União dos times (somente leitura: vem do cache dos templates, já com a categoria preenchida)."""
+    return _teams_provider() if _teams_provider else {}
 
 def load_all():
     teams = load_teams()

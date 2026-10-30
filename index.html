@@ -12,7 +12,8 @@
 <body class="auth">
 <!-- barra lateral: marca (logo + nome do workspace), busca, navegação, perfil e tema -->
 <aside class="side" id="side" aria-label="Navegação">
-  <a class="brand" href="#/" id="brand"><span class="brand-mark" id="brandMark"></span><span class="brand-txt" id="brandName">Medusa Docs</span></a>
+  <div class="side-top"><a class="brand" href="#/" id="brand"><span class="brand-mark" id="brandMark"></span><span class="brand-txt" id="brandName">Medusa Docs</span></a>
+    <button class="side-close" id="sideClose" title="Fechar menu (Esc)" aria-label="Fechar menu"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6.75827 17.2426L12.0009 12M17.2435 6.75736L12.0009 12M12.0009 12L6.75827 6.75736M12.0009 12L17.2435 17.2426"/></svg></button></div>
   <div class="search">
     <span class="search-ic"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M17 17L21 21"/> <path d="M3 11C3 15.4183 6.58172 19 11 19C13.213 19 15.2161 18.1015 16.6644 16.6493C18.1077 15.2022 19 13.2053 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11Z"/></svg></span><input id="q" type="search" placeholder="Buscar" autocomplete="off" aria-label="Buscar (atalho /)"><kbd class="search-kbd" aria-hidden="true">/</kbd>
     <div id="results" hidden></div>

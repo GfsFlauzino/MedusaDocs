@@ -6,11 +6,12 @@ fluxograma e lê o trecho do documento; o time de segurança edita tudo sem cód
 templates e auditoria.
 
 - Só Python 3 (biblioteca padrão): nada para instalar além do Python, ou uma imagem Docker pronta.
-- White label: nome, cor, logo e textos da página inicial configuráveis no painel administrativo.
+- White label: nome do workspace e logo configuráveis no painel administrativo; tema claro e escuro.
 - Formatos abertos: cada playbook é um `.md` + um `.drawio`; troca entre instalações em `.medusa.md` (Markdown + Mermaid).
-- Versão atual: **2.1.0** (novidades em [CHANGELOG.md](CHANGELOG.md)): imagens na documentação, reset da aplicação pela
-  administração e novas visualizações da lista de playbooks. Na 2.0: versionamento automático com histórico navegável,
-  encaminhamento de logs em JSON com retenção, login único (SSO) por OpenID Connect.
+- Versão atual: **2.2.0** (novidades em [CHANGELOG.md](CHANGELOG.md)): novo visual com menu lateral recolhível,
+  desempenho (cache de documentos, lista leve, busca no servidor, gzip e cache no navegador) e endurecimento (gravação
+  atômica, sessão com duração máxima). Na 2.1: imagens na documentação e reset da aplicação. Na 2.0: versionamento,
+  logs em JSON com retenção e login único (SSO) por OpenID Connect.
 
 ## Instalação
 
@@ -48,8 +49,8 @@ exibida uma única vez, e precisa trocá-la no primeiro acesso.
 ## Interface
 
 - **Abas:** cada playbook ou página aberta vira uma aba, como num navegador (o X ou o botão do meio fecha; o + abre o início). Ficam salvas no navegador de cada usuário.
-- **Tema claro/escuro** no topo.
-- **Barra lateral:** logo e nome do workspace, busca, Playbooks, Templates e Administração; perfil e tema claro/escuro no rodapé. Em telas estreitas vira gaveta.
+- **Menu lateral:** logo e nome do workspace, busca, Playbooks, Templates e Administração; perfil e tema claro/escuro no rodapé. O botão do menu (ou a tecla `[`) recolhe e expande; a escolha fica salva no navegador. Em telas estreitas vira gaveta (`Esc` fecha).
+- **Busca** (atalho `/`): feita no servidor, sem acento; acha playbooks, passos, ramos, seções e times. `↑` `↓` e `Enter` navegam.
 - **Menu do perfil** (rodapé da barra lateral): Documentação da plataforma (uso, edição, ramos, templates, administração, operação, filtrada pelo perfil; conteúdo em `docs.js`), Templates, Administração, Trocar senha e Sair.
 - **Playbook:** duas visualizações, **Fluxograma** e **Documentação** (fases, passos e ramos ficam na documentação, com índice por seção e subseção), além de **Versões** e dos editores.
 - **Rascunhos:** sair de uma aba de edição sem salvar não perde nada; a aba ganha um ponto e as alterações voltam ao reabrir. Fechar a aba pede confirmação.
@@ -90,7 +91,7 @@ As permissões são verificadas no servidor. O visualizador nem recebe os playbo
 Em Produção, toda gravação (documento, fluxograma ou restauração) pede o tipo (Minor/Major) e a descrição das alterações,
 que vão para o histórico e para a auditoria. A versão fica na tabela "Propriedades do playbook" (bloqueada no editor) e na linha de versão do documento. Cada
 gravação guarda o conteúdo completo (`.md`, `.drawio`, vínculos) na tabela `pb_versions` do banco. A aba
-A aba **Versões** do playbook lista o histórico e permite:
+**Versões** do playbook lista o histórico e permite:
 
 - **Ler** uma versão como documentação completa, com o fluxograma clicável daquele momento (e baixar em HTML ou imprimir);
 - **Comparar** duas versões (ou uma com a atual): linhas do documento e caixas/setas do fluxograma acrescentadas e removidas;
@@ -236,11 +237,14 @@ flowchart TB
 | Item | Como funciona |
 | --- | --- |
 | Senhas | PBKDF2-SHA256 (310 mil iterações) |
-| Sessão | Cookie `HttpOnly` + `SameSite=Strict`; no banco só o SHA-256 do token; expira após 8 h sem uso |
+| Sessão | Cookie `HttpOnly` + `SameSite=Strict`; no banco só o SHA-256 do token; expira após 8 h sem uso e, mesmo em uso, 24 h depois do login (`MEDUSA_SESSION_IDLE_HOURS`, `MEDUSA_SESSION_MAX_HOURS`); o cookie é renovado com o uso |
 | Login | Bloqueio de 5 min após 5 tentativas erradas |
 | Requisições | Alterações exigem o cabeçalho `X-Requested-With` (anti-CSRF) |
 | Navegador | CSP sem script inline, `X-Frame-Options`, `nosniff`; logo servida em sandbox |
 | Arquivos | Só o front-end é servido; `.md`, `.drawio`, banco e backups não ficam acessíveis pela web |
+| Gravações | Toda gravação informa a revisão aberta (sem ela: 400; desatualizada: 409); escrita atômica (temporário + troca), sem arquivo pela metade |
+| Servidor HTTP | HTTP/1.1 com keep-alive; conexão parada é encerrada após 30 s; até 32 requisições processadas ao mesmo tempo; corpo de até 8 MB; fluxograma com até 400 caixas e 800 setas |
+| Importar | Substituir um playbook existente equivale a excluí-lo: só administradores |
 | Docker | Usuário sem privilégios (UID 10001), sistema de arquivos somente leitura, sem capabilities |
 | Auditoria | Login, gravações (com a versão), status, criação, importação, exportação, exclusão, templates, times, usuários, aparência, logs e SSO; IP de origem; retenção de 30 dias e encaminhamento em JSON |
 | SSO | OpenID Connect com PKCE, state e nonce; ID token validado pela assinatura RS256, emissor, audiência e validade |
@@ -259,9 +263,11 @@ Tudo fica em `MEDUSA_HOME` (padrão: a pasta da aplicação; no Docker, o volume
 | `data/playbooks.db` | SQLite: usuários, sessões, tentativas de login, auditoria, configurações (aparência, logs, SSO), template e histórico de versões de cada playbook |
 | `data/logs/` | Auditoria em JSON Lines, quando o destino "arquivo" está ligado |
 | `data/lixeira/` | Playbooks e templates excluídos e o conteúdo de cada reset da aplicação (`reset__…`) |
+| `data/cache/biblioteca.json` | Resumos e índice de busca, para o servidor subir rápido (pode ser apagado: é refeito) |
 | `.backups/<PB>/<data-hora>/` | Versão anterior de cada arquivo, guardada a cada gravação |
 
-**Backup:** copie a pasta inteira (com o servidor parado) ou use `sqlite3 data/playbooks.db ".backup copia.db"` para o banco com ele rodando.
+**Backup:** copie a pasta inteira com o servidor parado. Com ele rodando, use `sqlite3 data/playbooks.db ".backup copia.db"`:
+o banco usa WAL (as gravações recentes ficam em `playbooks.db-wal`), então copiar só o `.db` pode perder as últimas alterações.
 Novas versões do esquema do banco são aplicadas sozinhas ao iniciar (`MIGRATIONS` em `store.py`).
 
 ## Variáveis de ambiente
@@ -275,14 +281,36 @@ Novas versões do esquema do banco são aplicadas sozinhas ao iniciar (`MIGRATIO
 | `MEDUSA_ADMIN_LOGIN` | — | Cria o administrador inicial se não houver nenhum |
 | `MEDUSA_ADMIN_NAME` | `Administrador` | Nome do administrador inicial |
 | `MEDUSA_ADMIN_PASSWORD` | gerada | Senha inicial (sem ela, uma temporária aparece no log); a troca é obrigatória no primeiro acesso |
+| `MEDUSA_SESSION_IDLE_HOURS` | `8` | Horas sem uso até a sessão expirar |
+| `MEDUSA_SESSION_MAX_HOURS` | `24` | Duração máxima da sessão, mesmo em uso (depois disso, novo login) |
+| `MEDUSA_BIND` / `MEDUSA_PUBLISH_PORT` | `127.0.0.1` / `8765` | Só no `docker-compose.yml`: onde a porta do contêiner é publicada no host |
+| `PB_SRC` · `PB_DATA` · `PB_BACKUPS` · `PB_TEMPLATES` · `PB_MAPPINGS` | dentro de `MEDUSA_HOME` | Caminhos avulsos (playbooks, banco, backups, templates, vínculos), para instalações antigas |
 
-Para testar sem mexer nos dados reais, aponte `MEDUSA_HOME` para uma cópia.
+Requer **Python 3.9 ou mais novo** (a imagem Docker usa 3.12). Para testar sem mexer nos dados reais, aponte `MEDUSA_HOME` para uma cópia.
+
+## Desempenho
+
+O servidor interpreta cada documento uma vez e guarda o resultado em memória (`library.py`); só relê quando o arquivo
+muda (edição externa aparece em até 1 s). A interface baixa só a lista leve (`GET /api/library`, paginada e
+filtrável), o playbook aberto (`GET /api/doc/{id}`) e os resultados da busca (`GET /api/search`). Respostas de texto
+vão com gzip; listas e documentos têm ETag (o navegador recebe `304` quando nada mudou); os arquivos da interface têm
+cache longo e versão no endereço (`app.js?v=…`). Medição com 500 playbooks: [docs/benchmark-2.2.txt](docs/benchmark-2.2.txt)
+(antes: [docs/benchmark-base.txt](docs/benchmark-base.txt)). `GET /api/data` (lista completa da 2.1) continua
+funcionando, mas sai na 3.1.
+
+## Testes
+
+```bash
+python3 -m unittest discover -s tests      # sobe o servidor em pastas temporárias; não toca nos dados reais
+python3 tools/bench.py --sizes 10,150,500   # benchmark
+```
 
 ## Estrutura do código
 
 | Arquivo | Função |
 | --- | --- |
 | `server.py` | Servidor HTTP, API, permissões, CLI `adduser` |
+| `library.py` | Cache dos documentos já interpretados, lista leve e busca |
 | `store.py` | Banco SQLite (usuários, sessões, auditoria, configurações, versões) |
 | `logfwd.py` | Encaminhamento de logs em JSON (HTTP, syslog, arquivo) e retenção |
 | `sso.py` | Login único por OpenID Connect (PKCE, validação RS256 do ID token) |
@@ -292,6 +320,7 @@ Para testar sem mexer nos dados reais, aponte `MEDUSA_HOME` para uma cópia.
 | `flowdsl.py` | Fluxograma ⇄ Mermaid |
 | `bundle.py` | Formato de troca `.medusa.md` |
 | `index.html`, `app.js`, `editor.js`, `flow.js`, `docs.js`, `icons.js`, `style.css`, `theme.js` | Interface |
+| `tests/`, `tools/` | Testes (`unittest`) e ferramentas (benchmark, geração das referências dos testes); não vão para a imagem |
 
 ## Licença
 

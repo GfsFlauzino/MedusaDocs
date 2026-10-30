@@ -34,6 +34,15 @@ def clone(app, n):
     maps_f.write_text(json.dumps(maps, ensure_ascii=False), "utf-8")
 
 
+def wait_ready(app, before, timeout=60):
+    """Espera o fim do pré-aquecimento (nova linha no log). A versão base não tem: volta na hora."""
+    t = time.time()
+    while time.time() - t < timeout:
+        n = app.read_log().count("Cache de documentos pronto")
+        if n > before or (n == 0 and "Cache de documentos" not in app.read_log() and time.time() - t > 0.5): return
+        time.sleep(0.05)
+
+
 def timed(fn):
     t = time.perf_counter(); r = fn(); return (time.perf_counter() - t) * 1000, r
 
@@ -74,7 +83,16 @@ def bench(app_dir, n, reps):
         clone(app, n)
         new_api = admin.get("/api/library").status == 200
         lst = "/api/library?limit=100" if new_api else "/api/data"
+        # reinicia para medir a primeira chamada depois do boot (o pré-aquecimento corre em paralelo)
+        ready = lambda: app.read_log().count("Cache de documentos pronto")
+        before = ready(); app.stop(); app.start()
         cold, _ = timed(lambda: admin.get(lst))
+        wait_ready(app, before)
+        cold_disk = None
+        if new_api:          # 2º boot: resumos vêm do cache em disco (data/cache/biblioteca.json)
+            before = ready(); app.stop(); app.start()
+            cold_disk, _ = timed(lambda: admin.get(lst))
+            wait_ready(app, before)
         gz = {"Accept-Encoding": "gzip"}
         hot = [timed(lambda: admin.get(lst, headers=gz))[0] for _ in range(reps)]
         r = admin.get(lst)
@@ -92,7 +110,7 @@ def bench(app_dir, n, reps):
             puts.append(ms)
         c8, c32 = concurrent(app, lst, 8, True), concurrent(app, lst, 32, True)
         mem = rss_mb(app.proc.pid)
-        return {"n": n, "api": lst.split("?")[0], "cold": cold, "hot50": statistics.median(hot), "raw_kb": raw / 1024, "gz_kb": comp / 1024,
+        return {"n": n, "api": lst.split("?")[0], "cold": cold, "cold_disk": cold_disk, "hot50": statistics.median(hot), "raw_kb": raw / 1024, "gz_kb": comp / 1024,
                 "t304": statistics.median(t304) if t304 else None, "detail": statistics.median(det),
                 "search": statistics.median(search) if search else None, "put": statistics.median(puts),
                 "c8": c8, "c32": c32, "mem": mem}
@@ -117,10 +135,10 @@ def main():
     rows = [bench(Path(a.app_dir).resolve(), int(n), a.reps) for n in a.sizes.split(",")]
     print(f"Medusa Docs — benchmark ({time.strftime('%Y-%m-%d %H:%M')}, Python {sys.version.split()[0]}, {a.app_dir})")
     print("tempos em ms (mediana); concorrência: p50/p95 por requisição e tempo total; memória do servidor no fim (MB)\n")
-    head = ["N", "lista", "fria", "quente", "bruto KB", "gzip KB", "304", "detalhe", "busca", "PUT doc", "8 simult.", "32 simult.", "RSS MB"]
+    head = ["N", "lista", "1ª após boot", "1ª após boot (cache em disco)", "quente", "bruto KB", "gzip KB", "304", "detalhe", "busca", "PUT doc", "8 simult.", "32 simult.", "RSS MB"]
     print(" | ".join(head))
     for r in rows:
-        print(" | ".join([str(r["n"]), r["api"], fmt(r["cold"]), fmt(r["hot50"]), fmt(r["raw_kb"], 0), fmt(r["gz_kb"], 0), fmt(r["t304"]),
+        print(" | ".join([str(r["n"]), r["api"], fmt(r["cold"]), fmt(r["cold_disk"]), fmt(r["hot50"]), fmt(r["raw_kb"], 0), fmt(r["gz_kb"], 0), fmt(r["t304"]),
                           fmt(r["detail"]), fmt(r["search"]), fmt(r["put"]),
                           conc(r["c8"]), conc(r["c32"]),
                           fmt(r["mem"], 0)]))

@@ -88,7 +88,7 @@ def save(key, t):
     TPL_DIR.mkdir(parents=True, exist_ok=True)
     t = {k: v for k, v in t.items() if k not in ("key", "rev", "warnings")}
     t["updated_at"] = datetime.now().isoformat(timespec="seconds")
-    path_of(key).write_text(to_text(t), "utf-8")
+    core.atomic_write(path_of(key), to_text(t))
 
 def list_all(catalog=None):
     out = []
@@ -432,16 +432,53 @@ def teams_of_file(f):
     except ValueError: d = {}
     return {k: v for k, v in d.items() if isinstance(v, dict)} if isinstance(d, dict) else {}
 
+def _with_category(teams):
+    for n, t in teams.items(): t.setdefault("category", "central" if n in BASIC_TEAMS else "apoio")
+    return teams
+
 def all_teams():
-    """União dos times de todos os templates (o Padrão prevalece em nomes repetidos). Em cache até um template mudar."""
+    """União dos times de todos os templates (o Padrão prevalece em nomes repetidos). Em cache até um template mudar.
+    Devolve a estrutura do cache, somente leitura: quem precisa alterar copia antes (copy.deepcopy)."""
     fs = _files()
     sig = tuple((f.name, f.stat().st_mtime_ns, f.stat().st_size) for f in fs)
     if sig != _cache["sig"]:
         out = {}
         for f in fs:
             for k, v in teams_of_file(f).items(): out.setdefault(k, v)
-        _cache.update(sig=sig, teams=out)
-    return copy.deepcopy(_cache["teams"])
+        _cache.update(sig=sig, teams=_with_category(out))
+    return _cache["teams"]
+
+# times e nome de um template, em cache pela assinatura do arquivo (mtime_ns, tamanho); somente leitura
+_by_key = {}
+
+def file_sig(key):
+    try:
+        st = path_of(key).stat()
+        return (st.st_mtime_ns, st.st_size)
+    except (OSError, TemplateError):
+        return None
+
+def _key_info(key):
+    sig = file_sig(key)
+    if sig is None: return None
+    c = _by_key.get(key)
+    if c and c[0] == sig: return c
+    text = path_of(key).read_text("utf-8")
+    m = TEAMS_BLOCK.search(text)
+    try: d = json.loads(m.group(1)) if m else {}
+    except ValueError: d = {}
+    teams = _with_category({k: v for k, v in d.items() if isinstance(v, dict)} if isinstance(d, dict) else {})
+    name = next((ln[5:].strip() for ln in text.split("\n", 12)[:12] if ln.startswith("name:")), key)
+    c = _by_key[key] = (sig, teams, name)
+    return c
+
+def teams_for(key):
+    c = _key_info(key)
+    return c[1] if c else {}
+
+def name_for(key):
+    c = _key_info(key)
+    return c[2] if c else key
 
 core.set_teams_provider(all_teams)
 

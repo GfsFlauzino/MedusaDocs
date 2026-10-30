@@ -44,6 +44,7 @@ Edite o `.env`:
 | `MEDUSA_BIND` / `MEDUSA_PUBLISH_PORT` | Onde a porta é publicada. Mantenha `127.0.0.1` se houver proxy no mesmo host |
 | `MEDUSA_SECURE_COOKIES` | `1` quando o acesso for por HTTPS (passo 6) |
 | `MEDUSA_TRUST_PROXY` | `1` atrás do proxy reverso, para registrar o IP real dos usuários (passo 6) |
+| `MEDUSA_SESSION_IDLE_HOURS` / `MEDUSA_SESSION_MAX_HOURS` | Opcionais: horas sem uso até a sessão expirar (padrão 8) e duração máxima da sessão (padrão 24) |
 
 O administrador só é criado se ainda não houver nenhum. Em qualquer caso, a troca de senha é obrigatória no primeiro acesso.
 
@@ -156,6 +157,7 @@ Tudo fica no volume `medusa-data`, montado em `/data` no container:
 | `data/playbooks.db` | Banco SQLite: usuários, sessões, auditoria, configurações e histórico de versões dos playbooks |
 | `data/logs/` | Auditoria em JSON Lines (se ligado em Administração → Logs) |
 | `data/lixeira/` | Playbooks e templates excluídos e o conteúdo de cada **Resetar aplicação** (`reset__…`, com cópia do banco) |
+| `data/cache/biblioteca.json` | Resumos e índice de busca (refeito sozinho se for apagado) |
 | `.backups/` | Versão anterior de cada arquivo, a cada gravação |
 
 Recriar ou atualizar o container **não apaga** o volume. Só `docker compose down -v` o apaga.
@@ -207,7 +209,49 @@ docker compose up -d --build
 docker image prune -f
 ```
 
-Os dados continuam no volume; ajustes no banco são aplicados sozinhos ao iniciar. Faça um backup antes.
+Os dados continuam no volume; ajustes no banco são aplicados sozinhos ao iniciar. Faça um backup antes (passo 8) e
+**marque a imagem com a versão** (`medusa-docs:2.2.0`), nunca só `latest`: é o que permite voltar à anterior.
+
+### Podman
+
+O Podman constrói no formato OCI por padrão, que **descarta o HEALTHCHECK** do Dockerfile: use `--format docker`.
+Exemplo com o contêiner `medusa-docs` e o volume `medusa-data` (confira os seus com `podman ps -a` e `podman volume ls`):
+
+```bash
+# 0) como roda hoje (portas, volume, opções)
+podman inspect medusa-docs --format '{{.Config.Image}} {{json .Mounts}} {{json .HostConfig.PortBindings}}'
+
+# 1) backup com o contêiner parado
+podman stop medusa-docs
+podman volume export medusa-data > medusa-backup-$(date +%F-%H%M).tar
+
+# 2) imagem nova, guardando a atual
+podman tag localhost/medusa-docs:latest localhost/medusa-docs:anterior
+podman build --format docker -t localhost/medusa-docs:2.2.0 .
+
+# 3) subir com o MESMO volume e as mesmas opções
+podman rm medusa-docs
+podman run -d --name medusa-docs --restart unless-stopped \
+  -p 127.0.0.1:8765:8765 -v medusa-data:/data \
+  -e MEDUSA_SECURE_COOKIES=1 -e MEDUSA_TRUST_PROXY=1 \
+  --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges \
+  localhost/medusa-docs:2.2.0
+
+# 4) verificar
+podman logs medusa-docs | head -30          # "Cache de documentos pronto: N documento(s)"
+podman healthcheck run medusa-docs && echo saudável
+
+# 5) voltar à anterior, se algo der errado
+podman stop medusa-docs && podman rm medusa-docs
+podman volume rm medusa-data && podman volume create medusa-data && podman volume import medusa-data medusa-backup-AAAA-MM-DD-HHMM.tar
+podman run -d … localhost/medusa-docs:anterior      # mesmas opções do passo 3
+```
+
+- Pasta do host em vez de volume: `-v /caminho:/data:Z` (SELinux) e `podman unshare chown -R 10001:10001 /caminho`.
+- Quadlet/systemd: troque a tag no `.container` e rode `systemctl --user restart medusa-docs`.
+- A 2.2.0 não altera o banco: a imagem 2.1 abre o mesmo volume depois (o arquivo `data/cache/biblioteca.json` é ignorado por ela).
+- Ensaio antes de produção: `podman volume create medusa-teste && podman volume import medusa-teste backup.tar` e suba a
+  imagem nova em outra porta (ex.: 8766) com esse volume.
 
 ## 10. Trazer dados de outra instalação
 

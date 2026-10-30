@@ -1,16 +1,19 @@
 """Banco de dados da ferramenta (SQLite, embutido no Python): usuários, sessões, tentativas de login, auditoria,
 configurações, estados do login SSO e versões dos playbooks.
 
-Arquivo único: data/playbooks.db. Cada operação abre a própria conexão (seguro com o servidor multithread);
-operações que precisam de várias leituras e escritas usam transação BEGIN IMMEDIATE.
+Arquivo único: data/playbooks.db. Cada thread do servidor usa a própria conexão, aberta uma vez (WAL,
+synchronous=NORMAL); operações que precisam de várias leituras e escritas usam transação BEGIN IMMEDIATE.
+A sessão validada fica 15 s em memória (cache invalidado em logout, troca de senha e alteração de usuário).
 O esquema é versionado por PRAGMA user_version; novas versões entram em MIGRATIONS.
 """
-import hashlib, json, os, secrets, sqlite3, time
-from contextlib import contextmanager
+import hashlib, json, os, secrets, sqlite3, threading, time
+from contextlib import closing, contextmanager
 from datetime import datetime
 from pathlib import Path
 
 ROLES = ("viewer", "editor", "admin")
+SESSION_CACHE_TTL = 15          # segundos que uma sessão validada fica em memória
+MAX_LOGIN_ATTEMPTS_ROWS = 10_000
 
 MIGRATIONS = [
     # v1
@@ -105,44 +108,50 @@ class StoreError(ValueError):
 
 
 class Store:
-    def __init__(self, path, session_ttl=8 * 3600, max_fails=5, lock_seconds=300):
+    def __init__(self, path, session_ttl=8 * 3600, max_fails=5, lock_seconds=300, session_max=24 * 3600):
         self.path = Path(path)
-        self.ttl, self.max_fails, self.lock_seconds = session_ttl, max_fails, lock_seconds
+        self.ttl, self.max_fails, self.lock_seconds, self.session_max = session_ttl, max_fails, lock_seconds, session_max
         self.path.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(self.path.parent, 0o700)           # pasta de dados só para o dono
+        self._local = threading.local()
+        self._sessions, self._sessions_lock = {}, threading.Lock()
         self._migrate()
 
     # ── conexão
     def _connect(self):
         c = sqlite3.connect(self.path, timeout=15, isolation_level=None)   # autocommit; transações explícitas
         c.row_factory = sqlite3.Row
-        c.execute("PRAGMA foreign_keys = ON")
-        c.execute("PRAGMA busy_timeout = 15000")
+        for pragma in ("foreign_keys = ON", "busy_timeout = 15000", "journal_mode = WAL", "synchronous = NORMAL",
+                       "temp_store = MEMORY", "cache_size = -8000"):
+            c.execute("PRAGMA " + pragma)
+        return c
+
+    def _conn(self):
+        """Conexão desta thread (aberta na primeira vez; fecha sozinha quando a thread termina)."""
+        c = getattr(self._local, "c", None)
+        if c is None: c = self._local.c = self._connect()
         return c
 
     @contextmanager
     def _db(self):
-        c = self._connect()
-        try:
-            yield c
-        finally:
-            c.close()
+        yield self._conn()
 
     @contextmanager
     def _tx(self):
-        c = self._connect()
+        c = self._conn()
+        c.execute("BEGIN IMMEDIATE")
         try:
-            c.execute("BEGIN IMMEDIATE")
             yield c
             c.execute("COMMIT")
         except BaseException:
             c.execute("ROLLBACK")
             raise
-        finally:
-            c.close()
+
+    def _forget_sessions(self):
+        with self._sessions_lock: self._sessions.clear()
 
     def _migrate(self):
-        with self._db() as c:
+        with closing(self._connect()) as c:
             c.execute("PRAGMA journal_mode = WAL")
             v = c.execute("PRAGMA user_version").fetchone()[0]
             for i, sql in enumerate(MIGRATIONS[v:], start=v + 1):
@@ -195,6 +204,7 @@ class Store:
             c.execute("""INSERT INTO users (login, name, role, hash, active, must_change, created_at, updated_at) VALUES (?,?,?,?,1,0,?,?)
                          ON CONFLICT(login) DO UPDATE SET name=excluded.name, role=excluded.role, hash=excluded.hash,
                          active=1, must_change=0, updated_at=excluded.updated_at""", (login, name, role, pw_hash, ts, ts))
+        self._forget_sessions()
         return self.get_user(login)
 
     def update_user(self, login, name=None, role=None, active=None, auth=None):
@@ -213,6 +223,7 @@ class Store:
                 c.execute("DELETE FROM sessions WHERE login = ?", (login,))
             if auth == "local":
                 c.execute("UPDATE users SET sso_subject = NULL WHERE login = ?", (login,))
+        self._forget_sessions()
         return self.get_user(login)
 
     def user_by_subject(self, subject):
@@ -222,6 +233,7 @@ class Store:
     def bind_subject(self, login, subject, name=None):
         with self._db() as c:
             c.execute("UPDATE users SET sso_subject = ?, name = COALESCE(?, name), updated_at = ? WHERE login = ?", (subject, name, now_iso(), login))
+        self._forget_sessions()
 
     # ── SSO: estado do fluxo de login (state, nonce, PKCE), válido por 10 minutos
     def put_sso_state(self, state, nonce, verifier):
@@ -241,6 +253,7 @@ class Store:
                 raise StoreError("usuário não encontrado")
             if self.count_active_admins(c) < 1:
                 raise StoreError("É preciso manter pelo menos um administrador ativo")
+        self._forget_sessions()
 
     def set_password(self, login, pw_hash, must_change, keep_token=None):
         """Troca a senha e encerra as outras sessões do usuário (todas, se keep_token for None)."""
@@ -250,6 +263,7 @@ class Store:
                 c.execute("DELETE FROM sessions WHERE login = ? AND token_hash <> ?", (login, token_hash(keep_token)))
             else:
                 c.execute("DELETE FROM sessions WHERE login = ?", (login,))
+        self._forget_sessions()
 
     # ── sessões
     def create_session(self, login, ip, user_agent):
@@ -262,29 +276,40 @@ class Store:
         return token
 
     def session_user(self, token):
-        """Usuário da sessão, se válida e ativa. Atualiza o 'visto por último' no máximo 1x por minuto."""
+        """Usuário da sessão, se válida e ativa. Atualiza o 'visto por último' no máximo 1x por minuto.
+        A resposta fica 15 s em memória por token (cada requisição não precisa ir ao banco)."""
         if not token: return None
         th, t = token_hash(token), time.time()
+        with self._sessions_lock:
+            hit = self._sessions.get(th)
+        if hit and hit[1] > t: return dict(hit[0])
         with self._db() as c:
-            r = c.execute("""SELECT s.seen_at, u.* FROM sessions s JOIN users u ON u.login = s.login
+            r = c.execute("""SELECT s.seen_at, s.created_at AS session_created, u.* FROM sessions s JOIN users u ON u.login = s.login
                              WHERE s.token_hash = ?""", (th,)).fetchone()
             if not r: return None
-            if t - r["seen_at"] > self.ttl or not r["active"]:
+            if t - r["seen_at"] > self.ttl or t - r["session_created"] > self.session_max or not r["active"]:
                 c.execute("DELETE FROM sessions WHERE token_hash = ?", (th,)); return None
             if t - r["seen_at"] > 60:
                 c.execute("UPDATE sessions SET seen_at = ? WHERE token_hash = ?", (t, th))
             d = self._user(r); d.pop("seen_at", None)
-            return d
+        with self._sessions_lock:
+            if len(self._sessions) > 5000: self._sessions.clear()
+            # nunca guarda além do vencimento da própria sessão
+            self._sessions[th] = (d, min(t + SESSION_CACHE_TTL, d["session_created"] + self.session_max))
+        return dict(d)
 
     def delete_session(self, token):
         with self._db() as c:
             r = c.execute("SELECT login FROM sessions WHERE token_hash = ?", (token_hash(token),)).fetchone()
             c.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash(token),))
-            return r["login"] if r else None
+        self._forget_sessions()
+        return r["login"] if r else None
 
     def delete_user_sessions(self, login):
         with self._db() as c:
-            return c.execute("DELETE FROM sessions WHERE login = ?", (login,)).rowcount
+            n = c.execute("DELETE FROM sessions WHERE login = ?", (login,)).rowcount
+        self._forget_sessions()
+        return n
 
     # ── tentativas de login
     def locked_for(self, key):
@@ -315,6 +340,8 @@ class Store:
             n = c.execute("DELETE FROM audit WHERE ts < ?", (cutoff,)).rowcount
             c.execute("DELETE FROM sso_states WHERE created < ?", (time.time() - 600,))
             c.execute("DELETE FROM login_attempts WHERE locked_until < ? AND fails = 0", (time.time(),))
+            if c.execute("SELECT COUNT(*) FROM login_attempts").fetchone()[0] > MAX_LOGIN_ATTEMPTS_ROWS:
+                c.execute("DELETE FROM login_attempts WHERE locked_until = 0")      # falhas soltas, sem bloqueio
             c.execute("DELETE FROM sessions WHERE seen_at < ?", (time.time() - self.ttl,))
         return n
 
@@ -367,7 +394,7 @@ class Store:
         """Cópia consistente do banco (API de backup do SQLite), mesmo com o servidor em uso."""
         dst = sqlite3.connect(path)
         try:
-            with self._db() as c: c.backup(dst)
+            with closing(self._connect()) as c: c.backup(dst)
         finally:
             dst.close()
         os.chmod(path, 0o600)
@@ -385,6 +412,7 @@ class Store:
                 c.execute("DELETE FROM users WHERE login <> ?", (keep_login,))
                 c.execute("DELETE FROM login_attempts")
             if audit: c.execute("DELETE FROM audit")
+        self._forget_sessions()
 
     def read_audit(self, limit=500, q=""):
         sql, args = "SELECT * FROM audit", []
@@ -422,7 +450,8 @@ class Store:
             ts = now_iso()
             with self._tx() as c:
                 for login, u in users.items():
-                    c.execute("INSERT OR IGNORE INTO users VALUES (?,?,?,?,?,?,?,?,?)",
+                    c.execute("""INSERT OR IGNORE INTO users (login, name, role, hash, active, must_change, created_at, updated_at, last_login)
+                                 VALUES (?,?,?,?,?,?,?,?,?)""",
                               (login, u.get("name") or login, u["role"], u["hash"], int(u.get("active", True)), int(u.get("must_change", False)),
                                u.get("created") or ts, ts, u.get("last_login")))
             users_json.rename(users_json.with_suffix(".json.migrado"))

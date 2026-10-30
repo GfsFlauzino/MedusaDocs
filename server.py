@@ -20,13 +20,14 @@ Usuários, sessões, tentativas de login, auditoria e configurações ficam no b
 Só depende da biblioteca padrão. Para expor na rede, publique atrás de um proxy com HTTPS
 e rode com --secure-cookies.
 """
-import argparse, base64, difflib, getpass, hashlib, hmac, io, json, os, re, secrets, shutil, socket, sys, threading, time, urllib.parse, zipfile
+import argparse, base64, difflib, getpass, gzip, hashlib, hmac, io, json, os, re, secrets, shutil, signal, socket, sys, threading, time, urllib.parse, zipfile
 from datetime import date, datetime
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import bundle
+import library
 import logfwd
 import ramos
 import sso
@@ -42,11 +43,14 @@ BACKUPS = Path(os.environ.get("PB_BACKUPS") or core.HOME / ".backups")
 ROLES = {"viewer": 1, "editor": 2, "admin": 3}
 ROLE_NAMES = {"viewer": "Visualizador", "editor": "Editor", "admin": "Administrador"}
 VIEWER_STATUSES = {"Homologação", "Produção"}
-SESSION_TTL = 8 * 3600          # inatividade máxima
+SESSION_TTL = int(float(os.environ.get("MEDUSA_SESSION_IDLE_HOURS") or 8) * 3600)    # inatividade máxima
+SESSION_MAX = int(float(os.environ.get("MEDUSA_SESSION_MAX_HOURS") or 24) * 3600)    # duração máxima, mesmo em uso
+COOKIE_RENEW = 600              # o cookie é reemitido (prazo renovado) no máximo a cada 10 min de uso
+MAX_THREADS = 32                # requisições processadas ao mesmo tempo; as demais esperam a vez
 PBKDF2_ITERS = 310_000
 MIN_PASSWORD = 10
 MAX_BODY = 8 * 1024 * 1024
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 LOGIN_RE = re.compile(r"^[a-z0-9._@-]{3,80}$")          # @ e até 80 caracteres: logins vindos do SSO (e-mail)
 NO_PASSWORD = "!sso"                                      # hash impossível: conta só entra pelo SSO
 TRUST_PROXY = os.environ.get("MEDUSA_TRUST_PROXY", "").lower() in ("1", "true", "yes", "sim")
@@ -69,6 +73,8 @@ IMG_MIME = {v: k for k, v in IMG_TYPES.items()}
 MAX_IMG = 3 * 1024 * 1024
 RESET_WORD = "RESETAR"
 
+MAX_NODES, MAX_EDGES, MAX_LINE = 400, 800, 500
+
 LOCK = threading.RLock()        # serializa gravações nos arquivos dos playbooks
 SECURE_COOKIES = False
 DB: Store = None
@@ -77,7 +83,7 @@ DB: Store = None
 def open_db():
     global DB
     if DB is None:
-        DB = Store(DATA_DIR / "playbooks.db", session_ttl=SESSION_TTL)
+        DB = Store(DATA_DIR / "playbooks.db", session_ttl=SESSION_TTL, session_max=SESSION_MAX)
         migrated = DB.import_legacy(DATA_DIR / "users.json", DATA_DIR / "audit.log")
         if migrated: print("Migrado para o banco:", ", ".join(migrated))
     return DB
@@ -163,7 +169,7 @@ def save_refs(pid, refs):
     allm = core.read_json(core.MAPPINGS_FILE, {})
     if refs is None: allm.pop(pid, None)
     else: allm[pid] = refs
-    core.MAPPINGS_FILE.write_text(json.dumps(allm, ensure_ascii=False, indent=2) + "\n", "utf-8")
+    core.atomic_write(core.MAPPINGS_FILE, json.dumps(allm, ensure_ascii=False, indent=2) + "\n")
 
 # ───────────────────────── playbooks ─────────────────────────
 
@@ -176,7 +182,8 @@ def get_folder(pid):
     return f
 
 def check_rev(folder, rev):
-    if rev and rev != core.revision(folder):
+    if not rev: raise HttpError(400, "Informe a revisão do playbook (recarregue a página e tente de novo)")
+    if rev != core.revision(folder):
         raise HttpError(409, "Este playbook foi salvo por outra pessoa depois que você abriu. Recarregue para ver a versão atual.")
 
 def visible(pb, user):
@@ -205,14 +212,24 @@ def validate_flow(flow):
         l["kind"] = "support" if l.get("kind") == "support" else "team"
         l["team"] = None if l["kind"] == "support" else str(l.get("team") or l["label"])[:60]
         lanes.add(l["key"])
+    nodes, edges = flow.get("nodes", []), flow.get("edges", [])
+    if not isinstance(nodes, list) or not isinstance(edges, list): raise HttpError(400, "fluxograma inválido")
+    if len(nodes) > MAX_NODES: raise HttpError(400, f"no máximo {MAX_NODES} caixas por fluxograma")
+    if len(edges) > MAX_EDGES: raise HttpError(400, f"no máximo {MAX_EDGES} setas por fluxograma")
     ids = set()
-    for n in flow.get("nodes", []):
+    for n in nodes:
+        if not isinstance(n, dict): raise HttpError(400, "caixa inválida")
         if n.get("lane") not in lanes or n.get("type") not in core.NODE_TYPES:
             raise HttpError(400, f"caixa inválida: {n.get('id')}")
         if not re.fullmatch(r"[\w-]{1,40}", str(n.get("id", ""))) or n["id"] in ids:
             raise HttpError(400, f"id de caixa inválido ou repetido: {n.get('id')}")
+        lines = n.get("lines", [])
+        if not isinstance(lines, list) or any(not isinstance(l, dict) or len(str(l.get("t", ""))) > MAX_LINE for l in lines):
+            raise HttpError(400, f"texto inválido ou longo demais na caixa {n['id']} (máx. {MAX_LINE} caracteres por linha)")
         ids.add(n["id"])
-    for e in flow.get("edges", []):
+    for e in edges:
+        if not isinstance(e, dict) or not isinstance(e.get("id"), str) or not e["id"].strip() or len(e["id"]) > 80:
+            raise HttpError(400, "seta sem id")
         if e.get("from") not in ids or e.get("to") not in ids:
             raise HttpError(400, f"seta ligada a caixa inexistente: {e.get('id')}")
         if e.get("type") not in core.EDGE_TYPES:
@@ -228,10 +245,58 @@ def validate_flow(flow):
             if e.get("lp") == {"dx": 0.0, "dy": 0.0}: e.pop("lp")
 
 # ───────────────────────── HTTP ─────────────────────────
+# HTTP/1.1 com keep-alive, gzip para respostas de texto acima de 1 KB, ETag/304 nas leituras que mudam pouco
+# e estáticos versionados (?v=<versão>-<hash>) com cache longo. O index.html é sempre revalidado.
+
+GZIP_MIN = 1024
+COMPRESSIBLE = ("application/json", "text/", "image/svg+xml", "application/xml", "application/x-ndjson")
+SLOTS = threading.BoundedSemaphore(MAX_THREADS)
+STATIC_VERSIONED = "public, max-age=31536000, immutable"
+_static, _build = {}, {"sig": None, "id": APP_VERSION}
+_cookie_at = {}                 # hash do token → quando o cookie foi emitido pela última vez (renovação)
+
+
+def build_id():
+    """Versão dos estáticos: APP_VERSION + hash curto do conteúdo de todos eles (muda a cada alteração)."""
+    files = sorted(set(STATIC.values()) - {"index.html"})
+    sig = tuple((f, (core.HERE / f).stat().st_mtime_ns, (core.HERE / f).stat().st_size) for f in files)
+    if sig != _build["sig"]:
+        h = hashlib.sha1()
+        for f in files: h.update((core.HERE / f).read_bytes())
+        _build.update(sig=sig, id=f"{APP_VERSION}-{h.hexdigest()[:10]}")
+    return _build["id"]
+
+
+def render_index(data):
+    """index.html com ?v=<build> nos <script> e <link> locais: o navegador nunca mistura JS antigo com API nova."""
+    v = build_id()
+    names = "|".join(re.escape(f) for f in set(STATIC.values()) - {"index.html"})
+    return re.sub(rf'((?:src|href)=")({names})(")', lambda m: f"{m.group(1)}{m.group(2)}?v={v}{m.group(3)}", data.decode("utf-8")).encode("utf-8")
+
+
+def static_entry(path):
+    """(bytes, gzip ou None, ETag) de um arquivo estático, comprimido uma vez e guardado até o arquivo mudar."""
+    st = path.stat()
+    sig = (st.st_mtime_ns, st.st_size, build_id() if path.name == "index.html" else None)
+    c = _static.get(path)
+    if c and c[0] == sig: return c[1:]
+    data = path.read_bytes()
+    if path.name == "index.html": data = render_index(data)
+    gz = gzip.compress(data, 9) if path.suffix in (".js", ".css", ".html", ".svg", ".txt") and len(data) > GZIP_MIN else None
+    c = _static[path] = (sig, data, gz, '"' + hashlib.sha1(data).hexdigest()[:16] + '"')
+    return c[1:]
+
+
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    request_queue_size = 128
+
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "Playbooks"
     sys_version = ""
+    protocol_version = "HTTP/1.1"      # keep-alive; toda resposta leva Content-Length
+    timeout = 30                       # conexão parada (ou lenta demais) é encerrada
 
     def log_message(self, fmt, *args):
         if args and "/api/" in str(args[0]) and not (self.client_address[0] in ("127.0.0.1", "::1") and "/api/branding " in str(args[0])):
@@ -239,6 +304,8 @@ class Handler(BaseHTTPRequestHandler):
             sys.stderr.write("%s - %s\n" % (self.log_date_time_string(), fmt % args))
 
     def headers_common(self, csp=None, cache=None):
+        renew = getattr(REQ, "cookie", None)
+        if renew: self.send_header("Set-Cookie", renew); REQ.cookie = None
         self.send_header("Cache-Control", cache or "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
@@ -246,36 +313,54 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy", csp or
                          "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; form-action 'self'")
 
-    def send_json(self, obj, status=200, cookie=None):
-        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+    def accepts_gzip(self):
+        return "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
+
+    def not_modified(self, etag):
+        inm = self.headers.get("If-None-Match") or ""
+        return bool(etag) and (inm.strip() == "*" or etag in [x.strip() for x in inm.split(",")])
+
+    def send_body(self, body, ctype, status=200, cookie=None, etag=None, cache=None, csp=None, gz=None, extra=()):
+        """Envia a resposta: 304 se o ETag confere; gzip quando o cliente aceita e o corpo é texto > 1 KB."""
+        if etag and status == 200 and self.not_modified(etag):
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Content-Length", "0")
+            self.headers_common(csp, cache)
+            self.end_headers()
+            return
+        enc = None
+        if self.accepts_gzip():
+            if gz is not None: body, enc = gz, "gzip"
+            elif len(body) > GZIP_MIN and ctype.startswith(COMPRESSIBLE): body, enc = gzip.compress(body, 5), "gzip"
         self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        if enc: self.send_header("Content-Encoding", enc)
+        if ctype.startswith(COMPRESSIBLE): self.send_header("Vary", "Accept-Encoding")
+        if etag: self.send_header("ETag", etag)
         if cookie: self.send_header("Set-Cookie", cookie)
-        self.headers_common()
+        for k, v in extra: self.send_header(k, v)
+        self.headers_common(csp, cache)
         self.end_headers()
         self.wfile.write(body)
 
-    def send_file(self, path, cache=None):
-        data = path.read_bytes()
-        self.send_response(200)
-        self.send_header("Content-Type", TYPES.get(path.suffix, "application/octet-stream"))
-        self.send_header("Content-Length", str(len(data)))
-        self.headers_common(cache=cache)
-        self.end_headers()
-        self.wfile.write(data)
+    def send_json(self, obj, status=200, cookie=None, etag=None):
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_body(body, "application/json; charset=utf-8", status, cookie=cookie, etag=etag, cache="private, no-cache")
 
-    def send_bytes(self, data, ctype, filename=None, sandbox=False):
-        self.send_response(200)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(data)))
-        if filename: self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
-        self.headers_common("default-src 'none'; style-src 'unsafe-inline'; sandbox" if sandbox else None)
-        self.end_headers()
-        self.wfile.write(data)
+    def send_file(self, path, cache=None):
+        data, gz, etag = static_entry(path)
+        self.send_body(data, TYPES.get(path.suffix, "application/octet-stream"), etag=etag, cache=cache or "no-cache", gz=gz)
+
+    def send_bytes(self, data, ctype, filename=None, sandbox=False, etag=None, cache=None):
+        self.send_body(data, ctype, etag=etag, cache=cache, csp="default-src 'none'; style-src 'unsafe-inline'; sandbox" if sandbox else None,
+                       extra=[("Content-Disposition", f'attachment; filename="{filename}"')] if filename else ())
 
     def body(self):
-        n = int(self.headers.get("Content-Length") or 0)
+        try: n = int(self.headers.get("Content-Length") or 0)
+        except ValueError: raise HttpError(400, "Content-Length inválido")
+        if n < 0: raise HttpError(400, "Content-Length inválido")
         if n > MAX_BODY: raise HttpError(413, "conteúdo grande demais")
         try:
             return json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
@@ -296,11 +381,23 @@ class Handler(BaseHTTPRequestHandler):
                 + ("; Secure" if SECURE_COOKIES else ""))
 
     def require(self, role="viewer", allow_must_change=False):
-        u = open_db().session_user(self.cookie_token())
+        tok = self.cookie_token()
+        u = open_db().session_user(tok)
         if not u: raise HttpError(401, "Faça login para continuar")
+        self.renew_cookie(tok, u)
         if u["must_change"] and not allow_must_change: raise HttpError(403, "Troque a senha temporária para continuar")
         if ROLES[u["role"]] < ROLES[role]: raise HttpError(403, "Seu perfil não tem permissão para esta ação")
         return u
+
+    def renew_cookie(self, tok, u):
+        """Sessão em uso: reemite o cookie (no máximo a cada 10 min) para o prazo de inatividade recomeçar.
+        O prazo nunca passa da duração máxima da sessão (MEDUSA_SESSION_MAX_HOURS)."""
+        th, now = hashlib.sha256(tok.encode()).hexdigest(), time.time()
+        if now - _cookie_at.get(th, 0) < COOKIE_RENEW: return
+        if len(_cookie_at) > 10000: _cookie_at.clear()
+        _cookie_at[th] = now
+        left = int((u.get("session_created") or now) + SESSION_MAX - now)
+        if left > 0: REQ.cookie = self.session_cookie(tok, min(SESSION_TTL, left))
 
     def csrf(self):
         # requisições que alteram estado precisam do cabeçalho; outro site não consegue enviá-lo sem CORS
@@ -315,6 +412,7 @@ class Handler(BaseHTTPRequestHandler):
         return ip
 
     def send_redirect(self, location, cookies=()):
+        REQ.cookie = None
         self.send_response(302)
         self.send_header("Location", location)
         for c in cookies: self.send_header("Set-Cookie", c)
@@ -333,8 +431,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def handle_api(self, method):
-        path = self.path.split("?")[0]
-        REQ.ip = self.client_ip()
+        # /api/doc/{id}[/...] é sinônimo de /api/pb/{id}[/...] (a API nova; a antiga continua valendo)
+        path = re.sub(r"^/api/doc/", "/api/pb/", self.path.split("?")[0])
+        REQ.ip, REQ.cookie = self.client_ip(), None
         try:
             if method != "GET": self.csrf()
             key = re.sub(r"/PB-\d{2,3}", "/{pb}", re.sub(r"^/api/users/[^/]+", "/api/users/{u}", path))
@@ -358,23 +457,32 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"error": "erro interno"}, 500)
 
     def do_GET(self):
-        path = self.path.split("?")[0]
-        if path.startswith("/api/"): return self.handle_api("GET")
-        if path in STATIC: return self.send_file(core.HERE / STATIC[path])
-        m = re.fullmatch(r"/assets/([\w.-]+)", path)
-        if m and (core.HERE / "assets" / m.group(1)).is_file() and Path(m.group(1)).suffix in TYPES:
-            return self.send_file(core.HERE / "assets" / m.group(1), cache="public, max-age=604800")   # fontes e imagens fixas
-        self.send_json({"error": "não encontrado"}, 404)
+        with SLOTS:
+            path, _, qs = self.path.partition("?")
+            if path.startswith("/api/"): return self.handle_api("GET")
+            REQ.cookie = None
+            if path in STATIC:
+                versioned = STATIC[path] != "index.html" and re.search(r"(^|&)v=", qs)
+                return self.send_file(core.HERE / STATIC[path], cache=STATIC_VERSIONED if versioned else "no-cache")
+            m = re.fullmatch(r"/assets/([\w.-]+)", path)
+            if m and (core.HERE / "assets" / m.group(1)).is_file() and Path(m.group(1)).suffix in TYPES:
+                return self.send_file(core.HERE / "assets" / m.group(1), cache="public, max-age=604800")   # fontes e imagens fixas
+            self.send_json({"error": "não encontrado"}, 404)
 
-    def do_POST(self): self.handle_api("POST")
-    def do_PUT(self): self.handle_api("PUT")
-    def do_DELETE(self): self.handle_api("DELETE")
+    def do_POST(self):
+        with SLOTS: self.handle_api("POST")
+
+    def do_PUT(self):
+        with SLOTS: self.handle_api("PUT")
+
+    def do_DELETE(self):
+        with SLOTS: self.handle_api("DELETE")
 
 # ───────────────────────── rotas: sessão ─────────────────────────
 
 def r_login(h, **_):
     db = open_db(); b = h.body()
-    login, pw = str(b.get("login", "")).strip().lower(), str(b.get("password", ""))
+    login, pw = str(b.get("login", "")).strip().lower()[:80], str(b.get("password", ""))
     ip = h.client_ip(); key = f"{login}|{ip}"
     wait = db.locked_for(key)
     if wait: raise HttpError(429, f"Muitas tentativas. Tente de novo em {int(wait // 60) + 1} min.")
@@ -430,26 +538,30 @@ def template_of(pid, lk=None):
     return k if k and tpl.KEY_RE.fullmatch(k) and tpl.path_of(k).exists() else tpl.DEFAULT_KEY
 
 def template_teams(key):
-    f = tpl.path_of(key)
-    teams = tpl.teams_of_file(f) if f.exists() else {}
-    for n, t in teams.items(): t.setdefault("category", "central" if n in tpl.BASIC_TEAMS else "apoio")
-    return teams
+    """Times do template (cache por arquivo; somente leitura)."""
+    return tpl.teams_for(key)
 
 def template_name(key):
-    f = tpl.path_of(key)
-    if f.exists():
-        with open(f, encoding="utf-8") as fh:
-            for _, line in zip(range(12), fh):
-                if line.startswith("name:"): return line[5:].strip()
-    return key
+    return tpl.name_for(key)
 
-def load_pb(folder, lk=None):
-    pid = re.match(r"(PB-\d+)", folder.name).group(1)
+def pid_of(folder):
+    return re.match(r"(PB-\d+)", folder.name).group(1)
+
+def load_pb_fresh(folder, lk=None):
+    """Lê direto do disco, sem cache: usado nas gravações, que precisam do estado do arquivo neste instante."""
+    pid = pid_of(folder)
     key = template_of(pid, lk)
     teams = template_teams(key)
     v = core.load_playbook(folder, teams)
     v.update(templateKey=key, templateName=template_name(key), teams=teams)
     return v
+
+def load_pb(folder, lk=None):
+    """Documento completo pelo cache (library.py). Somente leitura: quem for alterar usa load_pb_fresh."""
+    return LIB.view(pid_of(folder)) or load_pb_fresh(folder, lk)
+
+LIB = library.Library(core, tpl, links=lambda: links(), template_of=lambda pid, lk: template_of(pid, lk),
+                      cache_file=DATA_DIR / "cache" / "biblioteca.json")
 
 def add_template_teams(key, names_or_defs, union=None):
     """Acrescenta ao template times que o playbook passou a usar (vindos de outro template ou de um arquivo importado)."""
@@ -465,17 +577,63 @@ def add_template_teams(key, names_or_defs, union=None):
     return added
 
 def r_data(h, **_):
+    """Lista completa (formato da 2.1). Deprecada: o front usa /api/bootstrap, /api/library e /api/doc/{id}. Sai na 3.1."""
     u = h.require()
-    lk = links()
-    pbs = [load_pb(f, lk) for f in core.all_folders()]
+    pbs = [v for v in (LIB.view(pid) for pid in LIB.pids()) if v]
     h.send_json({"playbooks": [for_role(p, u) for p in pbs if visible(p, u)], "teams": core.load_teams(),
                  "catalog": core.CATALOG, "statuses": core.STATUSES})
+
+def doc_etag(pb, u):
+    sig = tpl.file_sig(pb.get("templateKey") or tpl.DEFAULT_KEY)
+    return '"' + hashlib.sha1(json.dumps([pb.get("rev"), sig, u["role"]]).encode()).hexdigest()[:20] + '"'
 
 def r_pb_get(h, pid, **_):
     u = h.require()
     pb = load_pb(get_folder(pid))
     if not visible(pb, u): raise HttpError(404, "playbook não encontrado")
-    h.send_json({"playbook": for_role(pb, u)})
+    h.send_json({"playbook": for_role(pb, u)}, etag=doc_etag(pb, u))
+
+def summary_visible(u):
+    return lambda s: ROLES[u["role"]] >= ROLES["editor"] or s["status"] in VIEWER_STATUSES
+
+def r_bootstrap(h, **_):
+    """Tudo o que o front precisa para abrir, sem a lista de documentos."""
+    u = h.require()
+    logo = open_db().get_setting("logo")
+    h.send_json({"user": public_user(u), "branding": {**brand(), "logo": logo["v"] if logo else None}, "catalog": core.CATALOG,
+                 "statuses": core.STATUSES, "teams": core.load_teams(), "appVersion": APP_VERSION})
+
+LIBRARY_SORTS = {"id": lambda s: core.sort_key(s["id"]), "name": lambda s: library.norm(s["name"]),
+                 "status": lambda s: (core.STATUSES.index(s["status"]), core.sort_key(s["id"]))}
+
+def r_library(h, **_):
+    """Lista leve, filtrada e paginada: ?type=&status=&q=&sort=id|name|status&limit=&cursor="""
+    u = h.require(); q = h.query()
+    typ, status, text, sort = q.get("type") or "", q.get("status") or "", q.get("q", "").strip()[:200], q.get("sort") or "id"
+    if typ not in ("", "playbook"): raise HttpError(400, "tipo de documento inválido")
+    if status and status not in core.STATUSES: raise HttpError(400, "status inválido")
+    if sort not in LIBRARY_SORTS: raise HttpError(400, "ordenação inválida")
+    try: limit, offset = max(1, min(500, int(q.get("limit") or 100))), max(0, int(q.get("cursor") or 0))
+    except ValueError: raise HttpError(400, "paginação inválida")
+    LIB.scan()
+    etag = '"' + hashlib.sha1(json.dumps([LIB.generation, typ, status, text, sort, limit, offset, u["role"]]).encode()).hexdigest()[:20] + '"'
+    if h.not_modified(etag): return h.send_json({}, etag=etag)
+    items = LIB.summaries(summary_visible(u))
+    counts = {st: sum(1 for s in items if s["status"] == st) for st in core.STATUSES}
+    if status: items = [s for s in items if s["status"] == status]
+    if text:
+        words = library.norm(text).split()
+        items = [s for s in items if all(w in library.norm(f"{s['id']} {s['name']} {s['subtitle']}") for w in words)]
+    items = sorted(items, key=LIBRARY_SORTS[sort])
+    end = offset + limit
+    h.send_json({"items": items[offset:end], "total": len(items), "nextCursor": str(end) if end < len(items) else None,
+                 "counts": counts, "all": sum(counts.values())}, etag=etag)
+
+def r_search(h, **_):
+    u = h.require(); q = h.query()
+    try: limit = max(1, min(100, int(q.get("limit") or 30)))
+    except ValueError: raise HttpError(400, "limite inválido")
+    h.send_json({"hits": LIB.search(q.get("q", "")[:200], summary_visible(u), limit)})
 
 # ───────────────────────── versões ─────────────────────────
 # Cada gravação gera uma versão (regras em pbcore.next_version) e guarda o conteúdo completo no banco
@@ -534,20 +692,21 @@ def r_pb_doc(h, pid, **_):
         touch_review(doc, u, old)
         doc = core.parse_md(core.doc_to_md(doc))          # mesma forma que será lida de volta
         ver = bump(doc, old, change=change)
-        view = load_pb(folder)
+        view = load_pb_fresh(folder)
         flow, refs = view["flow"], view["refs"]
         changes = ramos.sync_from_doc(flow, refs, old, doc)
         backup(pid, md, *( (dio, core.MAPPINGS_FILE) if changes else ()))
-        md.write_text(core.doc_to_md(doc), "utf-8")
+        core.atomic_write(md, core.doc_to_md(doc))
         if changes: write_flow(folder, pid, view["name"], flow, refs)
         snapshot(folder, pid, u, "documento", change_note(change, "; ".join(changes)))
+        LIB.invalidate(pid)
     audit(u["login"], "documento_salvo", pid, versao=ver, **change_audit(change), **({"ramos": "; ".join(changes)} if changes else {}))
     h.send_json({"ok": True, "playbook": load_pb(folder), "sync": changes, "version": ver})
 
 def write_flow(folder, pid, name, flow, refs):
     _, dio = core.files_of(folder)
     target = dio or folder / f"{pid.lower()}-{core.slug(name)}.drawio"
-    target.write_text(core.flow_to_drawio(flow, pid, name, dio), "utf-8")
+    core.atomic_write(target, core.flow_to_drawio(flow, pid, name, dio))
     ids = {n["id"] for n in flow["nodes"]}
     save_refs(pid, {k: [str(x) for x in v] for k, v in refs.items() if k in ids and isinstance(v, list) and v})
 
@@ -561,16 +720,17 @@ def r_pb_flow(h, pid, **_):
         check_rev(folder, b.get("rev"))
         ensure_baseline(folder, pid)
         md, dio = core.files_of(folder)
-        view = load_pb(folder)
+        view = load_pb_fresh(folder)
         backup(pid, dio, md, core.MAPPINGS_FILE)
         doc = core.parse_md(md.read_text("utf-8")); old = core.clone_doc(doc)
         change = prod_change(b, old)
         changes = ramos.sync_from_flow(doc, view["flow"], view["refs"], flow, refs)
         write_flow(folder, pid, view["name"], flow, refs)
         touch_review(doc, u, doc); ver = bump(doc, old, change=change)
-        md.write_text(core.doc_to_md(doc), "utf-8")
+        core.atomic_write(md, core.doc_to_md(doc))
         new_teams = add_template_teams(view["templateKey"], sorted(tpl.used_teams(flow) - set(view["teams"])))
         snapshot(folder, pid, u, "fluxograma", change_note(change, "; ".join(changes)))
+        LIB.invalidate(pid)
     audit(u["login"], "fluxograma_salvo", pid, versao=ver, **change_audit(change), **({"ramos": "; ".join(changes)} if changes else {}),
           **({"times_no_template": ", ".join(new_teams)} if new_teams else {}))
     h.send_json({"ok": True, "playbook": load_pb(folder), "sync": changes, "version": ver})
@@ -584,7 +744,7 @@ def r_pb_ramo_add(h, pid, **_):
         check_rev(folder, b.get("rev"))
         ensure_baseline(folder, pid)
         md, dio = core.files_of(folder)
-        view = load_pb(folder)
+        view = load_pb_fresh(folder)
         doc, flow, refs = core.parse_md(md.read_text("utf-8")), view["flow"], view["refs"]
         old = core.clone_doc(doc)
         change = prod_change(b, old)
@@ -593,8 +753,9 @@ def r_pb_ramo_add(h, pid, **_):
         ramos.add(doc, flow, refs, k, name, q)
         write_flow(folder, pid, view["name"], flow, refs)
         touch_review(doc, u, doc); ver = bump(doc, old, change=change)
-        md.write_text(core.doc_to_md(doc), "utf-8")
+        core.atomic_write(md, core.doc_to_md(doc))
         snapshot(folder, pid, u, "ramo", change_note(change, f"R{k} {name} criado"))
+        LIB.invalidate(pid)
     audit(u["login"], "ramo_criado", pid, ramo=f"R{k} {name}", versao=ver)
     h.send_json({"ok": True, "playbook": load_pb(folder), "ramo": f"R{k}"})
 
@@ -606,7 +767,7 @@ def r_pb_ramo_delete(h, pid, **_):
     with LOCK:
         check_rev(folder, b.get("rev"))
         md, dio = core.files_of(folder)
-        view = load_pb(folder)
+        view = load_pb_fresh(folder)
         doc, flow, refs = core.parse_md(md.read_text("utf-8")), view["flow"], view["refs"]
         if k not in ramos.doc_ramos(doc) and k not in ramos.flow_ramos(flow, refs): raise HttpError(404, "ramo não encontrado")
         ensure_baseline(folder, pid)
@@ -616,8 +777,9 @@ def r_pb_ramo_delete(h, pid, **_):
         ramos.remove(doc, flow, refs, k)
         write_flow(folder, pid, view["name"], flow, refs)
         touch_review(doc, u, doc); ver = bump(doc, old, change=change)
-        md.write_text(core.doc_to_md(doc), "utf-8")
+        core.atomic_write(md, core.doc_to_md(doc))
         snapshot(folder, pid, u, "ramo", change_note(change, f"R{k} excluído"))
+        LIB.invalidate(pid)
     audit(u["login"], "ramo_excluido", pid, ramo=f"R{k}", versao=ver)
     h.send_json({"ok": True, "playbook": load_pb(folder)})
 
@@ -642,7 +804,8 @@ def r_pb_status(h, pid, **_):
         core.set_gov(doc, gov)
         ver = bump(doc, old, publish=True) if status == "Produção" else core.fmt_version(core.get_version(doc))
         backup(pid, md)
-        md.write_text(core.doc_to_md(doc), "utf-8")
+        core.atomic_write(md, core.doc_to_md(doc))
+        LIB.invalidate(pid)
         note = str(b.get("note", ""))[:300]
         snapshot(folder, pid, u, "status", f"{before} → {status}" + (f" · aprovado por {gov['approver']}" if status == "Produção" else "") + (f" · {note}" if note else ""))
     audit(u["login"], "status_alterado", pid, de=before, para=status, versao=ver, aprovador=gov.get("approver", "") if status == "Produção" else "",
@@ -677,11 +840,12 @@ def r_pb_create(h, **_):
         folder.mkdir(parents=True)
         doc = core.set_gov(doc, {"status": "Desenvolvimento", "approver": "", "reviewer": u["name"], "reviewed": today()})
         core.set_version(doc, (0, 1))
-        (folder / f"{base}.md").write_text(core.doc_to_md(doc), "utf-8")
-        (folder / f"{pid.lower()}-{core.slug(name)}.drawio").write_text(core.flow_to_drawio(flow, pid, name), "utf-8")
+        core.atomic_write(folder / f"{base}.md", core.doc_to_md(doc))
+        core.atomic_write(folder / f"{pid.lower()}-{core.slug(name)}.drawio", core.flow_to_drawio(flow, pid, name))
         save_refs(pid, refs)
         set_link(pid, t["key"])
         snapshot(folder, pid, u, "criacao", f"Criado com o template {t['name']}")
+        LIB.invalidate(pid)
     audit(u["login"], "playbook_criado", pid, nome=name, template=t["name"], autor=author["login"])
     h.send_json({"ok": True, "playbook": load_pb(folder), "teams": core.load_teams()})
 
@@ -700,6 +864,7 @@ def r_pb_delete(h, pid, **_):
         if links().get(pid): (dest / "template.txt").write_text(links()[pid], "utf-8")
         set_link(pid, None)
         open_db().archive_versions(pid, dest.name)
+        LIB.invalidate(pid)
     audit(u["login"], "playbook_excluido", pid, lixeira=dest.name)
     h.send_json({"ok": True, "trash": dest.name})
 
@@ -760,12 +925,11 @@ def team_usage(tkey):
     use, lk = {}, links()
     t = tpl.load(tkey)
     for n in tpl.used_teams(t["flow"]): use.setdefault(n, set()).add("fluxograma do template")
-    for f in core.all_folders():
-        pid = re.match(r"(PB-\d+)", f.name).group(1)
+    for pid in LIB.pids():
         if template_of(pid, lk) != tkey: continue
-        _, dio = core.files_of(f)
-        if not dio: continue
-        for n in tpl.used_teams(core.drawio_to_flow(dio)): use.setdefault(n, set()).add(pid)
+        v = LIB.view(pid)
+        if not v or not v["flow"]["nodes"]: continue
+        for n in tpl.used_teams(v["flow"]): use.setdefault(n, set()).add(pid)
     return use
 
 def clean_team(name, t):
@@ -815,11 +979,11 @@ def r_pb_export(h, pid, **_):
 
 def r_export_all(h, **_):
     u = h.require()
-    buf, union, name, lk = io.BytesIO(), core.load_teams(), brand()["name"], links()
+    buf, union, name = io.BytesIO(), core.load_teams(), brand()["name"]
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for f in core.all_folders():
-            v = load_pb(f, lk)
-            if not visible(v, u): continue
+        for pid in LIB.pids():
+            v, f = LIB.view(pid), core.folder_of(pid)
+            if not v or not f or not visible(v, u): continue
             z.writestr(f"{f.name.lower()}.medusa.md", bundle.export(v, {**union, **v["teams"]}, u["name"], name, pb_images(f, v["doc"])))
     audit(u["login"], "playbooks_exportados")
     h.send_bytes(buf.getvalue(), "application/zip", f"playbooks-{date.today().isoformat()}.zip")
@@ -851,6 +1015,8 @@ def r_import(h, **_):
     if missing: p["warnings"].append(f"{len(missing)} imagem(ns) citada(s) no documento não vieram no arquivo: {', '.join(missing[:5])}")
     summary["images"] = len(images)
     if b.get("dryRun"): return h.send_json({"preview": summary})
+    if existing and b.get("mode") == "replace" and ROLES[u["role"]] < ROLES["admin"]:
+        raise HttpError(403, "Substituir um playbook existente equivale a excluí-lo: só administradores podem. Importe com outro ID.")
     if existing and b.get("mode") != "replace":
         raise HttpError(409, f"{pid} já existe. Escolha substituir ou importe com outro ID.")
     validate_flow(p["flow"])
@@ -869,12 +1035,13 @@ def r_import(h, **_):
         base = f"{pid}-{core.slug(name).title()}"
         folder = core.SRC / base
         folder.mkdir(parents=True)
-        (folder / f"{base}.md").write_text(core.doc_to_md(doc), "utf-8")
-        (folder / f"{pid.lower()}-{core.slug(name)}.drawio").write_text(core.flow_to_drawio(p["flow"], pid, name), "utf-8")
+        core.atomic_write(folder / f"{base}.md", core.doc_to_md(doc))
+        core.atomic_write(folder / f"{pid.lower()}-{core.slug(name)}.drawio", core.flow_to_drawio(p["flow"], pid, name))
         for n, data in images.items():
             (folder / core.IMG_DIR).mkdir(exist_ok=True); (folder / core.IMG_DIR / n).write_bytes(data)
         save_refs(pid, p["refs"])
         set_link(pid, tkey)
+        LIB.invalidate(pid)
         snapshot(folder, pid, u, "importacao", f"Importado de {p['meta'].get('gerado_por') or 'arquivo'}" + (f" ({p['id']})" if p["id"] and p["id"] != pid else ""))
     audit(u["login"], "playbook_importado", pid, origem=p["meta"].get("gerado_por", ""), id_original=p["id"], template=tkey,
           substituiu="sim" if existing else "", times_no_template=", ".join(sorted(p["createTeams"])))
@@ -992,6 +1159,7 @@ def r_admin_reset(h, **_):
         core.SRC.mkdir(parents=True, exist_ok=True)
         tpl.ensure_seed()
         db.reset(u["login"], **opts)
+        LIB.invalidate()
         _log_cfg["at"] = 0
         (dest / "LEIA-ME.txt").write_text(
             f"Reset da aplicação feito por {u['login']} em {datetime.now().isoformat(timespec='seconds')}.\n"
@@ -1016,13 +1184,15 @@ def r_tpl_get(h, tkey, **_):
 def _tpl_save(h, u, tkey, t, action, sync=None, **detail):
     with LOCK:
         tpl.save(tkey, {**t, "updated_by": u["name"]})
+        LIB.invalidate()
     if sync: detail["ramos"] = "; ".join(sync)
     audit(u["login"], action, f"template:{tkey}", **detail)
     cat = core.load_teams()
     h.send_json({"ok": True, "template": tpl.view(tpl.load(tkey, cat), cat), "sync": sync or [], "allTeams": cat})
 
 def _tpl_check(t, rev):
-    if rev and rev != t["rev"]:
+    if not rev: raise HttpError(400, "Informe a revisão do template (recarregue a página e tente de novo)")
+    if rev != t["rev"]:
         raise HttpError(409, "Este template foi salvo por outra pessoa depois que você abriu. Recarregue para ver a versão atual.")
 
 def r_tpl_doc(h, tkey, **_):
@@ -1105,6 +1275,7 @@ def r_tpl_delete(h, tkey, **_):
         open_db().set_setting("pb_templates", lk)
         dest = TRASH / "templates"; dest.mkdir(parents=True, exist_ok=True)
         shutil.move(str(f), str(dest / f"{f.name}__{time.strftime('%Y%m%d-%H%M%S')}"))
+        LIB.invalidate()
     audit(u["login"], "template_excluido", f"template:{tkey}", playbooks_movidos_para_padrao=", ".join(moved))
     h.send_json({"ok": True, "moved": moved})
 
@@ -1517,10 +1688,11 @@ def r_version_restore(h, pid, **_):
         doc = core.set_gov(core.parse_md(v["md"]), core.get_gov(cur))
         touch_review(doc, u, cur); ver = bump(doc, cur, change=change)
         backup(pid, md, dio, core.MAPPINGS_FILE)
-        md.write_text(core.doc_to_md(doc), "utf-8")
+        core.atomic_write(md, core.doc_to_md(doc))
         if v["drawio"].strip():
-            view = load_pb(folder)
+            view = load_pb_fresh(folder)
             write_flow(folder, pid, view["name"], core.drawio_to_flow(v["drawio"]), dict(v["refs"]))
+        LIB.invalidate(pid)
         snapshot(folder, pid, u, "restauracao", change_note(change, f"Conteúdo da versão {v['version']} ({v['created_at'][:10]})"))
     audit(u["login"], "versao_restaurada", pid, de=v["version"], nova=ver, **change_audit(change))
     h.send_json({"ok": True, "playbook": load_pb(folder), "version": ver})
@@ -1529,6 +1701,7 @@ ROUTES = {
     ("POST", "/api/login"): r_login, ("POST", "/api/logout"): r_logout,
     ("GET", "/api/me"): r_me, ("POST", "/api/me/password"): r_password,
     ("GET", "/api/data"): r_data, ("GET", "/api/pb/{pb}"): r_pb_get,
+    ("GET", "/api/bootstrap"): r_bootstrap, ("GET", "/api/library"): r_library, ("GET", "/api/search"): r_search,
     ("PUT", "/api/pb/{pb}/doc"): r_pb_doc, ("PUT", "/api/pb/{pb}/flow"): r_pb_flow, ("PUT", "/api/pb/{pb}/status"): r_pb_status,
     ("POST", "/api/pb"): r_pb_create, ("DELETE", "/api/pb/{pb}"): r_pb_delete,
     ("GET", "/api/pb/{pb}/versions"): r_versions, ("GET", "/api/pb/{pb}/versions/{v}"): r_version_get,
@@ -1559,7 +1732,7 @@ ROUTES = {
 
 def cmd_adduser(args):
     login = args.login.strip().lower()
-    if not LOGIN_RE.fullmatch(login): sys.exit("Login inválido (3 a 40: letras minúsculas, números, . _ -)")
+    if not LOGIN_RE.fullmatch(login): sys.exit("Login inválido (3 a 80: letras minúsculas, números, . _ - @)")
     pw = getpass.getpass(f"Senha para {login}: ")
     if getpass.getpass("Repita a senha: ") != pw: sys.exit("As senhas não conferem.")
     try: validate_password(pw)
@@ -1576,7 +1749,7 @@ def bootstrap_admin():
     db = open_db()
     login = os.environ.get("MEDUSA_ADMIN_LOGIN", "").strip().lower()
     if db.count_active_admins() >= 1 or not login: return
-    if not LOGIN_RE.fullmatch(login): sys.exit("MEDUSA_ADMIN_LOGIN inválido (3 a 40: letras minúsculas, números, . _ -)")
+    if not LOGIN_RE.fullmatch(login): sys.exit("MEDUSA_ADMIN_LOGIN inválido (3 a 80: letras minúsculas, números, . _ - @)")
     pw = os.environ.get("MEDUSA_ADMIN_PASSWORD") or ""
     generated = not pw
     if generated: pw = temp_password()
@@ -1621,15 +1794,19 @@ def main():
         sys.exit("Nenhum administrador cadastrado. Crie o primeiro com:\n"
                  f"  python3 {Path(__file__).name} adduser <login> --role admin --name \"Seu Nome\"\n"
                  "ou defina MEDUSA_ADMIN_LOGIN para criá-lo com senha temporária (ver INSTALACAO-DOCKER.md).")
-    srv = ThreadingHTTPServer((a.host, port), Handler)
+    LIB.warm()
+    srv = Server((a.host, port), Handler)
     print(f"Playbooks em http://{'localhost' if a.host in ('127.0.0.1', '::1') else a.host}:{port}  (Ctrl+C para parar)")
     print(f"Banco de dados: {DB.path}")
     if a.host not in ("127.0.0.1", "::1", "localhost") and not a.secure_cookies:
         print("Atenção: exposto na rede sem --secure-cookies. Use um proxy com HTTPS.")
+    def stop(*_):                 # docker/podman stop: grava o cache dos documentos antes de sair
+        LIB.persist(); raise SystemExit(0)
+    signal.signal(signal.SIGTERM, stop)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
-        pass
+        LIB.persist()
 
 if __name__ == "__main__":
     main()

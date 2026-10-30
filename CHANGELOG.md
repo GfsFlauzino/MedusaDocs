@@ -1,6 +1,52 @@
 # Changelog
 
-## Não lançado
+## 2.2.0 — 2026-10-30
+
+### Desempenho
+- **Cache de documentos** (`library.py`): cada playbook é interpretado uma vez e só volta a ser lido quando o arquivo
+  muda (edição feita por fora aparece em até 1 s). Resumos e índice de busca também vão para
+  `data/cache/biblioteca.json`, então o servidor sobe pronto mesmo com centenas de playbooks.
+- **Lista leve e detalhe sob demanda:** `GET /api/library` (resumo paginado e filtrável, ~0,1 KB por playbook
+  comprimido), `GET /api/doc/{id}` (o playbook aberto) e `GET /api/bootstrap` (usuário, marca, catálogo e times). A
+  interface deixou de baixar todos os playbooks inteiros a cada carga. Com 500 playbooks: lista em ~1 ms (2 KB com
+  gzip) contra 2,9 s (21 MB) antes; 32 acessos simultâneos em ~30 ms contra ~20 s e conexões derrubadas.
+- **Busca no servidor** (`GET /api/search`): sem acento, título vale mais que passo/ramo, que vale mais que texto;
+  navegação por `↑` `↓` `Enter`.
+- **HTTP/1.1** com keep-alive, **gzip**, **ETag/304** nas listas e documentos e **estáticos versionados**
+  (`app.js?v=<versão>-<hash>`, cache de 1 ano; o `index.html` é sempre revalidado), o que também impede o navegador de
+  misturar JavaScript antigo com a API nova.
+- Banco: uma conexão por thread (WAL, `synchronous=NORMAL`) e a sessão validada fica 15 s em memória.
+- `GET /api/data` continua funcionando (agora a partir do cache), mas está deprecado e sai na 3.1.
+  `/api/doc/{id}/…` é sinônimo de `/api/pb/{id}/…`.
+
+### Segurança e robustez
+- **Gravação atômica** de `.md`, `.drawio`, `mappings.json` e templates (arquivo temporário + troca).
+- **Revisão obrigatória** em toda gravação de playbook e de template (sem ela: 400 em vez de sobrescrever às cegas).
+- Fluxograma com no máximo 400 caixas, 800 setas e 500 caracteres por linha; seta sem `id` é recusada (antes dava erro 500).
+- **Sessão:** o cookie é renovado com o uso (o prazo de 8 h sem uso passa a valer de fato) e há uma duração máxima
+  (24 h). Variáveis novas: `MEDUSA_SESSION_IDLE_HOURS` e `MEDUSA_SESSION_MAX_HOURS`.
+- Conexões paradas são encerradas após 30 s; no máximo 32 requisições processadas ao mesmo tempo (as demais
+  aguardam); `Content-Length` inválido devolve 400.
+- Login com mais de 80 caracteres é cortado (chave de bloqueio e auditoria); a tabela de tentativas não cresce sem limite.
+- Sessão expirada no meio da edição guarda o rascunho antes de pedir o login.
+- A importação do formato antigo de usuários (`users.json`) voltou a funcionar.
+
+### Mudança de comportamento
+- **Importar substituindo** um playbook existente agora exige ser **administrador** (equivale a excluí-lo, e o editor
+  não pode excluir). Editores continuam importando com outro ID.
+
+### Menu lateral
+- O botão do menu fica sempre visível e **recolhe/expande o menu também no desktop** (tecla `[`); a escolha fica salva
+  no navegador. Em telas estreitas, a gaveta ganhou botão de fechar, fecha com `Esc`, devolve o foco ao botão e
+  bloqueia o conteúdo atrás enquanto está aberta.
+- **Correção:** abrir o menu numa janela estreita e depois alargá-la deixava a página em branco (a classe do botão,
+  `side-open`, também escondia o `body`).
+
+### Para quem mantém
+- Testes automatizados (`python3 -m unittest discover -s tests`): matriz de permissões comparada com a da versão
+  anterior, migração e rollback do banco, cache, camada HTTP e parser.
+- `tools/bench.py` e as medições em `docs/benchmark-base.txt` e `docs/benchmark-2.2.txt`.
+- Dockerfile copia todos os `.py` (`COPY *.py`): arquivo novo esquecido não derruba mais o contêiner no boot.
 
 ### Novo visual
 - **Barra lateral** no lugar da faixa colorida do topo: logo e nome do workspace, busca ("Buscar", atalho `/`),
