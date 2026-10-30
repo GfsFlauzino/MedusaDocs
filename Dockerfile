@@ -5,7 +5,7 @@ FROM python:3.12-alpine
 LABEL org.opencontainers.image.title="Medusa Docs" \
       org.opencontainers.image.description="Playbooks interativos de resposta a incidentes (documento + fluxograma), com perfis, templates e auditoria" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.version="3.0.0-beta.4"
+      org.opencontainers.image.version="3.0.0"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

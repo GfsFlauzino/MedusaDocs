@@ -465,7 +465,7 @@ function renderUserMenu() {
   box.innerHTML = `<button class="ubtn" id="ubtn" title="${esc(u.name)}"><span class="avatar">${esc(ini)}</span><span class="uname">${esc(u.name)}<small>${esc(u.roleName)}</small></span></button>
     <div class="umenu" id="umenu" hidden>
       <div class="uhead"><b>${esc(u.name)}</b><span>${esc(u.login)} · ${esc(u.roleName)}</span></div>
-      <a href="#/docs" class="uitem">${ic("docs")}Documentação</a>
+      <a href="#/ajuda" class="uitem">${ic("docs")}Ajuda</a>
       <button class="uitem" id="uPw">${ic("key")}Trocar senha</button>
       <button class="uitem" id="uOut">${ic("logout")}Sair</button></div>`;
   $("#ubtn").onclick = e => { e.stopPropagation(); $("#umenu").hidden = !$("#umenu").hidden; };
@@ -510,7 +510,7 @@ const Tabs = (() => {
     if (key === "novo") return can("playbook.create") && { title: "Novo playbook", icon: "plus" };
     if (key === "admin") return canAdmin() && { title: "Administração", icon: "settings" };
     if (key === "templates") return can("templates.view") && { title: "Templates, times e tags", icon: "templates" };
-    if (key === "docs") return { title: "Documentação", icon: "docs" };
+    if (key === "ajuda") return { title: "Ajuda", icon: "docs" };
     if (ROUTE_TYPE[key]) return can(`${ROUTE_TYPE[key]}.view`) && { title: typeInfo(ROUTE_TYPE[key]).plural, icon: key === "runbooks" ? "pageEdit" : "page" };
     const pb = pbBy(key);
     return pb && { title: `${pb.id} · ${pb.name}`, dot: STATUS_CLS[pb.gov.status] };
@@ -575,7 +575,9 @@ function route() {
   if (parts[0] === "novo") return can("playbook.create") ? Editor.createForm(view) : notFound();
   if (parts[0] === "admin") return canAdmin() ? Admin.render(view, parts[1], parts[2]) : notFound();
   if (parts[0] === "times" || (parts[0] === "templates" && parts[1] === "@times")) { location.replace("#/templates"); return; }
-  if (parts[0] === "docs") return Docs.render(view, parts[1]);
+  /* a ajuda da plataforma era "Documentação" (#/docs) até a 2.x; o endereço antigo continua valendo */
+  if (parts[0] === "docs") { location.replace("#/ajuda" + (parts[1] ? "/" + parts[1] : "")); return; }
+  if (parts[0] === "ajuda") return Docs.render(view, parts[1]);
   if (ROUTE_TYPE[parts[0]]) {
     const t = ROUTE_TYPE[parts[0]];
     if (!can(`${t}.view`)) return notFound();

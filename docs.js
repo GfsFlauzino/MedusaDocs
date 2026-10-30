@@ -1,5 +1,5 @@
 "use strict";
-/* Documentação da plataforma (aba DOCs). Cada seção indica o perfil mínimo que a enxerga:
+/* Ajuda da plataforma (menu do perfil → Ajuda; rota #/ajuda, antes #/docs). Cada seção indica o perfil mínimo que a enxerga:
    o visualizador lê o guia de leitura; editores veem edição, templates e ramos; administradores, tudo. */
 const Docs = (() => {
   const K = s => `<kbd>${s}</kbd>`;
@@ -37,6 +37,18 @@ const Docs = (() => {
         <li><b>Novo runbook</b>: template, nome, ID sugerido, pasta e os campos do template. Os campos aparecem como etiquetas no topo do runbook e ficam na tabela de propriedades do documento.</li>
         <li><b>Estrutura do template…</b> cria as pastas sugeridas pelo template (só as que faltam).</li>
         <li>Para citar um runbook em qualquer texto, escreva o ID (<code>RB-03</code>): vira um link.</li></ul>` },
+    { id: "documentos", role: "viewer", title: "Documentos", html: `
+      <p><b>${ic("page")}Documentos</b> (menu lateral) guardam políticas, normas, guias, registros e material de apoio, com ID <code>DOC-00</code>. Não têm fluxograma nem aprovador: o ciclo é <b>Rascunho → Em revisão → Publicado</b> (os mesmos três status dos playbooks, só com outros nomes). Versões, comparação, restauração, exportação e importação funcionam como nos demais.</p>
+      <ul><li>A página de documentos tem a mesma árvore de pastas, busca e filtros por campo dos runbooks (ex.: Categoria e Público, no template padrão).</li>
+        <li><b>Novo documento</b>: template, nome, ID sugerido, pasta e campos.</li>
+        <li>Visualizadores leem os documentos <b>Em revisão</b> e <b>Publicados</b>; rascunhos só quem pode ver rascunhos.</li></ul>` },
+    { id: "pastas", role: "viewer", title: "Pastas", html: `
+      <p>Runbooks e documentos podem ser organizados em pastas (até 6 níveis). A pasta é só organização: mover não altera o arquivo nem gera versão.</p>
+      <ul><li>Criar, renomear, mover e excluir pastas exige a permissão <b>Gerenciar pastas</b> do tipo; mover um documento exige <b>Editar</b>.</li>
+        <li>Nomes não se repetem no mesmo nível (sem diferenciar maiúsculas). Uma pasta não pode ir para dentro dela mesma.</li>
+        <li>Pasta com conteúdo só é excluída escolhendo para onde vão os documentos e subpastas (outra pasta ou "Sem pasta").</li>
+        <li>O template pode sugerir uma estrutura (aba <b>Pastas</b> do template); na biblioteca, <b>Estrutura do template…</b> cria só o que falta.</li>
+        <li>Exportar leva o caminho da pasta; importar recria o caminho se você puder gerenciar pastas (senão o documento vai para "Sem pasta").</li></ul>` },
     { id: "leitura", role: "viewer", title: "Lendo um playbook", html: `
       <ul><li><b>Fluxograma:</b> clique em uma caixa para ler o trecho da documentação vinculado a ela (passos, ramo, seção). Clique no nome de um time (raia ou caixa de apoio) para ver as responsabilidades e o que ele não faz. A etiqueta no canto da caixa mostra o ID do passo.</li>
         <li><b>Documentação:</b> o documento completo, com índice lateral por seção e subseção: fases e passos (ID, ação, critério de saída), ramos R1, R2…, critérios e o restante. Clique numa imagem para ampliar (${K("Esc")} fecha).</li>
@@ -87,11 +99,11 @@ const Docs = (() => {
         <li><b>Links:</b> escreva <code>[texto](https://endereço)</code>; também valem <code>mailto:</code> e links para outro playbook (<code>[PB-02](#/pb-02/doc)</code>). Outros tipos de endereço ficam como texto, por segurança.</li>
         <li>Na tabela de propriedades, o botão ${ic("mitre")} da linha "Tática MITRE" abre a lista de táticas.</li>
         <li><b>Imagens</b> (prints de alerta, telas, evidências): <b>${ic("image")}Imagem</b> na barra "Adicionar" da seção, ou cole (${K("Ctrl+V")}) uma imagem copiada, ou arraste o arquivo para a seção. Entra logo depois do bloco em que o cursor está. PNG, JPG, WEBP ou GIF até 3 MB; a legenda é opcional. O arquivo vai para <code>imagens/</code> na pasta do playbook e o documento recebe <code>![legenda](imagens/img-….png)</code>, Markdown comum. Imagens nunca são sobrescritas, então versões antigas continuam mostrando as delas. Templates não recebem imagens.</li>
-        <li><b>${ic("plus")}Novo ramo</b> (na seção de ramos) ou <b>${ic("plus")}Seção de ramos</b> (no índice, se ainda não houver) criam ramos; ver <a href="#/docs/ramos">Ramos</a>.</li>
+        <li><b>${ic("plus")}Novo ramo</b> (na seção de ramos) ou <b>${ic("plus")}Seção de ramos</b> (no índice, se ainda não houver) criam ramos; ver <a href="#/ajuda/ramos">Ramos</a>.</li>
         <li><b>Modo Markdown</b> (botão <b>${ic("code")}Markdown</b> na barra do editor): o documento inteiro como texto Markdown, com barra de formatação (negrito, itálico, seção, subseção, lista, lista numerada, checklist, destaque, tabela, código e imagem; com várias linhas selecionadas, ou nada, "Código" cria um bloco), prévia ao lado atualizada enquanto você digita e ${K("Ctrl+B")}/${K("Ctrl+I")}. Dá para alternar entre Visual e Markdown a qualquer momento; salvar funciona nos dois modos. Imagens também podem ser coladas ou arrastadas no texto.</li>
         <li><b>Descartar</b> recarrega a versão salva. Cada gravação guarda backup da versão anterior.</li>
         <li>Se outra pessoa salvou depois que você abriu, a gravação é recusada e a tela oferece recarregar (suas alterações continuam na tela para copiar).</li>
-        <li>A linha <b>Versão</b> das propriedades é automática (${ic("lock")}): cada gravação gera uma versão nova, ver <a href="#/docs/versoes">Versões</a>.</li></ul>` },
+        <li>A linha <b>Versão</b> das propriedades é automática (${ic("lock")}): cada gravação gera uma versão nova, ver <a href="#/ajuda/versoes">Versões</a>.</li></ul>` },
     { id: "editar-fluxograma", role: "editor", title: "Editar o fluxograma", html: `
       <p>Só as formas, cores e setas do modelo estão disponíveis; cada caixa fica na raia do time responsável.</p>
       <table><thead><tr><th>Ação</th><th>Como</th></tr></thead><tbody>
@@ -110,7 +122,7 @@ const Docs = (() => {
         <tr><td>"Ao clicar"</td><td>vincule a caixa a passos, ramos, estados ou seções: é o que o analista lê</td></tr>
         <tr><td>Raias</td><td>sem seleção, o painel lista as raias: adicionar time central, reordenar, remover (vazia) ou criar novo time</td></tr></tbody></table>
       <p>Atalhos: ${K("Ctrl+Z")} desfaz, ${K("Ctrl+Shift+Z")} refaz, ${K("Del")} exclui, ${K("Ctrl+D")} duplica, ${K("Esc")} limpa a seleção, ${K("Ctrl+S")} salva.</p>
-      <p>O modo <b>${ic("code")}Código</b> mostra o fluxo em Mermaid (ver <a href="#/docs/mermaid">Linguagem de fluxo</a>). A página 2 do <code>.drawio</code> é preservada ao salvar.</p>` },
+      <p>O modo <b>${ic("code")}Código</b> mostra o fluxo em Mermaid (ver <a href="#/ajuda/mermaid">Linguagem de fluxo</a>). A página 2 do <code>.drawio</code> é preservada ao salvar.</p>` },
     { id: "ramos", role: "editor", title: "Ramos (R1, R2…)", html: `
       <p>Ramo é um cenário do playbook (ex.: R1 Varredura, R2 Credenciais). Ele existe nos dois lados e fica <b>sincronizado</b>:</p>
       <table><thead><tr><th>Onde</th><th>Forma</th></tr></thead><tbody>
@@ -238,21 +250,21 @@ python3 server.py --host 0.0.0.0 --port 8765 --secure-cookies      # rede, atrá
   const ROLE_LBL = { viewer: "todos", editor: "editores", admin: "administradores" };
   /* quem vê cada tópico: pelo público (role) e, nos de administração, pela permissão específica */
   const AUD = { viewer: () => true, editor: () => canAny("playbook.edit", "playbook.create", "templates.view"), admin: () => canAdmin() };
-  const VIS = { runbooks: () => can("runbook.view"), papeis: () => can("roles.manage"), usuarios: () => can("users.manage"), logs: () => can("logs.manage"), sso: () => can("sso.manage"),
+  const VIS = { runbooks: () => can("runbook.view"), documentos: () => can("doc.view"), pastas: () => canAny("runbook.view", "doc.view"), papeis: () => can("roles.manage"), usuarios: () => can("users.manage"), logs: () => can("logs.manage"), sso: () => can("sso.manage"),
     aparencia: () => can("branding.edit"), reset: () => can("app.reset"), auditoria: () => can("audit.view"), templates: () => can("templates.view"),
     times: () => can("templates.view"), importar: () => can("playbook.import"), criar: () => can("playbook.create"), ciclo: () => can("playbook.status") };
   const visible = s => (VIS[s.id] || AUD[s.role])();
 
   function render(root, focus) {
     const secs = SECTIONS.filter(visible);
-    root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead"><span class="pbid">${ic("docs")}</span><h1>Documentação</h1>
+    root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead"><span class="pbid">${ic("docs")}</span><h1>Ajuda</h1>
         <div class="pbactions"><input class="in sm" id="docQ" type="search" placeholder="Filtrar tópicos…" style="width:220px"></div></div>
         <p class="muted" style="margin:6px 0 16px">Como usar e administrar o ${esc(Brand.get().name)}${Brand.get().appVersion ? ` (Medusa Docs ${esc(Brand.get().appVersion)})` : ""}. Você vê os tópicos do seu papel (${esc(App.user.roleName)}).</p></div></div>
-      <div class="wrap"><div class="docgrid"><nav class="toc" id="docToc">${secs.map(s => `<a href="#/docs/${s.id}" data-go="${s.id}">${esc(s.title)}</a>`).join("")}</nav>
+      <div class="wrap"><div class="docgrid"><nav class="toc" id="docToc">${secs.map(s => `<a href="#/ajuda/${s.id}" data-go="${s.id}">${esc(s.title)}</a>`).join("")}</nav>
         <div class="doc docs-page">${secs.map(s => `<section id="doc-${s.id}" class="md" data-txt="${esc((s.title + " " + s.html.replace(/<[^>]+>/g, " ")).toLowerCase())}">
           <h2>${esc(s.title)} ${s.role !== "viewer" ? `<span class="aud ${s.role}">${ROLE_LBL[s.role]}</span>` : ""}</h2>${s.html}</section>`).join("")}</div></div></div>`;
     const go = id => { const el = document.getElementById("doc-" + id); if (el) el.scrollIntoView({ block: "start" }); };
-    $("#docToc").onclick = e => { const a = e.target.closest("[data-go]"); if (!a) return; e.preventDefault(); history.replaceState(null, "", "#/docs/" + a.dataset.go); Tabs.sync(); go(a.dataset.go); };
+    $("#docToc").onclick = e => { const a = e.target.closest("[data-go]"); if (!a) return; e.preventDefault(); history.replaceState(null, "", "#/ajuda/" + a.dataset.go); Tabs.sync(); go(a.dataset.go); };
     $("#docQ").oninput = e => {
       const q = e.target.value.trim().toLowerCase();
       root.querySelectorAll(".docs-page section").forEach(s => { s.hidden = !!q && !s.dataset.txt.includes(q); });

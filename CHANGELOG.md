@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.0.0 — 2026-10-30
+
+Reúne as betas 3.0.0-beta.1 a beta.4 (abaixo) e fecha a versão:
+
+### Documentos
+- Item **Documentos** no menu lateral, com a mesma biblioteca (pastas, busca, filtros por campo) e o template
+  **Documento padrão** (Categoria e Público). Sem fluxograma e sem aprovador.
+- Status com nomes próprios para documentos: **Rascunho**, **Em revisão** e **Publicado** (só na interface: o valor
+  gravado continua Desenvolvimento, Homologação e Produção).
+
+### Ajuda
+- A antiga "Documentação" do menu do perfil passou a se chamar **Ajuda** (rota `#/ajuda`; links e abas antigas com
+  `#/docs` redirecionam), para não confundir com o novo item **Documentos**. Novos tópicos: Runbooks, Documentos e
+  Pastas.
+
+### Atualização a partir da 2.x
+- O banco migra sozinho (v3 → v5) com cópia automática antes; os playbooks não mudam de lugar nem de conteúdo. A 2.2
+  continua abrindo o banco migrado (rollback). Veja o passo a passo em INSTALACAO-DOCKER.md (Podman incluído).
+- Mudanças de comportamento: aprovador diferente de quem edita (ligado por padrão) e importar substituindo exige a
+  permissão de excluir.
+
 ## 3.0.0-beta.4 — 2026-10-30
 
 ### Runbooks na interface

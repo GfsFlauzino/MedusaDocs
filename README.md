@@ -8,7 +8,7 @@ templates e auditoria.
 - Só Python 3 (biblioteca padrão): nada para instalar além do Python, ou uma imagem Docker pronta.
 - White label: nome do workspace e logo configuráveis no painel administrativo; tema claro e escuro.
 - Formatos abertos: cada playbook é um `.md` + um `.drawio`; troca entre instalações em `.medusa.md` (Markdown + Mermaid).
-- Versão atual: **3.0.0-beta.3** (novidades em [CHANGELOG.md](CHANGELOG.md)): tipos de documento (playbook, runbook,
+- Versão atual: **3.0.0** (novidades em [CHANGELOG.md](CHANGELOG.md)): tipos de documento (playbook, runbook,
   documento) com pastas, campos e templates por tipo; papéis e permissões personalizados; aprovação de Produção por
   outra pessoa; Markdown com blocos de código, listas numeradas, links e introdução. Na 2.2.0: novo visual com menu lateral recolhível,
   desempenho (cache de documentos, lista leve, busca no servidor, gzip e cache no navegador) e endurecimento (gravação
@@ -53,13 +53,21 @@ exibida uma única vez, e precisa trocá-la no primeiro acesso.
 - **Abas:** cada playbook ou página aberta vira uma aba, como num navegador (o X ou o botão do meio fecha; o + abre o início). Ficam salvas no navegador de cada usuário.
 - **Menu lateral:** logo e nome do workspace, busca, Playbooks, Templates e Administração; perfil e tema claro/escuro no rodapé. O botão do menu (ou a tecla `[`) recolhe e expande; a escolha fica salva no navegador. Em telas estreitas vira gaveta (`Esc` fecha).
 - **Busca** (atalho `/`): feita no servidor, sem acento; acha playbooks, passos, ramos, seções e times. `↑` `↓` e `Enter` navegam.
-- **Menu do perfil** (rodapé da barra lateral): Documentação da plataforma (uso, edição, ramos, templates, administração, operação, filtrada pelo papel; conteúdo em `docs.js`), Trocar senha e Sair.
+- **Menu do perfil** (rodapé da barra lateral): **Ajuda** da plataforma (uso, edição, ramos, templates, administração, operação, filtrada pelo papel; conteúdo em `docs.js`; rota `#/ajuda`, o antigo `#/docs` redireciona), Trocar senha e Sair.
 - **Playbook:** duas visualizações, **Fluxograma** e **Documentação** (fases, passos e ramos ficam na documentação, com índice por seção e subseção), além de **Versões** e dos editores.
 - **Rascunhos:** sair de uma aba de edição sem salvar não perde nada; a aba ganha um ponto e as alterações voltam ao reabrir. Fechar a aba pede confirmação.
 - **Ícones** do [Iconoir](https://iconoir.com) (MIT), embutidos em `icons.js`.
 - **Página inicial** em **cartões**, **lista grande** ou **lista pequena** (escolha salva por usuário).
 - **Aparência** (só administrador): nome do workspace e logo. O visual é fixo e minimalista (fonte Inter, embutida), com tema claro e escuro por usuário. As cores do fluxograma não mudam: fazem parte do modelo dos playbooks.
 - **Resetar aplicação** (só administrador, botão no topo da Administração): volta ao estado de recém-instalada, com confirmação digitando `RESETAR`. Opcionalmente restaura configurações, remove os demais usuários e apaga a auditoria. Tudo vai para `data/lixeira/reset__<data-hora>/`, com cópia do banco e um `LEIA-ME.txt` de como voltar.
+
+## Documentos
+
+**Documentos** (`DOC-00`, menu lateral) guardam políticas, normas, guias, registros e material de apoio, na mesma
+biblioteca com pastas e filtros por campo (Categoria e Público no template padrão). Não têm fluxograma nem aprovador:
+o ciclo aparece como **Rascunho → Em revisão → Publicado** (os valores gravados continuam Desenvolvimento,
+Homologação e Produção). Pastas valem para runbooks e documentos: até 6 níveis, mover não gera versão, a estrutura
+sugerida pelo template é criada sob demanda.
 
 ## Runbooks
 

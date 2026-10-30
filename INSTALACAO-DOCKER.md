@@ -137,7 +137,7 @@ Com o HTTPS funcionando:
    a URL pública (`https://playbooks.suaempresa.com.br`), configure os grupos → perfis e ative.
 3. O container precisa alcançar o provedor por HTTPS (saída para a internet ou para o IdP interno).
 
-Detalhes em **Documentação**, no menu do perfil da aplicação (tópico "Login único").
+Detalhes em **Ajuda**, no menu do perfil da aplicação (tópico "Login único (SSO)").
 
 ### Logs para o SIEM, opcional
 
