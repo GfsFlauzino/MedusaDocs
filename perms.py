@@ -33,7 +33,7 @@ GLOBAL = [
     ("templates.edit", "Editar templates, times e tags"),
     ("templates.delete", "Excluir templates"),
     ("users.manage", "Gerenciar usuários"),
-    ("roles.manage", "Gerenciar papéis"),
+    ("roles.manage", "Gerenciar roles"),
     ("audit.view", "Ver e exportar a auditoria"),
     ("logs.manage", "Configurar logs e retenção"),
     ("sso.manage", "Configurar o SSO"),
@@ -76,7 +76,7 @@ def _editor():
 
 
 SEED_ROLES = [
-    {"key": "admin", "name": "Administrador", "description": "Tudo, inclusive usuários, papéis e configurações. Não pode ser alterado.",
+    {"key": "admin", "name": "Administrador", "description": "Tudo, inclusive usuários, roles e configurações. Não pode ser alterado.",
      "priority": 100, "permissions": ["*"]},
     {"key": "editor", "name": "Editor", "description": "Lê, cria e edita todos os documentos, muda status e edita templates.",
      "priority": 50, "permissions": _editor()},

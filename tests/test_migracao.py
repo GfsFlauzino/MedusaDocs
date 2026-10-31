@@ -23,8 +23,8 @@ class Migracao(unittest.TestCase):
         (cls.home / "data").mkdir(parents=True)
         cls.db = cls.home / "data" / "playbooks.db"
         shutil.copy2(FIX / "playbooks-v3.db", cls.db)
-        c = sqlite3.connect(cls.db)          # sessão da fixture "usada agora" (senão já teria vencido por inatividade)
-        c.execute("UPDATE sessions SET seen_at = ?", (time.time(),)); c.commit(); c.close()
+        c = sqlite3.connect(cls.db)          # sessão da fixture "aberta e usada agora" (senão venceria por inatividade ou pela duração máxima)
+        c.execute("UPDATE sessions SET created_at = ?, seen_at = ?", (time.time(), time.time())); c.commit(); c.close()
 
     @classmethod
     def tearDownClass(cls):
