@@ -56,6 +56,23 @@ class Http(unittest.TestCase):
         self.assertTrue({"branding", "catalog", "statuses", "teams", "appVersion"} <= set(b))
         self.assertNotIn("playbooks", b)
 
+    def test_login_avisa_antes_de_bloquear(self):
+        c = self.app.client()
+        msgs = [c.post("/api/login", {"login": "bloqueio.teste", "password": "errada"}) for _ in range(6)]
+        self.assertEqual([r.status for r in msgs], [401, 401, 401, 401, 429, 429])
+        self.assertNotIn("tentativa", msgs[1].json()["error"])
+        self.assertIn("Mais 2 tentativas", msgs[2].json()["error"])
+        self.assertIn("Mais 1 tentativa errada", msgs[3].json()["error"])
+        self.assertIn("foi bloqueado por 5 min", msgs[4].json()["error"])
+        self.assertIn("Tente de novo em", msgs[5].json()["error"])
+
+    def test_contato_de_acesso_na_marca(self):
+        self.assertEqual(self.admin.put("/api/branding", {"contact": "  Plantão SOC   ramal 4400 "}).status, 200)
+        self.assertEqual(self.app.client().get("/api/branding").json()["contact"], "Plantão SOC ramal 4400")
+        self.admin.put("/api/branding", {"name": "Outro nome"})              # sem contact no corpo: mantém o que havia
+        self.assertEqual(self.app.client().get("/api/branding").json()["contact"], "Plantão SOC ramal 4400")
+        self.admin.put("/api/branding", {"contact": "", "name": "Medusa Docs"})
+
     def test_visibilidade_na_lista_e_na_busca(self):
         self.assertEqual(self.viewer.get("/api/library").json()["items"], [])     # os dois em Desenvolvimento
         self.assertEqual(self.viewer.get("/api/search?q=phishing").json()["hits"], [])
@@ -125,6 +142,31 @@ class Http(unittest.TestCase):
         r = self.editor.post("/api/import", {"text": text, "id": "PB-02", "mode": "replace", "template": "padrao"})
         self.assertEqual(r.status, 403)
         self.assertEqual(self.editor.post("/api/import", {"text": text, "id": "PB-02", "template": "padrao", "dryRun": True}).status, 200)
+
+    def test_previa_da_retencao(self):
+        r = self.admin.get("/api/logs/retention-preview?days=7")
+        self.assertEqual(r.status, 200)
+        self.assertEqual(set(r.json()), {"days", "events", "files"})
+        self.assertEqual(r.json()["events"], 0)          # tudo o que existe foi registrado agora
+        self.assertEqual(self.admin.get("/api/logs/retention-preview?days=x").status, 400)
+        self.assertEqual(self.editor.get("/api/logs/retention-preview?days=7").status, 403)
+        roles = self.admin.get("/api/users").json()["roleList"]
+        self.assertTrue(all("priority" in r for r in roles))
+
+    def test_auditoria_com_filtros(self):
+        a = self.admin.get("/api/audit?days=0").json()
+        self.assertGreaterEqual(a["total"], len(a["entries"]))
+        self.assertTrue(a["entries"])
+        u = self.admin.get("/api/audit?actions=login&days=1").json()
+        self.assertTrue(u["entries"] and all(e["action"] == "login" for e in u["entries"]))
+        self.assertEqual(u["total"], len(u["entries"]))
+        ip = self.admin.get("/api/audit?q=127.0.0.1").json()           # o texto procura também nos detalhes (IP)
+        self.assertTrue(ip["entries"])
+        self.assertEqual(self.admin.get("/api/audit?q=nada-assim-existe").json()["total"], 0)
+        self.assertEqual(self.admin.get("/api/audit?days=x").status, 400)
+        ex = self.admin.get("/api/audit/export?days=1&actions=login")
+        self.assertEqual(ex.status, 200)
+        self.assertTrue(all('"login"' in l or "login" in l for l in ex.body.decode().strip().splitlines()))
 
 
 class SessaoMaxima(unittest.TestCase):

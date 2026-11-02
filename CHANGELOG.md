@@ -1,5 +1,64 @@
 # Changelog
 
+## Próxima versão
+
+### Administração (Usuários, Governança, Aparência, Logs)
+- **Usuários**: a tabela ocupa a largura toda, com filtro por nome, login ou role; **Novo usuário** abre um diálogo
+  (o login vira minúsculo enquanto se digita e a validação no navegador volta a funcionar). Redefinir senha, encerrar
+  sessões e excluir ficam no menu **⋯** de cada linha. "Aguardando 1º login" do SSO aparece como etiqueta. No celular,
+  cada usuário vira um cartão.
+- **Confirmações**: dar uma role com mais permissões, desativar e excluir pedem confirmação com o nome da pessoa. Em
+  toda confirmação perigosa, o foco começa em **Cancelar** (Enter não confirma sem querer).
+- **Governança** virou uma sub-aba própria (saiu da Aparência), com a **zona de perigo** do reset no fim; o botão
+  vermelho saiu do cabeçalho de todas as sub-abas. `#/admin/aparencia` leva à Governança para quem não edita a marca.
+- **Aparência**: "Alterações não salvas" e Salvar só habilitado com mudança; "Restaurar padrão" deixa claro que não
+  salva; a área de enviar logo funciona pelo teclado.
+- **Logs e retenção**: reduzir a retenção mostra quantos eventos e arquivos serão apagados e pede confirmação
+  (rota nova `GET /api/logs/retention-preview?days=N`); desligar um destino também pede. Destinos desligados escondem
+  os campos; o erro marca e foca o campo culpado. A página não estoura mais a largura no celular.
+- Sair de Aparência ou Logs com alteração não salva pergunta antes de descartar.
+- **Acessibilidade**: selects das linhas com nome (ex.: "Role de Ana Souza"), títulos dos cartões como `h2`,
+  `aria-current` na sub-aba, erros com `role="alert"`, diálogos com título associado, Tab preso dentro do diálogo e foco
+  devolvido a quem o abriu; contorno de foco nos checkboxes; contraste do "sem logo" e de caminhos em texto auxiliar.
+- Texto do reset atualizado: lista runbooks e documentos e diz que as configurações incluem governança.
+
+### Roles, Auditoria e SSO
+- **Auditoria** para investigação: filtros por **período**, **tipo de ação**, **usuário** e **texto** (procura também
+  nos detalhes, como o IP) feitos no servidor (`GET /api/audit` aceita `days`, `user`, `actions`, `q` e devolve
+  `total`); "N mais recentes de M eventos"; mensagem e "Limpar filtros" quando nada é encontrado; **Exportar recorte**
+  (`/api/audit/export` aceita os mesmos filtros). Horário do servidor com segundos; ações e detalhes legíveis (as 13
+  ações que apareciam cruas, como `papel_alterado`, agora são "Role alterada"; Sim/Não; permissões adicionadas e
+  removidas como +/−). No celular, cada evento vira um cartão com o nome das colunas.
+- **Roles**: alterações não salvas protegem a navegação, com barra fixa de ações; permissões da plataforma agrupadas
+  por risco (Templates · Pessoas e acesso · Auditoria e integrações · Instalação), com o efeito das críticas; salvar
+  uma role em uso que ganha ou perde poder sobre usuários, roles, SSO ou reset pede confirmação; **Nova role** com
+  Cancelar e "Começar com as permissões de"; **Duplicar** pede o nome antes de criar; "Restaurar padrão" marcado como
+  perigoso; Administrador mostra um resumo (a matriz fica recolhida); a célula inteira da matriz marca a caixa;
+  prioridade explicada na tela.
+- **SSO**: alterações não salvas protegem a navegação; o interruptor mostra o estado real e fica no fim, junto do
+  Salvar; ligar o SSO ou mudar quem entra mostra antes um resumo (role padrão, criação de contas, login por senha,
+  como você continua entrando); desligar pede confirmação; "Testar" virou **Verificar emissor**; detalhes técnicos
+  recolhidos.
+- Erros dessas telas anunciados (`role="alert"`) e o campo culpado recebe o foco; títulos `h2`/`h3`; contraste das
+  contagens de usuários, do "—" da matriz e dos placeholders; etiqueta de alerta com cor própria no tema escuro.
+
+### Menu lateral e Templates
+- **Menu lateral**: conteúdo (Playbooks, Runbooks, Documentos) separado da configuração (Templates, Administração e
+  **Ajuda**, que saiu do menu do perfil). Recolher (botão ou `[`) deixa uma **coluna de ícones** com dicas, em vez de
+  esconder tudo; o ícone de busca reabre o menu. A busca acha também **páginas** (ex.: "logs", "usuários", "aparência")
+  e segue o padrão combobox (resultado ativo anunciado, contagem para leitor de tela). Menu do perfil com
+  `aria-expanded`, setas e **Esc**. "Pular para o conteúdo" no primeiro Tab. Contagens e "Buscar" com contraste
+  suficiente. Gaveta do celular como diálogo, com o foco no botão de fechar (não abre mais o teclado).
+- **Abas abertas**: o botão de fechar fica ao lado do link (antes ficava dentro, HTML inválido), maior e com o nome
+  da aba ("Fechar aba Templates").
+- **Templates**: a página se chama só "Templates"; cartões em ordem Playbook, Runbook, Documento, com o título como
+  link, "Abrir" discreto e um atalho "N times e tags" para a aba do template. Dentro do template: caminho
+  "← Templates", nome do template na aba do navegador e na barra de abas, sub-aba ativa marcada. **Alterações não
+  salvas** em Geral, Campos e Pastas: trocar de sub-aba ou sair pergunta antes de descartar (antes, perdia o que foi
+  digitado). "Fase NIST padrão" com sugestões. Cartões de time sem a faixa colorida lateral e etiqueta "raia" neutra.
+- **Celular**: o template aberto (e Administração → Aparência) não estoura mais a largura; a coluna única em telas
+  estreitas voltou a valer.
+
 ## 3.2.0 — 2026-10-30
 
 ### Sugestões de alteração

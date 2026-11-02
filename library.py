@@ -22,7 +22,7 @@ from pathlib import Path
 PID_RE = re.compile(r"^((?:PB|RB|DOC)-\d+)-")
 SCAN_EVERY = 1.0
 VIEW_CACHE = 256
-PERSIST_FORMAT = 3              # 3: + documentos citados (links)
+PERSIST_FORMAT = 4              # 3: + documentos citados (links); 4: + times do fluxograma e tática MITRE
 PERSIST_EVERY = 30              # segundos entre gravações do cache em disco (só se algo mudou)
 
 
@@ -75,7 +75,16 @@ def summary_of(v, fields_schema=None, core=None):
             "version": (props.get("Versão") or "").split(" ")[0], "templateKey": v.get("templateKey"), "templateName": v.get("templateName"),
             "reviewed": g.get("reviewed", ""), "reviewer": g.get("reviewer", ""), "approver": g.get("approver", ""),
             "gov": g, "ramos": len(v["ramos"]), "steps": len(v["steps"]), "rev": v.get("rev"),
-            "subtitle": props.get("Tática MITRE principal") or props.get("Fase NIST") or ""}
+            "subtitle": props.get("Tática MITRE principal") or props.get("Fase NIST") or "",
+            "mitre": props.get("Tática MITRE principal") or "", "teams": teams_of(v)}
+
+
+def teams_of(v):
+    """Times (raias de time) que têm ao menos uma caixa no fluxograma, na ordem das raias: a pista do cartão na biblioteca."""
+    flow = v.get("flow") or {}
+    used = {n.get("lane") for n in flow.get("nodes", [])}
+    return [{"name": l.get("team") or l.get("label"), "color": l.get("color")}
+            for l in flow.get("lanes", []) if l.get("kind") == "team" and l.get("key") in used]
 
 
 def search_docs_of(v):

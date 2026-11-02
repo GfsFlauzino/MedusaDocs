@@ -38,7 +38,10 @@ async function api(method, url, body, opts = {}) {
   });
   const j = await r.json().catch(() => ({}));
   /* sessão vencida no meio da edição: o rascunho é guardado antes de fechar o editor (volta depois do login) */
-  if (r.status === 401 && App.user && !url.endsWith("api/login")) { Editor.stash(); Editor.dirty = false; Editor.unmount(); showLogin("Sua sessão expirou. Entre novamente."); }
+  if (r.status === 401 && App.user && !url.endsWith("api/login")) {
+    Editor.stash(); const kept = Editor.hasDraft(); Editor.dirty = false; Editor.unmount();
+    showLogin(`Sua sessão expirou. Entre de novo para continuar de onde parou${kept ? "; as alterações não salvas foram guardadas e voltam ao abrir o editor" : ""}.`);
+  }
   if (r.status === 403 && /senha temporária/.test(j.error || "")) forcePassword();
   if (!r.ok) throw new ApiError(j.error || `Erro ${r.status}`, r.status);
   return j;
@@ -56,8 +59,12 @@ function summaryOf(v) {
   return { id: v.id, type: v.type || "playbook", slug: v.slug, name: v.name, status: g.status, version: (props["Versão"] || "").split(" ")[0],
     hasFlow: v.hasFlow !== false, fields: (PBS.find(p => p.id === v.id) || {}).fields || {},
     templateKey: v.templateKey, templateName: v.templateName, reviewed: g.reviewed || "", reviewer: g.reviewer || "", approver: g.approver || "",
-    gov: g, ramos: v.ramos.length, steps: v.steps.length, rev: v.rev, subtitle: props["Tática MITRE principal"] || props["Fase NIST"] || "" };
+    gov: g, ramos: v.ramos.length, steps: v.steps.length, rev: v.rev, subtitle: props["Tática MITRE principal"] || props["Fase NIST"] || "",
+    mitre: props["Tática MITRE principal"] || "", teams: teamsOf(v.flow) };
 }
+/* times (raias de time) com ao menos uma caixa no fluxograma, como em library.teams_of */
+const teamsOf = flow => !flow ? [] : (flow.lanes || []).filter(l => l.kind === "team" && (flow.nodes || []).some(n => n.lane === l.key))
+  .map(l => ({ name: l.team || l.label, color: l.color }));
 /* lista leve completa (paginada no servidor; o navegador revalida com ETag e recebe 304 quando nada mudou) */
 async function refreshIndex() {
   let all = [], cursor = "";
@@ -100,12 +107,13 @@ function toast(msg, kind = "ok") {
 /* O visual é fixo (tema claro ou escuro, escolhido por cada usuário). O administrador muda só o nome do workspace
    e a logo. Cores e textos de marca antigos que estejam no banco são ignorados. */
 const Brand = (() => {
-  const DEFAULT = { name: "Medusa Docs", logo: null };
+  const DEFAULT = { name: "Medusa Docs", logo: null, contact: "" };
   let cur = { ...DEFAULT };
   const markHtml = b => b.logo ? `<img src="api/branding/logo?v=${encodeURIComponent(b.logo)}" alt="">` : "";
   function paint(b) {
     document.title = b.name;
     $("#brandName").textContent = b.name;
+    $("#brand").title = `${b.name} · página inicial`;   // nome longo truncado continua legível
     const mark = $("#brandMark");
     mark.className = "brand-mark " + (b.logo ? "has-logo" : "default");
     mark.innerHTML = markHtml(b);
@@ -116,7 +124,7 @@ const Brand = (() => {
   }
   const loginBrand = () => `<span class="brand-mark ${cur.logo ? "has-logo" : "default"}">${markHtml(cur)}</span><span class="bname">${esc(cur.name)}</span>`;
   function apply(b) {
-    cur = { ...DEFAULT, name: (b && b.name) || DEFAULT.name, logo: (b && b.logo) || null, appVersion: b && b.appVersion };
+    cur = { ...DEFAULT, name: (b && b.name) || DEFAULT.name, logo: (b && b.logo) || null, contact: (b && b.contact) || "", appVersion: b && b.appVersion };
     paint(cur);
     try { localStorage.setItem("medusa-brand", JSON.stringify({ name: cur.name })); } catch { }
   }
@@ -130,13 +138,25 @@ $("#themeTgl").onclick = () => {
 };
 
 /* ───────── modal ───────── */
+let modalSeq = 0;
 function modal({ title, html, wide, onMount, onClose, dismissable = true }) {
-  const bg = document.createElement("div");
+  const bg = document.createElement("div"), tid = `mt${++modalSeq}`, opener = document.activeElement;
   bg.className = "modal-bg";
-  bg.innerHTML = `<div class="modal ${wide ? "wide" : ""}" role="dialog" aria-modal="true"><div class="mhead"><b>${title}</b>${dismissable ? `<button class="mclose" title="Fechar" aria-label="Fechar">${ic("close")}</button>` : ""}</div><div class="mbody">${html}</div></div>`;
+  bg.innerHTML = `<div class="modal ${wide ? "wide" : ""}" role="dialog" aria-modal="true" aria-labelledby="${tid}"><div class="mhead"><b id="${tid}">${title}</b>${dismissable ? `<button class="mclose" title="Fechar" aria-label="Fechar">${ic("close")}</button>` : ""}</div><div class="mbody">${html}</div></div>`;
   document.body.append(bg);
-  const close = () => { if (!bg.isConnected) return; bg.remove(); document.removeEventListener("keydown", onKey); if (onClose) onClose(); };
-  const onKey = e => { if (e.key === "Escape" && dismissable) close(); };
+  /* ao fechar, o foco volta para quem abriu (se ele ainda existe); Tab fica preso dentro do diálogo */
+  const close = () => {
+    if (!bg.isConnected) return; bg.remove(); document.removeEventListener("keydown", onKey); if (onClose) onClose();
+    if (opener && opener.isConnected && opener.focus) opener.focus();
+  };
+  const onKey = e => {
+    if (e.key === "Escape" && dismissable && bg === [...document.querySelectorAll(".modal-bg")].pop()) close();
+    if (e.key !== "Tab" || !bg.contains(document.activeElement)) return;
+    const f = [...bg.querySelectorAll("button, a[href], input, select, textarea, [tabindex]:not([tabindex='-1'])")].filter(x => !x.disabled && !x.hidden && x.offsetParent);
+    if (!f.length) return;
+    if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
+    else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
+  };
   document.addEventListener("keydown", onKey);
   if (dismissable) { bg.querySelector(".mclose").onclick = close; bg.addEventListener("mousedown", e => { if (e.target === bg) close(); }); }
   const first = bg.querySelector("input, select, textarea, button.btn"); if (first) setTimeout(() => first.focus(), 30);
@@ -156,7 +176,8 @@ function ask(message, { title = "Confirmar", ok = "Confirmar", cancel = "Cancela
       onMount: (b, close) => {
         b.querySelector("[data-no]").onclick = () => close();
         b.querySelector("[data-yes]").onclick = () => { done(true); close(); };
-        setTimeout(() => b.querySelector("[data-yes]").focus(), 40);
+        /* em ação perigosa, Enter não pode confirmar sem querer: o foco começa em Cancelar */
+        setTimeout(() => b.querySelector(danger ? "[data-no]" : "[data-yes]").focus(), 40);
       } });
   });
 }
@@ -343,37 +364,70 @@ function showTeam(pb, name, keep) {
 }
 
 /* ───────── sessão e usuário ───────── */
+/* erros do SSO chegam como código em /?sso_error=…; o texto é sempre este (nada da URL vai para a tela) */
+const SSO_ERRORS = {
+  desativado: "O login pelo SSO está desativado nesta instalação.",
+  indisponivel: "O provedor de SSO não respondeu. Tente de novo em instantes.",
+  recusado: "O provedor de SSO recusou o login.",
+  expirado: "O login pelo SSO demorou demais e expirou. Tente de novo.",
+  conta: "Sua conta não está liberada para entrar pelo SSO.",
+  inativo: "Seu usuário está desativado.",
+  tecnico: "Não foi possível validar o login com o provedor de SSO. O motivo fica registrado na auditoria.",
+};
 async function showLogin(msg) {
   App.user = null;
   document.body.classList.remove("editing", "viewer-role", "side-open"); document.body.classList.add("auth");
   closeDrawer();
-  // erro devolvido pelo SSO (/?sso_error=…): mostra e limpa da barra de endereço
+  // erro devolvido pelo SSO (/?sso_error=código): mostra e limpa da barra de endereço
   const ssoErr = new URLSearchParams(location.search).get("sso_error");
-  if (ssoErr) { msg = `Login pelo SSO não concluído: ${ssoErr}`; history.replaceState(null, "", location.pathname + location.hash); }
+  let msgErr = false;
+  if (ssoErr) {
+    msg = SSO_ERRORS[ssoErr] || "O login pelo SSO não foi concluído.";
+    if (ssoErr === "conta" || ssoErr === "inativo") msg += " Fale com quem administra o acesso (abaixo).";
+    msgErr = true; history.replaceState(null, "", location.pathname + location.hash);
+  }
   let ssoSt = { enabled: false };
   try { ssoSt = await api("GET", "api/sso/status"); } catch { }
-  view.innerHTML = `<div class="login-wrap"><form class="login" id="loginForm" autocomplete="on">
-      <div class="login-brand">${Brand.loginBrand()}</div>
-      <h1>Entrar</h1>
-      ${msg ? `<div class="notice">${esc(msg)}</div>` : ""}
+  const contact = Brand.get().contact;
+  view.innerHTML = `<div class="login-wrap"><form class="login" id="loginForm" autocomplete="on" novalidate>
+      <h1 class="login-brand">${Brand.loginBrand()}</h1>
+      ${msg ? `<div class="login-msg ${msgErr ? "bad" : ""}" role="status">${esc(msg)}</div>` : ""}
       ${ssoSt.enabled ? `<a class="btn primary block sso-btn" href="api/sso/login">${ic("sso")}${esc(ssoSt.label)}</a>
         <div class="login-or"><span>${ssoSt.localLogin === "admins" ? "acesso de emergência (administradores)" : "ou com usuário e senha"}</span></div>` : ""}
-      <label>Usuário<input class="in" name="login" autocomplete="username" required autocapitalize="none"></label>
-      <label>Senha<input class="in" name="password" type="password" autocomplete="current-password" required></label>
-      <div class="err" id="lerr" hidden></div>
+      <label>Usuário<input class="in" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" aria-describedby="lerr"></label>
+      <label>Senha<input class="in" name="password" type="password" autocomplete="current-password" aria-describedby="lerr lcaps"></label>
+      <p class="login-caps" id="lcaps" aria-live="polite"></p>
+      <div class="err" id="lerr" role="alert" hidden></div>
       <button class="btn ${ssoSt.enabled ? "ghost" : "primary"} block" type="submit">Entrar${ssoSt.enabled ? " com senha" : ""}</button>
-      <p class="muted small">Acesso por perfil: visualizador, editor ou administrador. Peça acesso a um administrador.</p>
+      <p class="login-help">Sem acesso ou com problema para entrar? ${contact ? `<b>${esc(contact)}</b>` : "Fale com um administrador do workspace."}</p>
     </form></div>`;
-  $("#loginForm").onsubmit = async e => {
+  const form = $("#loginForm"), btn = form.querySelector("button[type=submit]"), lerr = $("#lerr"), caps = $("#lcaps");
+  const user = form.elements.login, pass = form.elements.password;
+  const setErr = (text, fields = []) => {
+    lerr.textContent = text; lerr.hidden = !text;
+    [user, pass].forEach(i => i.toggleAttribute("aria-invalid", fields.includes(i)));
+  };
+  [user, pass].forEach(i => i.addEventListener("input", () => { if (i.hasAttribute("aria-invalid")) i.removeAttribute("aria-invalid"); }));
+  /* Caps Lock: o motivo mais comum de senha "errada" digitada às pressas */
+  const capsCheck = e => { if (e.getModifierState) caps.textContent = e.getModifierState("CapsLock") ? "Caps Lock ativado." : ""; };
+  pass.addEventListener("keydown", capsCheck); pass.addEventListener("keyup", capsCheck); pass.addEventListener("blur", () => { caps.textContent = ""; });
+  (user.value ? pass : user).focus();
+  form.onsubmit = async e => {
     e.preventDefault();
-    const f = new FormData(e.target), btn = e.target.querySelector("button");
-    btn.disabled = true; $("#lerr").hidden = true;
+    if (!user.value.trim()) { setErr("Informe o usuário.", [user]); return user.focus(); }
+    if (!pass.value) { setErr("Informe a senha.", [pass]); return pass.focus(); }
+    setErr(""); btn.disabled = true; btn.setAttribute("aria-busy", "true"); btn.textContent = "Entrando…";
     try {
-      const r = await api("POST", "api/login", { login: f.get("login"), password: f.get("password") });
+      const r = await api("POST", "api/login", { login: user.value, password: pass.value });
       App.user = r.user;
       if (App.user.mustChange) return forcePassword();
       await start();
-    } catch (err) { $("#lerr").textContent = err.message; $("#lerr").hidden = false; btn.disabled = false; }
+    } catch (err) {
+      const locked = err.status === 429;
+      setErr(err.message + (locked ? (ssoSt.enabled ? " Você ainda pode entrar pelo SSO." : " Se for urgente, use o contato abaixo.") : ""), locked ? [] : [user, pass]);
+      btn.disabled = false; btn.removeAttribute("aria-busy"); btn.textContent = "Entrar" + (ssoSt.enabled ? " com senha" : "");
+      if (!locked) { pass.focus(); pass.select(); }
+    }
   };
 }
 
@@ -414,15 +468,19 @@ async function logout() {
 
 /* barra lateral: navegação principal (o item da página atual fica marcado) */
 function renderSide() {
-  const key = (location.hash.replace(/^#\/?/, "").split("/")[0] || "").toLowerCase();
+  const key = (hashPath().split("/")[0] || "").toLowerCase();
   const on = k => (k === "home" ? (!key || /^pb-\d+$/.test(key) || key === "novo") : k === "runbooks" ? (key === k || /^rb-\d+$/.test(key))
     : k === "documentos" ? (key === k || /^doc-\d+$/.test(key)) : key === k) ? "on" : "";
   const count = t => PBS.filter(p => p.type === t).length;
-  $("#sideNav").innerHTML = !App.user ? "" : `<a href="#/" class="${on("home")}">${ic("playbooks")}<span>Playbooks</span><small>${count("playbook")}</small></a>
-    ${can("runbook.view") ? `<a href="#/runbooks" class="${on("runbooks")}">${ic("pageEdit")}<span>Runbooks</span><small>${count("runbook")}</small></a>` : ""}
-    ${can("doc.view") ? `<a href="#/documentos" class="${on("documentos")}">${ic("page")}<span>Documentos</span><small>${count("doc")}</small></a>` : ""}
-    ${can("templates.view") ? `<a href="#/templates" class="${on("templates")}">${ic("templates")}<span>Templates</span></a>` : ""}
-    ${canAdmin() ? `<a href="#/admin" class="${on("admin")}">${ic("settings")}<span>Administração</span></a>` : ""}`;
+  /* o title vira a dica de cada ícone quando o menu está recolhido (só os ícones aparecem) */
+  const link = (k, href, icon, label, n) => `<a href="${href}" class="${on(k)}"${on(k) ? ` aria-current="page"` : ""} title="${label}">${ic(icon)}<span>${label}</span>${n === undefined ? "" : `<small aria-label="${n} ${n === 1 ? "item" : "itens"}">${n}</small>`}</a>`;
+  /* conteúdo (o que o analista lê) separado da configuração */
+  const cfg = [can("templates.view") ? link("templates", "#/templates", "templates", "Templates") : "", canAdmin() ? link("admin", "#/admin", "settings", "Administração") : "",
+    link("ajuda", "#/ajuda", "docs", "Ajuda")].join("");
+  $("#sideNav").innerHTML = !App.user ? "" : `<div class="nav-grp">${link("home", "#/", "playbooks", "Playbooks", count("playbook"))}
+    ${can("runbook.view") ? link("runbooks", "#/runbooks", "pageEdit", "Runbooks", count("runbook")) : ""}
+    ${can("doc.view") ? link("documentos", "#/documentos", "page", "Documentos", count("doc")) : ""}</div>
+    <div class="nav-grp nav-cfg">${cfg}</div>`;
 }
 /* Menu lateral. Desktop (> 900 px): o botão recolhe/expande (body.side-collapsed), estado salvo no navegador; atalho [.
    Telas estreitas: o menu vira gaveta (body.side-open) com fundo escurecido; Esc ou o botão de fechar fecham e o foco
@@ -444,7 +502,14 @@ function sideOpen(v, refocus = false) {
   const was = document.body.classList.contains("side-open");
   document.body.classList.toggle("side-open", v); $("#sideScrim").hidden = !v;
   $(".shell").inert = v;
-  if (v && !was) setTimeout(() => $("#q").focus(), 0);
+  /* aberta, a gaveta é um diálogo; o foco vai para o botão de fechar (focar a busca abria o teclado do celular por
+     cima do menu) depois que a transição a torna visível */
+  const side = $("#side");
+  if (v) { side.setAttribute("role", "dialog"); side.setAttribute("aria-modal", "true"); } else { side.removeAttribute("role"); side.removeAttribute("aria-modal"); }
+  if (v && !was) {
+    const f = () => { if (document.body.classList.contains("side-open") && !side.contains(document.activeElement)) $("#sideClose").focus(); };
+    side.addEventListener("transitionend", f, { once: true }); setTimeout(f, 260);
+  }
   if (!v && was && refocus) { const b = $("#sideToggle"); if (b) b.focus(); }
   syncSideAria();
 }
@@ -465,19 +530,28 @@ function renderUserMenu() {
   const u = App.user, box = $("#usermenu");
   if (!u) { box.innerHTML = ""; return; }
   const ini = (u.name || u.login).split(/\s+/).map(x => x[0]).slice(0, 2).join("").toUpperCase();
-  box.innerHTML = `<button class="ubtn" id="ubtn" title="${esc(u.name)}"><span class="avatar">${esc(ini)}</span><span class="uname">${esc(u.name)}<small>${esc(u.roleName)}</small></span></button>
-    <div class="umenu" id="umenu" hidden>
-      <div class="uhead"><b>${esc(u.name)}</b><span>${esc(u.login)} · ${esc(u.roleName)}</span></div>
-      <a href="#/ajuda" class="uitem">${ic("docs")}Ajuda</a>
-      <button class="uitem" id="uPw">${ic("key")}Trocar senha</button>
-      <button class="uitem" id="uOut">${ic("logout")}Sair</button></div>`;
-  $("#ubtn").onclick = e => { e.stopPropagation(); $("#umenu").hidden = !$("#umenu").hidden; };
-  $("#umenu").addEventListener("click", e => { if (e.target.closest(".uitem")) $("#umenu").hidden = true; });   // escolher uma opção fecha o menu
-  $("#uPw").onclick = () => { $("#umenu").hidden = true; modal({ title: "Trocar senha", html: passwordForm(false), onMount: (b, close) => bindPasswordForm(b, close) }); };
+  box.innerHTML = `<button class="ubtn" id="ubtn" title="${esc(u.name)} · ${esc(u.roleName)}" aria-label="Conta de ${esc(u.name)} (${esc(u.roleName)})" aria-haspopup="menu" aria-expanded="false" aria-controls="umenu"><span class="avatar" aria-hidden="true">${esc(ini)}</span><span class="uname" aria-hidden="true">${esc(u.name)}<small>${esc(u.roleName)}</small></span></button>
+    <div class="umenu" id="umenu" role="menu" aria-label="Conta" hidden>
+      <div class="uhead" role="presentation"><b>${esc(u.name)}</b><span>${esc(u.login)} · ${esc(u.roleName)}</span></div>
+      <button class="uitem" role="menuitem" id="uPw">${ic("key")}Trocar senha</button>
+      <button class="uitem" role="menuitem" id="uOut">${ic("logout")}Sair</button></div>`;
+  /* botão de menu: Enter/Espaço ou ↓ abrem e focam o primeiro item; ↑ ↓ andam; Esc fecha e volta ao botão */
+  const btn = $("#ubtn"), menu = $("#umenu"), items = () => [...menu.querySelectorAll("[role=menuitem]")];
+  const show = (v, focusFirst) => { menu.hidden = !v; btn.setAttribute("aria-expanded", String(v)); if (v && focusFirst) items()[0].focus(); };
+  btn.onclick = e => { e.stopPropagation(); show(menu.hidden, e.detail === 0); };
+  btn.onkeydown = e => { if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); show(true, false); (e.key === "ArrowDown" ? items()[0] : items().at(-1)).focus(); } };
+  menu.onkeydown = e => {
+    const all = items(), i = all.indexOf(document.activeElement);
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); show(false); btn.focus(); }
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); all[(i + (e.key === "ArrowDown" ? 1 : all.length - 1)) % all.length].focus(); }
+    else if (e.key === "Tab") show(false);
+  };
+  menu.addEventListener("click", e => { if (e.target.closest(".uitem")) show(false); });   // escolher uma opção fecha o menu
+  $("#uPw").onclick = () => { show(false); modal({ title: "Trocar senha", html: passwordForm(false), onMount: (b, close) => bindPasswordForm(b, close) }); };
   $("#uOut").onclick = logout;
 }
 document.addEventListener("click", e => {
-  const m = $("#umenu"); if (m && !e.target.closest("#usermenu")) m.hidden = true;
+  const m = $("#umenu"); if (m && !m.hidden && !e.target.closest("#usermenu")) { m.hidden = true; $("#ubtn").setAttribute("aria-expanded", "false"); }
   const x = $("#expMenu"); if (x && !e.target.closest(".menu-wrap")) x.hidden = true;
 });
 
@@ -508,11 +582,11 @@ const Tabs = (() => {
     try { list = JSON.parse(localStorage.getItem(storeKey()) || "[]").filter(t => t && t.key && t.path); } catch { list = []; }
   }
   const save = () => { try { localStorage.setItem(storeKey(), JSON.stringify(list)); } catch { } };
-  const keyOf = hash => (hash.replace(/^#\/?/, "").split("/").filter(Boolean)[0] || "").toLowerCase() || null;
+  const keyOf = hash => (hashPath(hash).split("/").filter(Boolean)[0] || "").toLowerCase() || null;
   function info(key) {
     if (key === "novo") return can("playbook.create") && { title: "Novo playbook", icon: "plus" };
     if (key === "admin") return canAdmin() && { title: "Administração", icon: "settings" };
-    if (key === "templates") return can("templates.view") && { title: "Templates, times e tags", icon: "templates" };
+    if (key === "templates") return can("templates.view") && { title: TemplatesPage.tabTitle(), icon: "templates" };
     if (key === "ajuda") return { title: "Ajuda", icon: "docs" };
     if (ROUTE_TYPE[key]) return can(`${ROUTE_TYPE[key]}.view`) && { title: typeInfo(ROUTE_TYPE[key]).plural, icon: key === "runbooks" ? "pageEdit" : "page" };
     const pb = pbBy(key);
@@ -530,10 +604,10 @@ const Tabs = (() => {
   }
   function render() {
     list = list.filter(t => info(t.key));
-    $("#tabbar").innerHTML = `<button class="side-toggle" id="sideToggle" aria-label="Menu" aria-controls="side" aria-expanded="true">${ic("menu")}</button><a class="tab home ${!activeKey ? "on" : ""}" href="#/" title="Início">${ic("home")}Início</a>` +
+    $("#tabbar").innerHTML = `<button class="side-toggle" id="sideToggle" aria-label="Menu" aria-controls="side" aria-expanded="true">${ic("menu")}</button><a class="tab home ${!activeKey ? "on" : ""}" href="#/" title="Playbooks">${ic("playbooks")}Playbooks</a>` +
       list.map(t => {
         const i = info(t.key);
-        return `<a class="tab ${t.key === activeKey ? "on" : ""}" href="${esc(t.path)}" data-k="${esc(t.key)}" title="${esc(i.title)}">${i.dot ? `<i class="dot ${i.dot}"></i>` : ic(i.icon)}<span class="ttl">${esc(i.title)}</span>${Editor.hasDraft(t.key) ? `<i class="draft-dot" title="Alterações não salvas"></i>` : ""}<button class="tx" data-close="${esc(t.key)}" title="Fechar aba" aria-label="Fechar aba">${ic("close")}</button></a>`;
+        return `<div class="tab ${t.key === activeKey ? "on" : ""}" data-k="${esc(t.key)}"><a class="tab-a" href="${esc(t.path)}" title="${esc(i.title)}"${t.key === activeKey ? ` aria-current="page"` : ""}>${i.dot ? `<i class="dot ${i.dot}"></i>` : ic(i.icon)}<span class="ttl">${esc(i.title)}</span>${Editor.hasDraft(t.key) ? `<i class="draft-dot" title="Alterações não salvas"></i>` : ""}</a><button class="tx" data-close="${esc(t.key)}" title="Fechar aba" aria-label="Fechar aba ${esc(i.title)}">${ic("close")}</button></div>`;
       }).join("") + `<button class="tab-new" id="tabNew" title="Nova aba (página inicial)" aria-label="Nova aba">${ic("plus")}</button>`;
     syncSideAria();
     const on = $("#tabbar .tab.on"); if (on) on.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -561,16 +635,25 @@ const renderNav = () => Tabs.render();
 
 function route() {
   if (!App.user) return;
+  if (location.hash !== lastHash && Unsaved.dirty()) {
+    const to = location.hash;
+    history.replaceState(null, "", lastHash);
+    ask("Sair sem salvar? As alterações desta página serão descartadas.", { title: "Alterações não salvas", ok: "Sair sem salvar", danger: true })
+      .then(ok => { if (ok) { Unsaved.check = null; location.hash = to; } });
+    return;
+  }
+  Unsaved.check = null;
   /* trocar de aba ou de página não perde o que está sendo editado: o editor guarda um rascunho, que volta
      ao reabrir o editor (a aba mostra um ponto); só fechar a aba ou descartar apagam o rascunho */
   Editor.stash(); Editor.unmount();
-  const um = $("#umenu"); if (um) um.hidden = true;
+  const um = $("#umenu"); if (um && !um.hidden) { um.hidden = true; $("#ubtn").setAttribute("aria-expanded", "false"); }
   sideOpen(false); renderSide();
   lastHash = location.hash;
   if (App.data) useTeams(null);
   closeDrawer();
-  const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  const parts = hashPath().split("/").filter(Boolean);
   Tabs.sync();
+  document.title = $("#brandName").textContent;
   window.scrollTo(0, 0);
   /* classes da página (o estado do menu lateral, side-collapsed, é preservado) */
   document.body.classList.remove("auth", "editing");
@@ -588,7 +671,7 @@ function route() {
     return LibraryPage.render(view, t, parts[1] === "p" ? parts[2] : "");
   }
   if (parts[0] === "templates") return can("templates.view") ? TemplatesPage.render(view, parts[1], parts[2]) : notFound();
-  if (!parts.length) return renderHome();
+  if (!parts.length) return LibraryPage.render(view, "playbook", "");
   const s = pbBy(parts[0].toLowerCase());
   if (!s) return notFound();
   if (parts[1] === "fases" || parts[1] === "ramos") { location.replace(`#/${s.slug}/doc${parts[2] ? "/" + parts[2] : ""}`); return; }
@@ -605,96 +688,139 @@ function route() {
     .catch(e => { if (seq === routeSeq && e.status !== 401) e.status === 404 ? notFound() : view.innerHTML = `<div class="wrap"><div class="err">${esc(e.message)}</div></div>`; });
 }
 window.addEventListener("hashchange", route);
-window.addEventListener("beforeunload", e => { if (Editor.dirty || Editor.hasDraft()) { e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("beforeunload", e => { if (Editor.dirty || Editor.hasDraft() || Unsaved.dirty()) { e.preventDefault(); e.returnValue = ""; } });
 
 function notFound() {
   view.innerHTML = `<div class="wrap"><div class="ecard"><h2 style="margin-top:0">Página não encontrada</h2><p class="muted">O playbook não existe ou não está disponível para o seu perfil.</p><a class="btn ghost" href="#/">Voltar ao início</a></div></div>`;
 }
 
-/* ───────── home ───────── */
-let homeFilter = "Todos";
-/* Três formas de ver a lista; a escolhida fica salva no navegador, por usuário */
-const HOME_VIEWS = [
+/* ───────── biblioteca: o que é comum aos três tipos ─────────
+   Playbooks, Runbooks e Documentos usam a mesma página (LibraryPage): cabeçalho, barra de filtros, três formas de
+   ver a lista e os mesmos estados vazios. Status, texto e campos ficam no endereço (#/runbooks?status=Produção&q=edr),
+   para recarregar, voltar e compartilhar a mesma visão. */
+const hashPath = (h = location.hash) => h.replace(/^#\/?/, "").split("?")[0];
+const hashQuery = () => new URLSearchParams(location.hash.split("?")[1] || "");
+/* troca só a parte de filtros do endereço, sem recarregar a página (push: o Voltar desfaz a escolha) */
+function setHashQuery(params, push) {
+  const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString();
+  const h = "#/" + hashPath() + (qs ? "?" + qs : "");
+  if (h === location.hash) return;
+  history[push ? "pushState" : "replaceState"](null, "", h);
+  lastHash = location.hash; Tabs.sync();
+}
+/* Três formas de ver a lista, as mesmas nos três tipos; a escolhida fica salva no navegador, por usuário */
+const LIB_VIEWS = [
   ["cards", "Cartões", `<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="1.5" width="5.5" height="5.5" rx="1.3"/><rect x="9" y="1.5" width="5.5" height="5.5" rx="1.3"/><rect x="1.5" y="9" width="5.5" height="5.5" rx="1.3"/><rect x="9" y="9" width="5.5" height="5.5" rx="1.3"/></svg>`],
   ["lg", "Lista grande", `<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="1.75" width="13" height="5.25" rx="1.3"/><rect x="1.5" y="9" width="13" height="5.25" rx="1.3"/></svg>`],
   ["sm", "Lista pequena", `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3.25h12M2 6.42h12M2 9.58h12M2 12.75h12"/></svg>`],
 ];
-const homeViewKey = () => "medusa-home-view:" + (App.user ? App.user.login : "");
-function homeView() {
-  let v = null; try { v = localStorage.getItem(homeViewKey()); } catch { }
-  return HOME_VIEWS.some(x => x[0] === v) ? v : "cards";
+const whoKey = () => App.user ? App.user.login : "";
+function libView() {
+  let v = null;
+  try { v = localStorage.getItem("medusa-lib-view:" + whoKey()) || localStorage.getItem("medusa-home-view:" + whoKey()); } catch { }
+  return LIB_VIEWS.some(x => x[0] === v) ? v : "cards";
 }
-const pbVersion = p => p.version;
-const pbSubtitle = p => p.subtitle;
+const setLibView = v => { try { localStorage.setItem("medusa-lib-view:" + whoKey(), v); } catch { } };
+/* status visíveis para a role (Desenvolvimento só para quem vê rascunhos) */
+const libStatuses = t => App.data.statuses.filter(s => can(`${t}.view_drafts`) || s !== "Desenvolvimento");
+const statusKey = t => `medusa-lib-status:${t}:` + whoKey();
+/* status pedido: o do endereço; senão o último escolhido; senão Produção para quem só lê e Todos para quem edita */
+function libStatus(t) {
+  const pick = v => v === "todos" ? "" : libStatuses(t).includes(v) ? v : "";
+  const q = hashQuery().get("status");
+  if (q) return pick(q);
+  let v = null; try { v = localStorage.getItem(statusKey(t)); } catch { }
+  if (v) return pick(v);
+  return can(`${t}.edit`) ? "" : "Produção";
+}
+const docHref = p => `#/${p.slug}/${p.type === "playbook" ? "fluxo" : "doc"}`;
+const sugChip = (p, t) => p.suggestions && can(`${t}.edit`) ? `<span class="chip sg-chip">${p.suggestions} sugest${p.suggestions > 1 ? "ões" : "ão"}</span>` : "";
+/* a pista do cartão: em playbooks, os times que agem no fluxograma e a tática MITRE; nos demais, os campos do template */
+function docTags(p, t) {
+  if (t === "playbook") {
+    const teams = (p.teams || []).map(x => `<span class="team-tag"><i style="background:${esc(x.color || TEAM_COLOR(x.name))}"></i>${esc(x.name)}</span>`).join("");
+    const mitre = p.mitre ? `<span class="mitre-tag" title="Tática MITRE principal">${esc(p.mitre)}</span>` : "";
+    return teams || mitre ? `<div class="doc-tags">${teams}${mitre}</div>` : "";
+  }
+  const vals = Object.values(p.fields || {}).flatMap(v => Array.isArray(v) ? v : [v]).filter(Boolean).slice(0, 4);
+  const tags = vals.map(v => `<span class="chip">${esc(v)}</span>`).join("") + (p.hasFlow && t !== "doc" ? `<span class="chip">fluxograma</span>` : "");
+  return tags ? `<div class="doc-tags">${tags}</div>` : "";
+}
+const docCounts = (p, t) => t === "playbook" ? `<span class="doc-counts">${p.ramos} ramos · ${p.steps} passos</span>` : "";
+const dragAttr = (p, t) => typeInfo(t).folders ? ` draggable="true" data-doc="${p.id}"` : "";
 
-function homeCards(list) {
-  return `<div class="cards">${list.map(p => `<a class="card st-${STATUS_CLS[p.gov.status]}" href="#/${p.slug}/fluxo">
-      <div class="card-top"><span class="id">${p.id} · v${esc(pbVersion(p))}</span>${statusPill(p.gov.status)}</div><h3>${esc(p.name)}</h3>
-      <p>${esc(pbSubtitle(p))}</p>
-      <div class="meta"><span class="chip">${p.ramos} ramos</span><span class="chip">${p.steps} passos</span>${p.suggestions && can("playbook.edit") ? `<span class="chip sg-chip">${p.suggestions} sugest${p.suggestions > 1 ? "ões" : "ão"}</span>` : ""}</div>
-      <div class="govline">${govLine(p.gov)}</div></a>`).join("")}
-    ${can("playbook.create") ? addCard() : ""}</div>`;
+function libCards(items, t) {
+  return `<div class="cards">${items.map(p => {
+    const gov = govLine(p.gov), foot = docCounts(p, t) + sugChip(p, t);
+    return `<a class="card st-${STATUS_CLS[p.status]}" href="${docHref(p)}"${dragAttr(p, t)}>
+      <div class="card-top"><span class="id">${p.id} · v${esc(p.version)}</span>${statusPill(p.status, t)}</div><h3>${esc(p.name)}</h3>
+      ${docTags(p, t)}${foot ? `<div class="meta">${foot}</div>` : ""}${gov ? `<div class="govline">${gov}</div>` : ""}</a>`;
+  }).join("")}</div>`;
 }
-function homeLarge(list) {
-  if (!list.length) return homeEmpty();
-  return `<div class="plist">${list.map(p => `<a class="prow st-${STATUS_CLS[p.gov.status]}" href="#/${p.slug}/fluxo">
+function libLarge(items, t) {
+  return `<div class="plist">${items.map(p => {
+    const gov = govLine(p.gov);
+    return `<a class="prow st-${STATUS_CLS[p.status]}" href="${docHref(p)}"${dragAttr(p, t)}>
       <div class="pr-main">
-        <div class="pr-top"><span class="id">${p.id}</span><span class="pr-ver">v${esc(pbVersion(p))}</span>${p.templateName ? `<span class="pr-tpl" title="Template">${esc(p.templateName)}</span>` : ""}</div>
-        <h3>${esc(p.name)}</h3>${pbSubtitle(p) ? `<p>${esc(pbSubtitle(p))}</p>` : ""}
-        <div class="pr-gov">${govLine(p.gov)}</div></div>
-      <div class="pr-stats"><div><b>${p.ramos}</b><span>ramos</span></div><div><b>${p.steps}</b><span>passos</span></div></div>
-      <div class="pr-status">${statusPill(p.gov.status)}</div></a>`).join("")}</div>`;
+        <div class="pr-top"><span class="id">${p.id}</span><span class="pr-ver">v${esc(p.version)}</span>${p.templateName ? `<span class="pr-tpl" title="Template">${esc(p.templateName)}</span>` : ""}${sugChip(p, t)}</div>
+        <h3>${esc(p.name)}</h3>${docTags(p, t)}${gov ? `<div class="pr-gov">${gov}</div>` : ""}</div>
+      <div class="pr-stats">${t === "playbook" ? `<div><b>${p.ramos}</b><span>ramos</span></div><div><b>${p.steps}</b><span>passos</span></div>` : ""}</div>
+      <div class="pr-status">${statusPill(p.status, t)}</div></a>`;
+  }).join("")}</div>`;
 }
-function homeSmall(list) {
-  if (!list.length) return homeEmpty();
-  return `<div class="ptable" role="table" aria-label="Playbooks">
-      <div class="pt-row pt-head" role="row"><span role="columnheader">ID</span><span role="columnheader">Nome</span><span role="columnheader">Status</span><span role="columnheader">Versão</span><span role="columnheader" class="pt-num">Ramos</span><span role="columnheader" class="pt-num">Passos</span><span role="columnheader" class="pt-rev">Última revisão</span></div>
-      ${list.map(p => `<a class="pt-row st-${STATUS_CLS[p.gov.status]}" role="row" href="#/${p.slug}/fluxo">
+function libSmall(items, t, plural) {
+  const pb = t === "playbook", h = l => `<span role="columnheader">${l}</span>`;
+  return `<div class="ptable${pb ? "" : " lib-table"}" role="table" aria-label="${esc(plural)}">
+      <div class="pt-row pt-head" role="row">${h("ID")}${h("Nome")}${h("Status")}${h("Versão")}${pb ? `<span role="columnheader" class="pt-num">Ramos</span><span role="columnheader" class="pt-num">Passos</span>` : ""}<span role="columnheader" class="pt-rev">Última revisão</span></div>
+      ${items.map(p => `<a class="pt-row st-${STATUS_CLS[p.status]}" role="row" href="${docHref(p)}"${dragAttr(p, t)}>
         <span class="pt-id" role="cell">${p.id}</span><span class="pt-name" role="cell" title="${esc(p.name)}">${esc(p.name)}</span>
-        <span role="cell"><span class="pt-st"><i class="dot ${STATUS_CLS[p.gov.status]}"></i>${esc(p.gov.status)}</span></span><span role="cell" class="pt-ver">v${esc(pbVersion(p))}</span>
-        <span role="cell" class="pt-num">${p.ramos}</span><span role="cell" class="pt-num">${p.steps}</span>
+        <span role="cell"><span class="pt-st" title="${esc(statusLabel(t, p.status))}"><i class="dot ${STATUS_CLS[p.status]}"></i><span class="pt-st-l">${esc(statusLabel(t, p.status))}</span></span></span><span role="cell" class="pt-ver">v${esc(p.version)}</span>
+        ${pb ? `<span role="cell" class="pt-num">${p.ramos}</span><span role="cell" class="pt-num">${p.steps}</span>` : ""}
         <span role="cell" class="pt-rev">${p.gov.reviewed ? esc(p.gov.reviewed) + (p.gov.reviewer ? ` · ${esc(p.gov.reviewer)}` : "") : `<span class="muted">—</span>`}</span></a>`).join("")}</div>`;
 }
-const addCard = () => `<a class="card add" href="#/novo"><span class="plus">${ic("plus")}</span><h3>Criar playbook</h3><p>Preencha o essencial; a ferramenta gera o documento no padrão e o fluxograma inicial. Começa em Desenvolvimento.</p></a>`;
-/* lista vazia: só a opção de criar (para quem pode criar); sem mensagem de "nenhum playbook" */
-const homeEmpty = () => can("playbook.create") ? `<div class="cards">${addCard()}</div>` : "";
-
-/* a lista vem filtrada e paginada do servidor (/api/library); "Carregar mais" traz os próximos 100 */
-const HOME_PAGE = 100;
-let homeLimit = HOME_PAGE;
-async function renderHome() {
-  const seq = ++routeSeq, st = homeFilter === "Todos" ? "" : homeFilter;
-  let d;
-  try {
-    [d] = await Promise.all([api("GET", `api/library?type=playbook&limit=${homeLimit}${st ? "&status=" + encodeURIComponent(st) : ""}`), refreshIndex()]);
-  } catch (e) { if (seq === routeSeq && e.status !== 401) view.innerHTML = `<div class="wrap"><div class="err">${esc(e.message)}</div></div>`; return; }
-  if (seq !== routeSeq) return;
-  renderSide(); Tabs.render();
-  const list = d.items, hv = homeView();
-  view.innerHTML = `<div class="wrap">
-    <header class="page-head"><h1>Playbooks</h1><span class="count">${d.all}</span>
-      <div class="home-actions">${can("playbook.create") && can("playbook.import") ? `<button class="btn ghost sm" id="impBtn" title="Importar .medusa.md ou .md">${ic("upload")}Importar</button>` : ""}<a class="btn ghost sm" href="api/export" download title="Baixar todos (.zip de .medusa.md)">${ic("download")}Exportar</a>
-        ${can("playbook.create") ? `<a class="btn primary sm" href="#/novo">${ic("plus")}Novo playbook</a>` : ""}</div></header>
-    <div class="home-bar"><div class="filters">${["Todos", ...App.data.statuses.filter(s => can("playbook.view_drafts") || s !== "Desenvolvimento")].map(s =>
-      `<button class="${s === homeFilter ? "on" : ""}" data-hf="${esc(s)}">${s === "Todos" ? "Todos" : `<i class="dot ${STATUS_CLS[s]}"></i>${esc(s)}`} <span class="cnt">${s === "Todos" ? d.all : d.counts[s] || 0}</span></button>`).join("")}</div>
-      <div class="view-seg" role="group" aria-label="Visualização da lista">${HOME_VIEWS.map(([k, n, ic]) =>
-        `<button class="${k === hv ? "on" : ""}" data-hv="${k}" title="${n}" aria-label="${n}" aria-pressed="${k === hv}">${ic}</button>`).join("")}</div></div>
-    ${hv === "lg" ? homeLarge(list) : hv === "sm" ? homeSmall(list) : homeCards(list)}
-    ${d.nextCursor ? `<div class="home-more"><button class="btn ghost sm" id="homeMore">Carregar mais <span class="muted">(${d.total - list.length})</span></button></div>` : ""}</div>`;
-  view.querySelector(".filters").onclick = e => { const b = e.target.closest("[data-hf]"); if (b) { homeFilter = b.dataset.hf; homeLimit = HOME_PAGE; renderHome(); } };
-  view.querySelector(".view-seg").onclick = e => {
-    const b = e.target.closest("[data-hv]"); if (!b) return;
-    try { localStorage.setItem(homeViewKey(), b.dataset.hv); } catch { }
-    renderHome();
+const newHref = (t, folder) => t === "playbook" ? "#/novo" : `#/${TYPE_ROUTE[t]}/novo${folder && folder !== "none" ? "/" + folder : ""}`;
+/* lista vazia: diz o motivo (filtro, pasta vazia, nada publicado) e oferece a saída certa para cada caso */
+function libEmpty(t, { status, filtered, folder }) {
+  const ti = typeInfo(t), one = ti.label.toLowerCase(), many = ti.plural.toLowerCase();
+  const create = can(`${t}.create`) ? `<a class="btn primary sm" href="${newHref(t, folder)}">${ic("plus")}Criar ${esc(one)}</a>` : "";
+  let msg, act;
+  if (filtered) { msg = `Nenhum ${esc(one)} com estes filtros.`; act = `<button class="btn ghost sm" data-clear>Limpar filtros</button>`; }
+  else if (status) { msg = `Nenhum ${esc(one)} em ${esc(statusLabel(t, status))}.`; act = `<button class="btn ghost sm" data-clear>Ver todos os status</button>`; }
+  else if (folder) { msg = folder === "none" ? `Todos os ${esc(many)} estão em alguma pasta.` : "Esta pasta está vazia."; act = folder === "none" ? "" : create; }
+  else if (can(`${t}.create`)) { msg = `Ainda não há ${esc(many)}. ${t === "playbook" ? "Preencha o essencial e a ferramenta gera o documento no padrão e o fluxograma inicial." : "Comece por um template."}`; act = create; }
+  else { msg = `Ainda não há ${esc(many)} disponíveis para o seu perfil. Se esperava ver algum aqui, fale com o time de segurança.`; act = ""; }
+  return `<div class="lib-empty" role="status"><p>${msg}</p>${act}</div>`;
+}
+/* erro ao carregar: a mensagem e um "Tentar de novo" que refaz a rota atual */
+function loadError(root, e) {
+  root.innerHTML = `<div class="wrap"><div class="err load-err" role="alert"><span>Não foi possível carregar: ${esc(e.message)}</span><button class="btn ghost xs" data-retry>Tentar de novo</button></div></div>`;
+  root.querySelector("[data-retry]").onclick = () => route();
+}
+/* menu "Mais" do cabeçalho: importar e exportar ficam fora do caminho de quem só lê */
+function actionsMenu(anchor, items) {
+  document.querySelectorAll(".fmenu").forEach(m => m.remove());
+  const r = anchor.getBoundingClientRect(), m = document.createElement("div");
+  m.className = "dmenu fmenu acts-menu"; m.setAttribute("role", "menu");
+  m.style.cssText = `position:fixed;left:${Math.max(8, Math.min(r.right - 240, innerWidth - 248))}px;top:${r.bottom + 4}px;z-index:80`;
+  m.innerHTML = items.map((x, i) => x.href ? `<a role="menuitem" href="${x.href}" download data-i="${i}">${ic(x.icon)}${esc(x.label)}<small>${esc(x.hint)}</small></a>`
+    : `<button role="menuitem" data-i="${i}">${ic(x.icon)}${esc(x.label)}<small>${esc(x.hint)}</small></button>`).join("");
+  document.body.append(m); anchor.setAttribute("aria-expanded", "true");
+  const close = (refocus) => { m.remove(); anchor.setAttribute("aria-expanded", "false"); document.removeEventListener("mousedown", out, true); if (refocus) anchor.focus(); };
+  const out = e => { if (!m.contains(e.target) && e.target !== anchor) close(); };
+  setTimeout(() => document.addEventListener("mousedown", out, true), 0);
+  m.onkeydown = e => {
+    const all = [...m.querySelectorAll("[role=menuitem]")], i = all.indexOf(document.activeElement);
+    if (e.key === "Escape") { e.preventDefault(); close(true); }
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); all[(i + (e.key === "ArrowDown" ? 1 : all.length - 1)) % all.length].focus(); }
   };
-  if ($("#homeMore")) $("#homeMore").onclick = () => { homeLimit += HOME_PAGE; renderHome(); };
-  if ($("#impBtn")) $("#impBtn").onclick = importDialog;
+  m.onclick = e => { const b = e.target.closest("[data-i]"); if (!b) return; const x = items[+b.dataset.i]; close(true); if (x.run) x.run(); };
+  m.querySelector("[role=menuitem]").focus();
 }
 function govLine(g) {
   const parts = [];
   if (g.status === "Produção" && g.approver) parts.push(`Aprovado por <b>${esc(g.approver)}</b>`);
   if (g.reviewer) parts.push(`Revisado por <b>${esc(g.reviewer)}</b>${g.reviewed ? ` em ${esc(g.reviewed)}` : ""}`);
-  return parts.join(" · ") || `<span class="muted">Sem revisão registrada</span>`;
+  return parts.join(" · ");
 }
 
 /* ───────── página do playbook ───────── */
@@ -946,6 +1072,10 @@ function focusInDoc(el, pb, id) {
   t.scrollIntoView({ block: "center" }); t.classList.add("flash"); setTimeout(() => t.classList.remove("flash"), 2500);
 }
 
+/* Formulário com alteração não salva fora dos editores (Administração, Templates): a página registra em
+   Unsaved.check uma função que diz se há mudança; a navegação e o fechamento da janela perguntam antes de descartar. */
+const Unsaved = { check: null, dirty() { return !!(this.check && this.check()); } };
+
 /* ───────── administração ───────── */
 const Admin = (() => {
   const ACTIONS = { login: "Entrou", logout: "Saiu", login_falhou: "Falha de login", senha_alterada: "Trocou a senha", senha_redefinida: "Senha redefinida",
@@ -959,7 +1089,10 @@ const Admin = (() => {
     template_importado: "Template importado", template_times_salvos: "Times do template salvos", template_ramos_adicionados: "Ramos adicionados ao template",
     ramo_criado: "Ramo criado", ramo_excluido: "Ramo excluído", versao_restaurada: "Versão restaurada", admin_inicial: "Administrador inicial",
     logs_configurados: "Logs configurados", logs_testados: "Teste de envio de logs", auditoria_exportada: "Auditoria exportada",
-    sso_configurado: "SSO configurado", sso_falhou: "Falha no SSO", imagem_enviada: "Imagem enviada", aplicacao_resetada: "Aplicação resetada" };
+    governanca_alterada: "Governança alterada", papel_criado: "Role criada", papel_alterado: "Role alterada", papel_excluido: "Role excluída",
+    sugestao_criada: "Sugestão criada", sugestao_aceita: "Sugestão aceita", sugestao_recusada: "Sugestão recusada", sugestao_retirada: "Sugestão retirada",
+    pasta_criada: "Pasta criada", pasta_renomeada: "Pasta renomeada", pasta_movida: "Pasta movida", pasta_excluida: "Pasta excluída",
+    documento_movido: "Documento movido", pastas_do_template: "Pastas do template criadas", sso_configurado: "SSO configurado", sso_falhou: "Falha no SSO", imagem_enviada: "Imagem enviada", aplicacao_resetada: "Aplicação resetada" };
   const fmtTs = t => t ? new Date(t).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "—";
 
   function showTemp(user, pw, what) {
@@ -973,196 +1106,381 @@ const Admin = (() => {
       } });
   }
 
-  async function users(el) {
+  /* Usuários: a tabela ocupa a largura toda e criar usuário abre um diálogo. Dar mais acesso, desativar e excluir
+     pedem confirmação; depois de cada mudança a tabela é refeita e o foco volta ao mesmo controle. */
+  let userFilter = "";
+  async function users(el, focusSel) {
     let data;
-    try { data = await api("GET", "api/users"); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
-    const roleSel = (u) => `<select class="in sm" data-role="${esc(u.login)}" ${u.login === App.user.login ? "disabled title='Você não pode alterar a própria role'" : ""}>${data.roleList.map(r => `<option value="${esc(r.key)}" ${r.key === u.roleId ? "selected" : ""}>${esc(r.name)}</option>`).join("")}${data.roleList.some(r => r.key === u.roleId) ? "" : `<option selected disabled>${esc(u.roleName)}</option>`}</select>`;
-    el.innerHTML = `<div class="admin-grid"><div class="ecard">
-        <div class="ecard-h"><b>Usuários</b><span class="muted small">${data.users.length} cadastrados</span></div>
-        <div class="tw"><table class="utable"><thead><tr><th>Usuário</th><th>Role</th><th>Situação</th><th>Último acesso</th><th>Sessões</th><th></th></tr></thead><tbody>
-        ${data.users.map(u => `<tr class="${u.active ? "" : "off"}"><td><b>${esc(u.name)}</b><br><code>${esc(u.login)}</code>${u.mustChange ? ` <span class="tag warn">senha temporária</span>` : ""}
-            <br><select class="in xs auth-sel" data-auth="${esc(u.login)}" ${u.login === App.user.login ? "disabled" : ""} title="Forma de autenticação">
-              <option value="local" ${u.auth !== "sso" ? "selected" : ""}>Senha local</option><option value="sso" ${u.auth === "sso" ? "selected" : ""}>SSO${u.auth === "sso" && !u.ssoLinked ? " (aguardando 1º login)" : ""}</option></select></td>
-          <td>${roleSel(u)}</td>
-          <td><label class="switch"><input type="checkbox" data-active="${esc(u.login)}" ${u.active ? "checked" : ""} ${u.login === App.user.login ? "disabled" : ""}><span>${u.active ? "Ativo" : "Inativo"}</span></label></td>
-          <td class="small">${fmtTs(u.lastLogin)}</td>
-          <td>${u.sessions ? `<span class="tag">${u.sessions} ativa${u.sessions > 1 ? "s" : ""}</span> ${u.login !== App.user.login ? `<button class="btn ghost xs" data-kick="${esc(u.login)}" title="Desconecta o usuário em todos os navegadores">Encerrar</button>` : ""}` : `<span class="muted small">—</span>`}</td>
-          <td class="ucell-actions">${u.auth === "sso" ? "" : `<button class="btn ghost xs" data-reset="${esc(u.login)}">Redefinir senha</button>`}${u.login !== App.user.login ? `<button class="btn danger xs" data-del="${esc(u.login)}">Excluir</button>` : ""}</td></tr>`).join("")}
-        </tbody></table></div></div>
-      <div class="ecard"><div class="ecard-h"><b>Novo usuário</b></div>
-        <form id="newUser" class="tform" autocomplete="off">
-          <label>Nome<input class="in" name="name" required placeholder="Nome e sobrenome"></label>
-          <label>Login<input class="in" name="login" required pattern="[a-z0-9._@\-]{3,80}" placeholder="ex.: maria.souza ou maria@empresa.com"></label>
-          <label>Autenticação<select class="in" name="auth"><option value="local">Senha local (senha temporária gerada agora)</option><option value="sso">SSO (entra pelo provedor com este login)</option></select></label>
-          <label>Role<select class="in" name="role">${data.roleList.map(r => `<option value="${esc(r.key)}" ${r.key === "viewer" ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></label>
-          <p class="muted small">O que cada role pode fazer está em ${can("roles.manage") ? `<a href="#/admin/roles">Roles</a>` : "Roles"}.</p>
-          <div class="err" id="nuerr" hidden></div>
-          <div class="create-actions"><button class="btn primary" type="submit">Criar usuário</button></div>
-        </form></div></div>`;
-    const reload = () => users(el);
-    const upd = async (login, body, msg) => { try { await api("PUT", `api/users/${encodeURIComponent(login)}`, body); toast(msg); } catch (e) { toast(e.message, "err"); } reload(); };
-    el.querySelectorAll("[data-role]").forEach(s => s.onchange = () => upd(s.dataset.role, { role: s.value }, "Role alterada"));
-    el.querySelectorAll("[data-auth]").forEach(sel => sel.onchange = async () => {
-      const lg = sel.dataset.auth, to = sel.value;
-      if (!(await ask(to === "sso" ? `Converter ${lg} para SSO? A senha local deixa de funcionar e as sessões abertas são encerradas. O login precisa ser igual ao enviado pelo provedor.`
-        : `Voltar ${lg} para senha local? Uma senha temporária será gerada.`, { title: "Forma de autenticação", ok: "Alterar" }))) { sel.value = to === "sso" ? "local" : "sso"; return; }
-      try { const r = await api("PUT", `api/users/${encodeURIComponent(lg)}`, { auth: to }); toast("Autenticação alterada"); if (r.tempPassword) showTemp(r.user, r.tempPassword, "Senha local gerada"); }
-      catch (e) { toast(e.message, "err"); }
-      reload();
-    });
-    el.querySelectorAll("[data-active]").forEach(c => c.onchange = () => upd(c.dataset.active, { active: c.checked }, c.checked ? "Usuário reativado" : "Usuário desativado (sessões encerradas)"));
-    el.querySelectorAll("[data-reset]").forEach(b => b.onclick = async () => {
-      if (!(await ask(`Gerar nova senha temporária para ${b.dataset.reset}? As sessões abertas dele serão encerradas.`, { title: "Redefinir senha", ok: "Gerar senha" }))) return;
-      try { const r = await api("POST", `api/users/${encodeURIComponent(b.dataset.reset)}/reset`); showTemp(r.user, r.tempPassword, "Senha redefinida"); reload(); } catch (e) { toast(e.message, "err"); }
-    });
-    el.querySelectorAll("[data-kick]").forEach(b => b.onclick = async () => {
-      try { const r = await api("POST", `api/users/${encodeURIComponent(b.dataset.kick)}/logout`); toast(`${r.closed} sessão(ões) encerrada(s)`); } catch (e) { toast(e.message, "err"); }
-      reload();
-    });
-    el.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
-      if (!(await ask(`Excluir o usuário ${b.dataset.del}? Para só bloquear o acesso, prefira desativar.`, { title: "Excluir usuário", ok: "Excluir", danger: true }))) return;
-      try { await api("DELETE", `api/users/${encodeURIComponent(b.dataset.del)}`); toast("Usuário excluído"); } catch (e) { toast(e.message, "err"); }
-      reload();
-    });
-    $("#newUser", el).onsubmit = async e => {
-      e.preventDefault();
-      const f = new FormData(e.target);
-      try {
-        const r = await api("POST", "api/users", { name: f.get("name"), login: f.get("login").trim().toLowerCase(), role: f.get("role"), auth: f.get("auth") });
-        if (r.tempPassword) showTemp(r.user, r.tempPassword, "Usuário criado"); else toast("Usuário SSO pré-cadastrado: ele entra pelo botão de SSO");
-        reload();
-      } catch (x) { $("#nuerr", el).textContent = x.message; $("#nuerr", el).hidden = false; }
+    try { data = await api("GET", "api/users"); } catch (e) { el.innerHTML = `<div class="err" role="alert">${esc(e.message)}</div>`; return; }
+    const me = App.user.login, role = k => data.roleList.find(r => r.key === k) || { key: k, name: k, priority: 0 };
+    const byLogin = lg => data.users.find(u => u.login === lg);
+    const sel = (attr, lg) => `[${attr}="${CSS.escape(lg)}"]`;
+    const inactive = data.users.filter(u => !u.active).length;
+    const roleSel = u => `<select class="in sm" data-role="${esc(u.login)}" aria-label="Role de ${esc(u.name)}" ${u.login === me ? "disabled title='Você não pode alterar a própria role'" : ""}>${data.roleList.map(r => `<option value="${esc(r.key)}" ${r.key === u.roleId ? "selected" : ""}>${esc(r.name)}</option>`).join("")}${data.roleList.some(r => r.key === u.roleId) ? "" : `<option selected disabled>${esc(u.roleName)}</option>`}</select>`;
+    const authSel = u => `<select class="in sm" data-auth="${esc(u.login)}" aria-label="Autenticação de ${esc(u.name)}" ${u.login === me ? "disabled title='Você não pode alterar a própria forma de autenticação'" : ""}>
+        <option value="local" ${u.auth !== "sso" ? "selected" : ""}>Senha local</option><option value="sso" ${u.auth === "sso" ? "selected" : ""}>SSO</option></select>`;
+    const row = u => {
+      const self = u.login === me;
+      const tags = (self ? `<span class="tag">você</span>` : "") + (u.mustChange ? `<span class="tag warn">senha temporária</span>` : "")
+        + (u.auth === "sso" && !u.ssoLinked ? `<span class="tag">aguardando 1º login</span>` : "");
+      return `<tr class="${u.active ? "" : "off"}" data-q="${esc((u.name + " " + u.login + " " + u.roleName).toLowerCase())}">
+        <td data-l="Usuário"><div class="ucell"><b>${esc(u.name)}</b><code>${esc(u.login)}</code>${tags ? `<span class="utags">${tags}</span>` : ""}</div></td>
+        <td data-l="Autenticação">${authSel(u)}</td>
+        <td data-l="Role">${roleSel(u)}</td>
+        <td data-l="Acesso"><label class="switch"><input type="checkbox" data-active="${esc(u.login)}" aria-label="Acesso de ${esc(u.name)}" ${u.active ? "checked" : ""} ${self ? "disabled" : ""}><span>${u.active ? "Ativo" : "Inativo"}</span></label></td>
+        <td data-l="Último acesso" class="small num">${fmtTs(u.lastLogin)}</td>
+        <td data-l="Sessões">${u.sessions ? `<span class="tag">${u.sessions} ativa${u.sessions > 1 ? "s" : ""}</span>` : `<span class="muted small">—</span>`}</td>
+        <td class="ucell-actions">${self ? "" : `<button class="btn ghost icon" data-more="${esc(u.login)}" aria-haspopup="menu" aria-label="Mais ações para ${esc(u.name)}" title="Mais ações">${ic("more")}</button>`}</td></tr>`;
     };
+    el.innerHTML = `<section class="ecard ucard"><div class="ecard-h"><h2>Usuários</h2>
+        <span class="muted small">${data.users.length} cadastrados${inactive ? ` · ${inactive} inativo${inactive > 1 ? "s" : ""}` : ""}</span>
+        <div class="ecard-tools"><input class="in sm" type="search" id="ufilter" value="${esc(userFilter)}" placeholder="Filtrar usuários" aria-label="Filtrar usuários por nome, login ou role" title="Filtra por nome, login ou role">
+          <button class="btn primary sm" id="newUserBtn">${ic("plus")}Novo usuário</button></div></div>
+      <div class="tw"><table class="utable"><thead><tr><th>Usuário</th><th>Autenticação</th><th>Role</th><th>Acesso</th><th>Último acesso</th><th>Sessões</th><th><span class="sr-only">Ações</span></th></tr></thead>
+        <tbody>${data.users.map(row).join("")}</tbody></table></div>
+      <p class="empty small" id="unone" hidden>Nenhum usuário encontrado com esse filtro.</p>
+      <p class="muted small ufoot">O que cada role pode fazer está em ${can("roles.manage") ? `<a href="#/admin/roles">Roles</a>` : "Roles"}. Para bloquear o acesso de alguém sem perder o histórico, desative em vez de excluir.</p></section>`;
+    const filter = () => {
+      const v = userFilter.trim().toLowerCase(); let shown = 0;
+      el.querySelectorAll("tbody tr").forEach(tr => { tr.hidden = !!v && !tr.dataset.q.includes(v); if (!tr.hidden) shown++; });
+      $("#unone", el).hidden = shown > 0;
+    };
+    $("#ufilter", el).oninput = e => { userFilter = e.target.value; filter(); };
+    filter();
+    const again = f => users(el, f);
+    const upd = async (login, body, msg, f) => { try { await api("PUT", `api/users/${encodeURIComponent(login)}`, body); toast(msg); } catch (e) { toast(e.message, "err"); } again(f); };
+    el.querySelectorAll("[data-role]").forEach(s => s.onchange = async () => {
+      const u = byLogin(s.dataset.role), to = role(s.value), from = role(u.roleId);
+      /* só a mudança que dá mais acesso pede confirmação: um select mudado sem querer não pode criar um administrador */
+      if (to.priority > from.priority && !(await ask(`Mudar ${u.name} de ${from.name} para ${to.name}? A nova role tem mais permissões${to.key === "admin" ? ", inclusive usuários, roles e configurações" : ""}. Vale a partir da próxima ação da pessoa no sistema.`,
+        { title: "Dar mais acesso", ok: `Mudar para ${to.name}`, danger: to.key === "admin" }))) { s.value = u.roleId; return; }
+      upd(u.login, { role: to.key }, `${u.name}: ${to.name}`, sel("data-role", u.login));
+    });
+    el.querySelectorAll("[data-auth]").forEach(s => s.onchange = async () => {
+      const u = byLogin(s.dataset.auth), to = s.value;
+      if (!(await ask(to === "sso" ? `Converter ${u.name} para SSO? A senha local deixa de funcionar e as sessões abertas são encerradas. O login (${u.login}) precisa ser igual ao enviado pelo provedor.`
+        : `Voltar ${u.name} para senha local? Uma senha temporária será gerada.`, { title: "Forma de autenticação", ok: "Alterar" }))) { s.value = to === "sso" ? "local" : "sso"; return; }
+      try { const r = await api("PUT", `api/users/${encodeURIComponent(u.login)}`, { auth: to }); toast("Autenticação alterada"); if (r.tempPassword) showTemp(r.user, r.tempPassword, "Senha local gerada"); }
+      catch (e) { toast(e.message, "err"); }
+      again(sel("data-auth", u.login));
+    });
+    el.querySelectorAll("[data-active]").forEach(c => c.onchange = async () => {
+      const u = byLogin(c.dataset.active);
+      if (!c.checked && !(await ask(`Desativar ${u.name}? A pessoa não consegue mais entrar${u.sessions ? ` e ${u.sessions === 1 ? "a sessão aberta é encerrada" : `as ${u.sessions} sessões abertas são encerradas`}` : ""}. Dá para reativar a qualquer momento, sem perder nada.`,
+        { title: "Desativar usuário", ok: "Desativar", danger: true }))) { c.checked = true; return; }
+      upd(u.login, { active: c.checked }, c.checked ? `${u.name} reativado` : `${u.name} desativado`, sel("data-active", u.login));
+    });
+    const resetPw = async u => {
+      if (!(await ask(`Gerar nova senha temporária para ${u.name}? As sessões abertas são encerradas e a senha atual deixa de funcionar.`, { title: "Redefinir senha", ok: "Gerar senha" }))) return;
+      try { const r = await api("POST", `api/users/${encodeURIComponent(u.login)}/reset`); showTemp(r.user, r.tempPassword, "Senha redefinida"); again(sel("data-more", u.login)); } catch (e) { toast(e.message, "err"); }
+    };
+    const kick = async u => {
+      try { const r = await api("POST", `api/users/${encodeURIComponent(u.login)}/logout`); toast(`${r.closed} sessão(ões) encerrada(s)`); } catch (e) { toast(e.message, "err"); }
+      again(sel("data-more", u.login));
+    };
+    const del = async u => {
+      if (!(await ask(`Excluir ${u.name} (${u.login})? A conta sai da lista e não pode ser recuperada; a auditoria continua registrando o login. Para só bloquear o acesso, desative.`,
+        { title: "Excluir usuário", ok: "Excluir usuário", danger: true }))) return;
+      try { await api("DELETE", `api/users/${encodeURIComponent(u.login)}`); toast(`${u.name} excluído`); } catch (e) { toast(e.message, "err"); }
+      again("#ufilter");
+    };
+    el.querySelectorAll("[data-more]").forEach(b => b.onclick = () => {
+      const u = byLogin(b.dataset.more);
+      actionsMenu(b, [
+        ...(u.auth === "sso" ? [] : [{ icon: "key", label: "Redefinir senha", hint: "Gera uma senha temporária e encerra as sessões", run: () => resetPw(u) }]),
+        ...(u.sessions ? [{ icon: "logout", label: "Encerrar sessões", hint: `Desconecta de ${u.sessions === 1 ? "1 navegador" : `${u.sessions} navegadores`}`, run: () => kick(u) }] : []),
+        { icon: "trash", label: "Excluir usuário", hint: "Remove a conta; para bloquear, prefira desativar", run: () => del(u) }]);
+    });
+    $("#newUserBtn", el).onclick = () => newUserDialog(data, login => again(sel("data-more", login)));
+    const f = focusSel && el.querySelector(focusSel);
+    if (f) f.focus();
   }
 
+  function newUserDialog(data, done) {
+    modal({ title: "Novo usuário", html: `<form id="newUser" class="tform" autocomplete="off">
+        <label>Nome<input class="in" name="name" required maxlength="80" placeholder="Nome e sobrenome"></label>
+        <label>Login<input class="in" name="login" required maxlength="80" pattern="[a-z0-9._@\\-]{3,80}" autocapitalize="off" spellcheck="false" aria-describedby="nuLoginHelp" placeholder="ex.: maria.souza ou maria@empresa.com"></label>
+        <p class="muted small" id="nuLoginHelp">3 a 80 caracteres: letras minúsculas, números, ponto, hífen, sublinhado ou @. No SSO, igual ao login enviado pelo provedor.</p>
+        <label>Autenticação<select class="in" name="auth"><option value="local">Senha local (senha temporária gerada agora)</option><option value="sso">SSO (entra pelo provedor com este login)</option></select></label>
+        <label>Role<select class="in" name="role">${data.roleList.map(r => `<option value="${esc(r.key)}" ${r.key === "viewer" ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></label>
+        <p class="muted small">O que cada role pode fazer está em Administração → Roles.</p>
+        <div class="err" id="nuerr" role="alert" hidden></div>
+        <div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn primary" type="submit">Criar usuário</button></div></form>`,
+      onMount: (b, close) => {
+        const form = $("#newUser", b), login = form.login, err = $("#nuerr", b);
+        /* o login é sempre minúsculo: converte enquanto digita, em vez de recusar no fim */
+        login.oninput = () => { const p = login.selectionStart; login.value = login.value.toLowerCase(); login.setSelectionRange(p, p); login.removeAttribute("aria-invalid"); };
+        form.querySelector("[data-cancel]").onclick = close;
+        form.onsubmit = async e => {
+          e.preventDefault();
+          const f = new FormData(form), btn = form.querySelector("[type=submit]");
+          btn.disabled = true;
+          try {
+            const r = await api("POST", "api/users", { name: f.get("name"), login: f.get("login").trim().toLowerCase(), role: f.get("role"), auth: f.get("auth") });
+            close();
+            if (r.tempPassword) showTemp(r.user, r.tempPassword, "Usuário criado"); else toast("Usuário SSO pré-cadastrado: entra pelo botão de SSO");
+            done(r.user.login);
+          } catch (x) {
+            err.textContent = x.message; err.hidden = false; btn.disabled = false;
+            if (/login/i.test(x.message)) { login.setAttribute("aria-invalid", "true"); login.focus(); }
+          }
+        };
+      } });
+  }
+
+  /* Auditoria: a trilha de evidência. Os filtros (período, tipo de ação, usuário e texto, que procura também nos
+     detalhes, como o IP) rodam no servidor; a tela mostra até 500 eventos e diz quantos existem no recorte, que pode
+     ser exportado. Horários do servidor, com segundos. */
+  const CATS = [["acesso", "Acesso e sessões", /^(login|logout|senha_alterada|sessoes_|sso_falhou)/],
+    ["pessoas", "Usuários, roles e governança", /^(usuario_|papel_|governanca_|admin_inicial|senha_redefinida)/],
+    ["docs", "Documentos", /^(documento_|fluxograma_|status_|playbook|ramo_|versao_|sugestao_|pasta_|imagem_|times_salvos)/],
+    ["templates", "Templates", /^(template_|pastas_do_template)/],
+    ["config", "Configuração e exportações", /^(logs_|sso_configurado|marca_|logo_|aplicacao_|auditoria_)/]];
+  const ALERT = /excluid|falhou|papel_|sso_configurado|aplicacao_resetada|governanca_|senha_redefinida|sessoes_encerradas/;
+  const DETAIL_LBL = { ip: "IP", papel: "role", autenticacao: "autenticação", retencao_dias: "retenção (dias)", http: "HTTP", arquivo: "arquivo",
+    configuracoes: "configurações", usuarios: "usuários", permissoes: "permissões", copia_de: "cópia de", realocados_para: "realocados para",
+    aprovador_diferente: "aprovador diferente", versao: "versão", sugestao: "sugestão", secao: "seção", tem_texto: "com texto",
+    documentos_movidos: "documentos movidos", subpastas_movidas: "subpastas movidas", usuario: "usuário", acoes: "ações" };
+  const auditTs = t => t ? esc(String(t).replace("T", " ")) : "—";
+  const yes = v => v === true || v === "sim" ? "Sim" : v === false || v === "não" ? "Não" : v;
+  function auditDetail(e) {
+    return Object.entries(e).filter(([k]) => !["ts", "user", "action", "target"].includes(k)).map(([k, v]) => {
+      if ((k === "adicionadas" || k === "removidas") && v) return String(v).split(", ").map(p => `<span class="perm-chg ${k === "adicionadas" ? "add" : "rm"}">${k === "adicionadas" ? "+" : "−"} ${esc(p)}</span>`).join(" ");
+      if ((k === "adicionadas" || k === "removidas")) return "";
+      return `${esc(DETAIL_LBL[k] || k.replace(/_/g, " "))}: <b>${esc(yes(v))}</b>`;
+    }).filter(Boolean).join(" · ");
+  }
+  const auditTarget = t => esc(String(t || "").replace(/^papel:/, "role ").replace(/^pasta:/, "pasta "));
+  let auditF = { days: "0", cat: "", user: "", q: "" }, auditCtl = null;
   async function auditLog(el) {
-    let data;
-    try { data = await api("GET", "api/audit"); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
-    const detail = e => Object.entries(e).filter(([k]) => !["ts", "user", "action", "target"].includes(k)).map(([k, v]) => `${esc(k)}: <b>${esc(v)}</b>`).join(" · ");
-    el.innerHTML = `<div class="ecard"><div class="ecard-h"><b>Auditoria</b><span class="muted small">últimos ${data.entries.length} eventos</span>
-      <input class="in sm" id="afilter" placeholder="Filtrar por usuário, ação ou playbook" style="max-width:300px;margin-left:auto"></div>
-      <div class="tw"><table class="utable audit"><thead><tr><th>Quando</th><th>Quem</th><th>Ação</th><th>Alvo</th><th>Detalhes</th></tr></thead><tbody>
-      ${data.entries.map(e => `<tr data-q="${esc((e.user + " " + e.action + " " + (ACTIONS[e.action] || "") + " " + e.target).toLowerCase())}"><td class="small">${fmtTs(e.ts)}</td><td><code>${esc(e.user)}</code></td>
-        <td><span class="tag ${/excluido|falhou/.test(e.action) ? "warn" : ""}">${esc(ACTIONS[e.action] || e.action)}</span></td><td>${esc(e.target)}</td><td class="small">${detail(e)}</td></tr>`).join("")}
-      </tbody></table></div></div>`;
-    $("#afilter", el).oninput = ev => { const v = ev.target.value.toLowerCase(); el.querySelectorAll("tbody tr").forEach(tr => tr.hidden = v && !tr.dataset.q.includes(v)); };
+    el.innerHTML = `<section class="ecard"><div class="ecard-h"><h2>Auditoria</h2><span class="muted small" id="acount" role="status" aria-live="polite"></span></div>
+      <form class="audit-bar" id="aform" role="search" aria-label="Filtrar a auditoria">
+        <label>Período<select class="in sm" name="days">${[["1", "Últimas 24 horas"], ["7", "Últimos 7 dias"], ["30", "Últimos 30 dias"], ["0", "Todo o período guardado"]].map(([v, l]) => `<option value="${v}" ${auditF.days === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+        <label>Tipo de ação<select class="in sm" name="cat"><option value="">Todas</option>${CATS.map(([k, l]) => `<option value="${k}" ${auditF.cat === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+        <label>Usuário<input class="in sm" name="user" value="${esc(auditF.user)}" list="auserList" placeholder="login exato" autocomplete="off" spellcheck="false"></label>
+        <label class="grow">Buscar<input class="in sm" type="search" name="q" value="${esc(auditF.q)}" placeholder="Alvo, ação, IP ou detalhe" spellcheck="false"></label>
+        <a class="btn ghost sm" id="aexp" download>${ic("download")}Exportar recorte</a>
+        <datalist id="auserList"></datalist></form>
+      <p class="muted small audit-note">Horários do servidor, com segundos. A tela mostra até 500 eventos, os mais recentes primeiro; para mais, refine o filtro ou exporte o recorte (JSON Lines).</p>
+      <div class="tw"><table class="utable audit"><caption class="sr-only">Eventos de auditoria</caption>
+        <thead><tr><th scope="col">Quando</th><th scope="col">Quem</th><th scope="col">Ação</th><th scope="col">Alvo</th><th scope="col">Detalhes</th></tr></thead><tbody id="arows"></tbody></table></div>
+      <div class="lib-empty" id="aempty" hidden><p>Nenhum evento neste recorte.</p><button type="button" class="btn ghost sm" id="aclear">Limpar filtros</button></div>
+      <div class="err" id="aerr" role="alert" hidden></div></section>`;
+    const form = $("#aform", el), users = new Set();
+    const params = () => {
+      const p = new URLSearchParams({ days: auditF.days, limit: "500" });
+      if (auditF.q.trim()) p.set("q", auditF.q.trim());
+      if (auditF.user.trim()) p.set("user", auditF.user.trim().toLowerCase());
+      const cat = CATS.find(c => c[0] === auditF.cat);
+      if (cat) p.set("actions", Object.keys(ACTIONS).filter(a => cat[2].test(a)).join(","));
+      return p;
+    };
+    const load = async () => {
+      if (auditCtl) auditCtl.abort();
+      auditCtl = new AbortController();
+      const p = params();
+      const ex = new URLSearchParams(p); ex.delete("limit"); if (ex.get("days") === "0") ex.set("days", "3650");
+      $("#aexp", el).href = `api/audit/export?${ex}`;
+      let d;
+      try { d = await api("GET", `api/audit?${p}`, undefined, { signal: auditCtl.signal }); }
+      catch (e) { if (e.name === "AbortError") return; $("#aerr", el).textContent = e.message; $("#aerr", el).hidden = false; return; }
+      $("#aerr", el).hidden = true;
+      d.entries.forEach(e => users.add(e.user));
+      $("#auserList", el).innerHTML = [...users].sort().map(u => `<option value="${esc(u)}">`).join("");
+      $("#arows", el).innerHTML = d.entries.map(e => `<tr><td data-l="Quando" class="small num mono-ts"><time datetime="${esc(e.ts)}">${auditTs(e.ts)}</time></td>
+        <td data-l="Quem"><code>${esc(e.user)}</code></td>
+        <td data-l="Ação"><span class="tag ${ALERT.test(e.action) ? "warn" : ""}">${esc(ACTIONS[e.action] || e.action.replace(/_/g, " "))}</span></td>
+        <td data-l="Alvo">${auditTarget(e.target) || `<span class="muted">—</span>`}</td><td data-l="Detalhes" class="small">${auditDetail(e) || `<span class="muted">—</span>`}</td></tr>`).join("");
+      const n = d.entries.length, filtered = auditF.q.trim() || auditF.user.trim() || auditF.cat || auditF.days !== "0";
+      $("#acount", el).textContent = !d.total ? "nenhum evento" : n < d.total ? `${n.toLocaleString("pt-BR")} mais recentes de ${d.total.toLocaleString("pt-BR")} eventos` : `${d.total.toLocaleString("pt-BR")} evento${d.total > 1 ? "s" : ""}${filtered ? " no recorte" : ""}`;
+      $("#aempty", el).hidden = n > 0; $("#aclear", el).hidden = !filtered;
+      el.querySelector(".tw").hidden = n === 0;
+    };
+    let t = null;
+    form.oninput = e => { auditF[e.target.name] = e.target.value; clearTimeout(t); t = setTimeout(load, e.target.tagName === "SELECT" ? 0 : 250); };
+    form.onsubmit = e => { e.preventDefault(); load(); };
+    $("#aclear", el).onclick = () => { auditF = { days: "0", cat: "", user: "", q: "" }; auditLog(el); };
+    load();
   }
 
-  /* Aparência: só o nome do workspace e a logo. O tema (claro/escuro) é escolha de cada usuário, na barra lateral. */
-  async function governanceCard(el) {
-    const box = $("#govCard", el); if (!box) return;
-    let g; try { g = (await api("GET", "api/governance")).governance; } catch (e) { box.remove(); return; }
-    box.innerHTML = `<header class="ap-h"><b>Governança</b></header>
-      <div class="ap-body"><label class="switch"><input type="checkbox" id="govDistinct" ${g.require_distinct_approver ? "checked" : ""}><span>Aprovador diferente de quem edita</span></label>
-        <p class="muted small">Ao publicar em Produção, o aprovador não pode ser quem está publicando nem quem fez a última alteração do conteúdo. Recomendado: desligue só em instalações com uma única pessoa editando.</p></div>`;
-    $("#govDistinct", box).onchange = async e => {
+  /* Governança: regras que valem para a instalação inteira e, por último, a zona de perigo com o reset */
+  async function governanceTab(el) {
+    let g;
+    try { g = (await api("GET", "api/governance")).governance; } catch (e) { el.innerHTML = `<div class="err" role="alert">${esc(e.message)}</div>`; return; }
+    el.innerHTML = `<div class="gov-page">
+      <section class="ecard"><div class="ecard-h"><h2>Aprovação para Produção</h2></div>
+        <label class="switch"><input type="checkbox" id="govDistinct" ${g.require_distinct_approver ? "checked" : ""}><span>Aprovador diferente de quem edita</span></label>
+        <p class="muted small">Ao publicar em Produção, o aprovador não pode ser quem está publicando nem quem fez a última alteração do conteúdo. Recomendado: desligue só em instalações com uma única pessoa editando. A mudança vale na hora.</p></section>
+      ${can("app.reset") ? `<section class="ecard danger-zone"><div class="ecard-h"><h2>Zona de perigo</h2></div>
+        <div class="dz-row"><div><b>Resetar aplicação</b>
+          <p class="muted small">Volta a instalação ao estado de recém-instalada para todos os usuários. Antes de confirmar, você vê o que sai; uma cópia de tudo vai para a lixeira do servidor.</p></div>
+          <button class="btn danger" id="resetBtn">Resetar aplicação…</button></div></section>` : ""}</div>`;
+    $("#govDistinct", el).onchange = async e => {
       const on = e.target.checked;
       if (!on && !(await ask("Desligar a regra? Quem edita um playbook poderá também aprová-lo para Produção.", { title: "Governança", ok: "Desligar", danger: true }))) { e.target.checked = true; return; }
       try { await api("PUT", "api/governance", { require_distinct_approver: on }); toast(on ? "Regra do aprovador ligada" : "Regra do aprovador desligada"); }
       catch (x) { toast(x.message, "err"); e.target.checked = !on; }
     };
+    if ($("#resetBtn", el)) $("#resetBtn", el).onclick = resetDialog;
   }
 
+  /* Aparência: o nome do workspace, o contato e a logo. O tema (claro/escuro) é escolha de cada usuário, na barra lateral. */
   function appearance(el) {
     const b = Brand.get();
-    const logoImg = b.logo ? `<img src="api/branding/logo?v=${esc(b.logo)}" alt="">` : "";
-    const gov = canAny("app.reset", "users.manage") ? `<section class="ecard ap-card" id="govCard"><div class="empty">Carregando…</div></section>` : "";
-    if (!can("branding.edit")) { el.innerHTML = `<div class="appearance">${gov}</div>`; return governanceCard(el); }
+    const logoImg = b.logo ? `<img src="api/branding/logo?v=${esc(b.logo)}" alt="Logo atual">` : "";
     el.innerHTML = `<div class="appearance">
-      <section class="ecard ap-card"><header class="ap-h"><b>Workspace</b></header>
-        <div class="ap-body"><label>Nome<input class="in" id="apName" maxlength="40" value="${esc(b.name)}" placeholder="${esc(Brand.DEFAULT.name)}"></label>
-          <p class="muted small">Aparece na barra lateral, no login e na aba do navegador.</p><div class="err" id="aperr" hidden></div></div>
-        <footer class="ap-foot"><button class="btn ghost" id="apReset">Padrão</button><button class="btn primary" id="apSave">Salvar</button></footer></section>
-      <section class="ecard ap-card"><header class="ap-h"><b>Logo</b></header>
-        <div class="ap-body"><div class="logo-cur"><div class="lg">${logoImg || `<span class="muted small">sem logo</span>`}</div>
-            <div class="lg dark" title="Como fica no tema escuro">${logoImg || `<span class="muted small">sem logo</span>`}</div></div>
-          <label class="logo-drop" id="lgDrop"><span>Arraste a imagem ou clique para escolher</span><input type="file" id="lgFile" accept="image/png,image/jpeg,image/svg+xml,image/webp" hidden></label>
-          <p class="muted small">PNG, SVG, JPG ou WEBP até 512 KB. Prefira fundo transparente; a prévia mostra os dois temas.</p></div>
-        <footer class="ap-foot"><button class="btn ghost" id="lgDel" ${b.logo ? "" : "disabled"}>Remover</button><button class="btn primary" id="lgPick">Enviar logo</button></footer></section>
-      ${gov}</div>`;
-    governanceCard(el);
-    $("#apReset", el).onclick = () => { $("#apName", el).value = Brand.DEFAULT.name; };
-    $("#apSave", el).onclick = async () => {
-      try { Brand.apply(await api("PUT", "api/branding", { name: $("#apName", el).value.trim() })); $("#aperr", el).hidden = true; toast("Nome do workspace salvo"); }
-      catch (x) { $("#aperr", el).textContent = x.message; $("#aperr", el).hidden = false; }
+      <section class="ecard ap-card"><header class="ap-h"><h2>Workspace</h2></header>
+        <div class="ap-body"><label>Nome<input class="in" id="apName" maxlength="40" value="${esc(b.name)}" placeholder="${esc(Brand.DEFAULT.name)}" aria-describedby="apNameHelp"></label>
+          <p class="muted small" id="apNameHelp">Aparece na barra lateral, no login e na aba do navegador.</p>
+          <label>Contato para acesso<input class="in" id="apContact" maxlength="120" value="${esc(b.contact || "")}" placeholder="ex.: Plantão SOC · ramal 4400 · #soc-acesso" aria-describedby="apContactHelp"></label>
+          <p class="muted small" id="apContactHelp">Aparece no login para quem está sem acesso ou bloqueado. Em branco, o login diz para falar com um administrador do workspace.</p><div class="err" id="aperr" role="alert" hidden></div></div>
+        <footer class="ap-foot"><span class="ap-dirty" id="apDirty" hidden>Alterações não salvas</span><button class="btn ghost" id="apReset" title="Preenche com o nome padrão e esvazia o contato; nada muda até salvar">Restaurar padrão</button><button class="btn primary" id="apSave" disabled>Salvar</button></footer></section>
+      <section class="ecard ap-card"><header class="ap-h"><h2>Logo</h2></header>
+        <div class="ap-body"><div class="logo-cur"><div class="lg">${logoImg || `<span class="small">sem logo</span>`}</div>
+            <div class="lg dark" title="Como fica no tema escuro">${logoImg || `<span class="small">sem logo</span>`}</div></div>
+          <label class="logo-drop" id="lgDrop" tabindex="0" role="button" aria-describedby="lgHelp">${ic("upload")}<span>${b.logo ? "Trocar logo:" : "Enviar logo:"} arraste a imagem ou clique para escolher</span><input type="file" id="lgFile" accept="image/png,image/jpeg,image/svg+xml,image/webp" hidden></label>
+          <p class="muted small" id="lgHelp">PNG, SVG, JPG ou WEBP até 512 KB. Prefira fundo transparente; a prévia mostra os dois temas. Envia na hora.</p></div>
+        <footer class="ap-foot"><button class="btn ghost" id="lgDel" ${b.logo ? "" : "disabled"}>Remover logo</button></footer></section></div>`;
+    const name = $("#apName", el), contact = $("#apContact", el), save = $("#apSave", el);
+    let base = [b.name, b.contact || ""];
+    const changed = () => name.value.trim() !== base[0] || contact.value.trim() !== base[1];
+    const mark = () => { const d = changed(); save.disabled = !d; $("#apDirty", el).hidden = !d; };
+    Unsaved.check = () => el.isConnected && !!$("#apName", el) && changed();
+    name.oninput = contact.oninput = mark;
+    $("#apReset", el).onclick = () => { name.value = Brand.DEFAULT.name; contact.value = ""; mark(); name.focus(); };
+    save.onclick = async () => {
+      try {
+        Brand.apply(await api("PUT", "api/branding", { name: name.value.trim(), contact: contact.value.trim() }));
+        base = [name.value.trim(), contact.value.trim()]; $("#aperr", el).hidden = true; mark(); toast("Workspace salvo");
+      } catch (x) { $("#aperr", el).textContent = x.message; $("#aperr", el).hidden = false; }
     };
     const upload = file => {
       if (!file) return;
       if (file.size > 512 * 1024) return toast("Logo grande demais (máx. 512 KB)", "err");
       const rd = new FileReader();
       rd.onload = async () => {
-        try { Brand.apply(await api("PUT", "api/branding/logo", { dataUrl: rd.result })); toast("Logo atualizada"); appearance(el); }
+        try { Brand.apply(await api("PUT", "api/branding/logo", { dataUrl: rd.result })); toast("Logo atualizada"); appearance(el); $("#lgDrop", el).focus(); }
         catch (x) { toast(x.message, "err"); }
       };
       rd.readAsDataURL(file);
     };
     $("#lgFile", el).onchange = e => upload(e.target.files[0]);
-    $("#lgPick", el).onclick = () => $("#lgFile", el).click();
     const drop = $("#lgDrop", el);
+    drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("#lgFile", el).click(); } };
     drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
     drop.ondragleave = () => drop.classList.remove("over");
     drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); upload(e.dataTransfer.files[0]); };
     $("#lgDel", el).onclick = async () => {
       if (!(await ask("Remover a logo? A barra lateral volta a mostrar o símbolo padrão.", { title: "Remover logo", ok: "Remover", danger: true }))) return;
-      try { Brand.apply(await api("DELETE", "api/branding/logo")); toast("Logo removida"); appearance(el); } catch (x) { toast(x.message, "err"); }
+      try { Brand.apply(await api("DELETE", "api/branding/logo")); toast("Logo removida"); appearance(el); $("#lgDrop", el).focus(); } catch (x) { toast(x.message, "err"); }
     };
   }
 
   /* ── roles: lista à esquerda; à direita, o editor com a matriz ação × tipo de documento e as permissões da
-     plataforma. Permissões que a sua role não tem aparecem desabilitadas (não dá para conceder o que não se tem). */
+     plataforma, agrupadas por risco. Permissões que a sua role não tem aparecem desabilitadas (não dá para conceder o
+     que não se tem). Alteração não salva protege a navegação; mexer em permissões críticas de uma role em uso pede
+     confirmação. ── */
+  const GLOBAL_GROUPS = [["Templates", ["templates.view", "templates.edit", "templates.delete"]],
+    ["Pessoas e acesso", ["users.manage", "roles.manage", "sso.manage"]],
+    ["Auditoria e integrações", ["audit.view", "logs.manage"]],
+    ["Instalação", ["branding.edit", "app.reset"]]];
+  const PERM_HINT = { "users.manage": "cria contas, troca roles e redefine senhas", "roles.manage": "define o que cada role pode fazer",
+    "sso.manage": "muda como todos entram", "logs.manage": "muda a retenção e para onde a auditoria vai", "app.reset": "apaga o conteúdo da instalação e muda a governança" };
+  const CRITICAL = ["users.manage", "roles.manage", "sso.manage", "app.reset"];
   async function roles(el, key) {
-    let d; try { d = await api("GET", "api/roles"); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
-    const cat = d.catalog, mine = new Set(d.mine);
+    let d; try { d = await api("GET", "api/roles"); } catch (e) { el.innerHTML = `<div class="err" role="alert">${esc(e.message)}</div>`; return; }
+    const cat = d.catalog, mine = new Set(d.mine), n = (v, one, many) => `${v} ${v === 1 ? one : many}`;
     const isNew = key === "novo", cur = isNew ? null : d.roles.find(r => r.key === key) || d.roles[0];
     const all = cur && cur.permissions === "*";
     const has = p => all || (cur && cur.permissions.includes(p));
     const locked = cur && !cur.editable;
     const off = p => locked || (!d.isAdmin && !mine.has(p));
-    const box = (p, label) => `<input type="checkbox" data-perm="${esc(p)}" ${has(p) ? "checked" : ""} ${off(p) ? "disabled" : ""} aria-label="${esc(label)}">`;
-    const matrix = `<div class="tw"><table class="perm-matrix"><thead><tr><th></th>${cat.types.map(t => `<th><button type="button" class="linkish" data-col="${esc(t.key)}" title="Marcar/desmarcar a coluna">${esc(t.label)}</button></th>`).join("")}</tr></thead><tbody>
-      ${cat.actions.map(a => `<tr><th><button type="button" class="linkish" data-row="${esc(a.key)}" title="${esc(a.help)}">${esc(a.label)}</button><small>${esc(a.help)}</small></th>
-        ${cat.types.map(t => t.perms.includes(`${t.key}.${a.key}`) ? `<td>${box(`${t.key}.${a.key}`, `${a.label} · ${t.label}`)}</td>` : `<td class="na">—</td>`).join("")}</tr>`).join("")}
+    const label = g => (cat.global.find(x => x.key === g) || { label: g }).label;
+    const box = (p, lbl) => `<input type="checkbox" data-perm="${esc(p)}" ${has(p) ? "checked" : ""} ${off(p) ? "disabled" : ""} aria-label="${esc(lbl)}">`;
+    const matrix = `<div class="tw"><table class="perm-matrix"><caption class="sr-only">Permissões por tipo de documento</caption>
+      <thead><tr><th scope="col"><span class="sr-only">Ação</span></th>${cat.types.map(t => `<th scope="col"><button type="button" class="linkish" data-col="${esc(t.key)}" aria-label="Marcar ou desmarcar a coluna ${esc(t.label)}" title="Marcar ou desmarcar a coluna">${esc(t.label)}</button></th>`).join("")}</tr></thead><tbody>
+      ${cat.actions.map(a => `<tr><th scope="row"><button type="button" class="linkish" data-row="${esc(a.key)}" aria-label="Marcar ou desmarcar a linha ${esc(a.label)}">${esc(a.label)}</button><small>${esc(a.help)}</small></th>
+        ${cat.types.map(t => t.perms.includes(`${t.key}.${a.key}`) ? `<td><label class="perm-cell">${box(`${t.key}.${a.key}`, `${a.label} · ${t.label}`)}</label></td>` : `<td class="na"><span aria-label="não se aplica">—</span></td>`).join("")}</tr>`).join("")}
       </tbody></table></div>`;
-    const globals = `<div class="perm-global">${cat.global.map(g => `<label class="chk-inline">${box(g.key, g.label)} ${esc(g.label)}</label>`).join("")}</div>`;
+    const globals = GLOBAL_GROUPS.map(([h, keys]) => `<fieldset class="perm-grp ${keys.includes("app.reset") ? "crit" : ""}"><legend>${h}</legend>
+      ${keys.filter(k => cat.global.some(g => g.key === k)).map(k => `<label class="chk-inline perm-g">${box(k, label(k))}<span>${esc(label(k))}${PERM_HINT[k] ? `<small>${esc(PERM_HINT[k])}</small>` : ""}</span></label>`).join("")}</fieldset>`).join("");
+    const others = d.roles.filter(r => r.permissions !== "*");
     el.innerHTML = `<div class="roles-grid">
-      <aside class="ecard role-list"><div class="ecard-h"><b>Roles</b><a class="btn ghost xs" href="#/admin/roles/novo" style="margin-left:auto">${ic("plus")}Nova role</a></div>
-        ${d.roles.map(r => `<a class="role-item ${cur && r.key === cur.key ? "on" : ""}" href="#/admin/roles/${esc(r.key)}"><b>${esc(r.name)}</b>${r.system ? `<span class="tag">sistema</span>` : ""}
-          <small>${esc(r.description || "")}</small><span class="role-users">${r.users} usuário${r.users === 1 ? "" : "s"}</span></a>`).join("")}</aside>
-      <form class="ecard role-edit" id="roleForm" autocomplete="off">
-        <div class="ecard-h"><b>${isNew ? "Nova role" : esc(cur.name)}</b>${locked ? `<span class="muted small">não editável: tem todas as permissões, inclusive as futuras</span>` : ""}</div>
-        <div class="pp-row"><label>Nome<input class="in" name="name" maxlength="40" required value="${esc(isNew ? "" : cur.name)}" ${locked ? "disabled" : ""}></label>
-          <label style="max-width:150px" title="Ordem do mapeamento de grupos do SSO: o de maior prioridade vence">Prioridade<input class="in" type="number" name="priority" min="1" max="99" value="${isNew ? 20 : cur.priority}" ${locked ? "disabled" : ""}></label></div>
+      <aside class="ecard role-list"><div class="ecard-h"><h2>Roles</h2><a class="btn ghost xs" href="#/admin/roles/novo" style="margin-left:auto"${isNew ? ` aria-current="page"` : ""}>${ic("plus")}Nova role</a></div>
+        ${d.roles.map(r => { const on = cur && r.key === cur.key; return `<a class="role-item ${on ? "on" : ""}" href="#/admin/roles/${esc(r.key)}"${on ? ` aria-current="page"` : ""}><b>${esc(r.name)}</b>${r.system ? `<span class="tag">sistema</span>` : ""}
+          <small>${esc(r.description || "")}</small><span class="role-users">${n(r.users, "usuário", "usuários")}</span></a>`; }).join("")}</aside>
+      <form class="ecard role-edit" id="roleForm" autocomplete="off" novalidate>
+        <div class="ecard-h"><h2>${isNew ? "Nova role" : esc(cur.name)}</h2>${cur && !isNew ? `<span class="muted small">${n(cur.users, "usuário usa", "usuários usam")} esta role</span>` : ""}</div>
+        ${locked ? `<div class="notice">Tem <b>todas as permissões, inclusive as futuras</b>, e não pode ser alterada. Para uma role parecida com limites, use <b>Duplicar</b>.</div>` : ""}
+        <div class="pp-row role-fields"><label>Nome<input class="in" name="name" maxlength="40" required value="${esc(isNew ? "" : cur.name)}" ${locked ? "disabled" : ""}></label>
+          <label class="prio">Prioridade<input class="in" type="number" name="priority" min="1" max="99" value="${isNew ? 20 : cur.priority}" ${locked ? "disabled" : ""} aria-describedby="prioHelp"></label></div>
+        <p class="muted small" id="prioHelp">A prioridade só importa no SSO: quando a pessoa está em grupos de várias roles, vale a de maior prioridade.</p>
         <label>Descrição<input class="in" name="description" maxlength="200" value="${esc(isNew ? "" : cur.description)}" ${locked ? "disabled" : ""}></label>
-        <div class="pp-lbl">Documentos</div>${matrix}
-        <div class="pp-lbl">Plataforma</div>${globals}
-        <div class="err" id="rlErr" hidden></div>
-        <div class="create-actions">
-          ${!isNew && cur.deletable ? `<button type="button" class="btn danger" id="rlDel" style="margin-right:auto">Excluir</button>` : ""}
-          ${!isNew && cur.system && cur.editable ? `<button type="button" class="btn ghost" id="rlReset" style="margin-right:auto">Restaurar padrão</button>` : ""}
-          ${!isNew ? `<button type="button" class="btn ghost" id="rlDup">Duplicar</button>` : ""}
+        ${isNew ? `<label>Começar com as permissões de<select class="in" id="rlBase"><option value="">Nenhuma (marcar à mão)</option>${others.map(r => `<option value="${esc(r.key)}">${esc(r.name)}</option>`).join("")}</select></label>` : ""}
+        ${locked ? `<details class="perm-locked"><summary>Ver a matriz de permissões</summary>` : ""}
+        <h3 class="pp-lbl">Documentos</h3>${matrix}
+        <h3 class="pp-lbl">Plataforma</h3><div class="perm-groups">${globals}</div>
+        ${locked ? `</details>` : ""}
+        <div class="err" id="rlErr" role="alert" hidden></div>
+        <div class="create-actions role-actions">
+          <span class="ap-dirty" id="rlDirty" hidden>Alterações não salvas</span>
+          ${!isNew && cur.deletable ? `<button type="button" class="btn danger" id="rlDel">Excluir</button>` : ""}
+          ${!isNew && cur.system && cur.editable ? `<button type="button" class="btn ghost" id="rlReset">Restaurar padrão</button>` : ""}
+          ${!isNew ? `<button type="button" class="btn ghost" id="rlDup">Duplicar</button>` : `<a class="btn ghost" href="#/admin/roles">Cancelar</a>`}
           ${locked ? "" : `<button class="btn primary" type="submit">${isNew ? "Criar role" : "Salvar"}</button>`}</div></form></div>`;
     const form = $("#roleForm", el), err = $("#rlErr", el);
-    const fail = x => { err.textContent = x.message; err.hidden = false; };
+    const fail = x => {
+      err.textContent = x.message; err.hidden = false;
+      if (/nome/i.test(x.message) && !form.name.disabled) { form.name.setAttribute("aria-invalid", "true"); form.name.focus(); } else err.scrollIntoView({ block: "nearest" });
+    };
     const boxes = sel => [...form.querySelectorAll(`input[data-perm]${sel}`)].filter(b => !b.disabled);
-    const flip = list => { const on = !list.every(b => b.checked); list.forEach(b => b.checked = on); };
+    const flip = list => { const on = !list.every(b => b.checked); list.forEach(b => b.checked = on); mark(); };
+    const collect = () => [...form.querySelectorAll("input[data-perm]:checked")].map(b => b.dataset.perm);
+    const state = () => JSON.stringify([form.name.value, form.description.value, form.priority.value, collect()]);
+    const base = state(), changed = () => !locked && state() !== base;
+    const mark = () => { $("#rlDirty", el).hidden = !changed(); };
+    Unsaved.check = () => form.isConnected && changed();
+    form.addEventListener("input", mark); form.addEventListener("change", mark);
+    form.name.addEventListener("input", () => form.name.removeAttribute("aria-invalid"));
     form.querySelectorAll("[data-col]").forEach(b => b.onclick = () => flip(boxes(`[data-perm^="${b.dataset.col}."]`)));
     form.querySelectorAll("[data-row]").forEach(b => b.onclick = () => flip(boxes(`[data-perm$=".${b.dataset.row}"]`)));
-    const collect = () => [...form.querySelectorAll("input[data-perm]:checked")].map(b => b.dataset.perm);
+    if ($("#rlBase", el)) $("#rlBase", el).onchange = e => {
+      const src = d.roles.find(r => r.key === e.target.value);
+      boxes("").forEach(b => { b.checked = !!src && (src.permissions === "*" || src.permissions.includes(b.dataset.perm)); }); mark();
+    };
     form.onsubmit = async e => {
       e.preventDefault();
-      const body = { name: form.name.value.trim(), description: form.description.value.trim(), priority: +form.priority.value, permissions: collect() };
+      if (!form.name.value.trim()) return fail({ message: "Informe o nome da role" });
+      const perms = collect(), body = { name: form.name.value.trim(), description: form.description.value.trim(), priority: +form.priority.value, permissions: perms };
+      /* role em uso: ganhar ou perder poder sobre pessoas, acesso ou a instalação pede confirmação */
+      if (!isNew && cur.users) {
+        const before = new Set(all ? CRITICAL : cur.permissions), now = new Set(perms);
+        const gained = CRITICAL.filter(p => now.has(p) && !before.has(p)), lost = CRITICAL.filter(p => before.has(p) && !now.has(p));
+        if ((gained.length || lost.length) && !(await ask(`Esta mudança vale para ${n(cur.users, "usuário", "usuários")} na próxima ação no sistema:\n${gained.map(p => `• passam a poder: ${label(p)}`).concat(lost.map(p => `• deixam de poder: ${label(p)}`)).join("\n")}`,
+          { title: "Permissões críticas", ok: "Salvar mesmo assim", danger: true }))) return;
+      }
       try {
         const r = isNew ? await api("POST", "api/roles", body) : await api("PUT", `api/roles/${encodeURIComponent(cur.key)}`, body);
-        toast(isNew ? "Role criada" : "Role salva"); location.hash = `#/admin/roles/${r.role.key}`; if (!isNew) roles(el, r.role.key);
+        Unsaved.check = null; toast(isNew ? "Role criada" : `Role salva${cur.users ? ` · vale para ${n(cur.users, "usuário", "usuários")}` : ""}`);
+        location.hash = `#/admin/roles/${r.role.key}`; if (!isNew) roles(el, r.role.key);
       } catch (x) { fail(x); }
     };
-    if ($("#rlDup", el)) $("#rlDup", el).onclick = async () => {
-      try { const r = await api("POST", "api/roles", { name: `${cur.name} (cópia)`.slice(0, 40), description: cur.description, priority: Math.min(99, cur.priority), from: cur.key }); toast("Role duplicada"); location.hash = `#/admin/roles/${r.role.key}`; }
-      catch (x) { fail(x); }
-    };
+    if ($("#rlDup", el)) $("#rlDup", el).onclick = () => modal({ title: `Duplicar ${esc(cur.name)}`, html: `<form class="tform" id="dupForm">
+        <label>Nome da nova role<input class="in" name="name" maxlength="40" required value="${esc(`${cur.name} (cópia)`.slice(0, 40))}"></label>
+        <p class="muted small">Começa com as mesmas permissões${all ? " que você pode conceder" : ""}; ajuste depois de criar.</p>
+        <div class="err" id="dupErr" role="alert" hidden></div>
+        <div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn primary" type="submit">Duplicar</button></div></form>`,
+      onMount: (b, close) => {
+        const f = $("#dupForm", b); f.querySelector("[data-cancel]").onclick = close; f.name.select();
+        f.onsubmit = async e => {
+          e.preventDefault();
+          try { const r = await api("POST", "api/roles", { name: f.name.value.trim(), description: cur.description, priority: Math.min(99, cur.priority), from: cur.key }); close(); Unsaved.check = null; toast("Role duplicada"); location.hash = `#/admin/roles/${r.role.key}`; }
+          catch (x) { $("#dupErr", b).textContent = x.message; $("#dupErr", b).hidden = false; }
+        };
+      } });
     if ($("#rlReset", el)) $("#rlReset", el).onclick = async () => {
-      if (!(await ask(`Voltar a role ${cur.name} às permissões padrão?`, { title: "Restaurar padrão", ok: "Restaurar" }))) return;
-      try { await api("PUT", `api/roles/${cur.key}`, { reset: true }); toast("Permissões padrão restauradas"); roles(el, cur.key); } catch (x) { fail(x); }
+      if (!(await ask(`Voltar a role ${cur.name} às permissões padrão? As permissões personalizadas dela se perdem${cur.users ? ` e a mudança vale para ${n(cur.users, "usuário", "usuários")}` : ""}.`, { title: "Restaurar padrão", ok: "Restaurar", danger: true }))) return;
+      try { await api("PUT", `api/roles/${cur.key}`, { reset: true }); Unsaved.check = null; toast("Permissões padrão restauradas"); roles(el, cur.key); } catch (x) { fail(x); }
     };
     if ($("#rlDel", el)) $("#rlDel", el).onclick = () => {
       const others = d.roles.filter(r => r.key !== cur.key && r.key !== "admin");
@@ -1170,14 +1488,14 @@ const Admin = (() => {
           ${cur.users ? `<p>${cur.users} usuário${cur.users === 1 ? " usa" : "s usam"} esta role. Para onde ${cur.users === 1 ? "ele vai" : "eles vão"}?</p>
             <label>Nova role<select class="in" name="reassign">${others.map(r => `<option value="${esc(r.key)}" ${r.key === "viewer" ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></label>`
             : `<p>Nenhum usuário usa esta role.</p>`}
-          <div class="err" id="rdErr" hidden></div>
+          <div class="err" id="rdErr" role="alert" hidden></div>
           <div class="create-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn danger" type="submit">Excluir role</button></div></form>`,
         onMount: (b, close) => {
           const f = $("#rdForm", b);
           f.querySelector("[data-cancel]").onclick = close;
           f.onsubmit = async e => {
             e.preventDefault();
-            try { await api("DELETE", `api/roles/${cur.key}`, cur.users ? { reassign: f.reassign.value } : {}); close(); toast("Role excluída"); location.hash = "#/admin/roles"; }
+            try { await api("DELETE", `api/roles/${cur.key}`, cur.users ? { reassign: f.reassign.value } : {}); close(); Unsaved.check = null; toast("Role excluída"); location.hash = "#/admin/roles"; }
             catch (x) { $("#rdErr", b).textContent = x.message; $("#rdErr", b).hidden = false; }
           };
         } });
@@ -1193,12 +1511,13 @@ const Admin = (() => {
     modal({
       title: "Resetar aplicação", html: `<form id="rsForm" class="tform">
         <div class="notice danger">A aplicação volta ao estado de recém-instalada para <b>todos os usuários</b>: saem
-          <b>${n(s.playbooks, "playbook", "playbooks")}</b>, <b>${n(s.templates, "template", "templates")}</b> (o template Padrão é recriado)
+          <b>${n(s.playbooks, "playbook", "playbooks")}</b>, <b>${n((s.documents || {}).runbook || 0, "runbook", "runbooks")}</b>,
+          <b>${n((s.documents || {}).doc || 0, "documento", "documentos")}</b>, <b>${n(s.templates, "template", "templates")}</b> (o template Padrão é recriado)
           e <b>${n(s.versions, "versão", "versões")}</b> do histórico.<br>Nada é apagado de vez: o conteúdo e uma cópia do banco vão para a lixeira do
           servidor (<code>data/lixeira/reset__…</code>) e podem ser restaurados por quem administra o servidor.</div>
         <div class="pp-lbl">Também voltar ao padrão</div>
         <label class="opt-row ${sso ? "off" : ""}"><input type="checkbox" name="settings" ${sso ? "disabled" : "checked"}><span><b>Configurações</b>
-          <small>${sso ? "Indisponível: sua conta entra pelo SSO, que seria desligado." : "Aparência (nome, cor, logo e página inicial), logs e SSO."}</small></span></label>
+          <small>${sso ? "Indisponível: sua conta entra pelo SSO, que seria desligado." : "Aparência (nome, contato e logo), governança, logs e SSO."}</small></span></label>
         <label class="opt-row"><input type="checkbox" name="users"><span><b>Usuários</b><small>Exclui ${n(Math.max(0, s.users - 1), "outro usuário", "outros usuários")}; fica só a sua conta.</small></span></label>
         <label class="opt-row"><input type="checkbox" name="audit"><span><b>Auditoria</b><small>Apaga ${n(s.audit, "evento", "eventos")} e os arquivos de log. O próprio reset fica registrado.</small></span></label>
         <label>Para confirmar, digite <b>${esc(s.word)}</b><input class="in" name="confirm" autocomplete="off" spellcheck="false"></label>
@@ -1222,42 +1541,43 @@ const Admin = (() => {
     });
   }
 
-  /* ── logs: encaminhamento em JSON e retenção ── */
+  /* ── logs: encaminhamento em JSON e retenção. Reduzir a retenção ou desligar um destino pede confirmação, com o que
+     será apagado agora; destinos desligados escondem os campos. ── */
   async function logs(el) {
     let d;
-    try { d = await api("GET", "api/logs"); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
-    const c = d.config, st = d.status.destinations;
+    try { d = await api("GET", "api/logs"); } catch (e) { el.innerHTML = `<div class="err" role="alert">${esc(e.message)}</div>`; return; }
+    const c = d.config, st = d.status.destinations, n = (v, one, many) => `${v} ${v === 1 ? one : many}`;
     const stat = k => { const x = st[k]; return `<div class="fwd-st"><span>Enviados <b>${x.sent}</b></span><span class="${x.failed ? "bad" : ""}">Falhas <b>${x.failed}</b></span>
       ${x.last_ok ? `<span>Último envio ${esc(fmtTs(x.last_ok))}</span>` : ""}${x.last_error ? `<span class="bad" title="${esc(x.last_error)}">Último erro: ${esc(x.last_error.split(" · ").slice(1).join(" · ").slice(0, 90))}</span>` : ""}</div>`; };
-    el.innerHTML = `<form id="lgForm" class="admin-grid logs-grid">
-      <div class="ecard"><div class="ecard-h"><b>Retenção</b></div>
-        <label>Guardar a auditoria por<div class="inline-in"><input class="in" type="number" name="retention_days" min="1" max="3650" value="${c.retention_days}"> dias</div></label>
-        <p class="muted small">Eventos e arquivos de log mais antigos são apagados automaticamente (verificação a cada 6 horas e ao salvar). Padrão: 30 dias. O histórico de versões dos playbooks não é afetado.</p>
+    const dest = (k, label, body) => `<fieldset class="fwd ${c[k].enabled ? "" : "off"}"><legend><label class="switch"><input type="checkbox" name="${k}.enabled" ${c[k].enabled ? "checked" : ""} aria-controls="fwd-${k}"><span>${label}</span></label></legend>
+        <div class="fwd-body" id="fwd-${k}" ${c[k].enabled ? "" : "hidden"}>${body}
+          <div class="row-btns"><button type="button" class="btn ghost xs" data-test="${k}">${k === "file" ? "Gravar" : "Enviar"} evento de teste</button></div>${stat(k)}</div></fieldset>`;
+    el.innerHTML = `<form id="lgForm" class="admin-grid logs-grid" novalidate>
+      <section class="ecard"><div class="ecard-h"><h2>Retenção</h2></div>
+        <label>Guardar a auditoria por<div class="inline-in"><input class="in" type="number" name="retention_days" min="1" max="3650" value="${c.retention_days}" aria-describedby="lgRetHelp"> dias</div></label>
+        <p class="muted small" id="lgRetHelp">Eventos e arquivos de log mais antigos são apagados automaticamente (verificação a cada 6 horas e ao salvar). Padrão: 30 dias. O histórico de versões dos documentos não é afetado.</p>
         <div class="pp-lbl">Exportar</div>
         <div class="row-btns"><a class="btn ghost sm" href="api/audit/export?days=${c.retention_days}" download>${ic("download")}Baixar auditoria (JSON Lines)</a></div>
-        <div class="pp-lbl" style="margin-top:16px">Formato de cada evento</div>
-        <pre class="json-sample">${esc(JSON.stringify(d.sample, null, 2))}</pre>
-        <p class="muted small">Campos no padrão Elastic Common Schema (ECS): funciona direto em Elastic, OpenSearch, Splunk, Sentinel, Graylog e Wazuh.</p></div>
-      <div class="ecard"><div class="ecard-h"><b>Encaminhamento</b><span class="muted small">fila na memória: ${d.status.queue}${d.status.dropped ? ` · descartados ${d.status.dropped}` : ""}</span></div>
-        <fieldset class="fwd"><legend><label class="switch"><input type="checkbox" name="http.enabled" ${c.http.enabled ? "checked" : ""}><span>HTTP / HTTPS (SIEM, coletor, webhook)</span></label></legend>
-          <label>URL<input class="in" name="http.url" value="${esc(c.http.url)}" placeholder="https://siem.empresa.com/api/ingest"></label>
-          <div class="pp-row"><label style="max-width:200px">Cabeçalho de autenticação<input class="in" name="http.auth_header" value="${esc(c.http.auth_header)}" placeholder="Authorization"></label>
+        <details class="json-det"><summary>Formato de cada evento</summary>
+          <pre class="json-sample">${esc(JSON.stringify(d.sample, null, 2))}</pre>
+          <p class="muted small">Campos no padrão Elastic Common Schema (ECS): funciona direto em Elastic, OpenSearch, Splunk, Sentinel, Graylog e Wazuh.</p></details></section>
+      <section class="ecard"><div class="ecard-h"><h2>Encaminhamento</h2><span class="muted small">fila na memória: ${d.status.queue}${d.status.dropped ? ` · descartados ${d.status.dropped}` : ""}</span></div>
+        ${dest("http", "HTTP / HTTPS (SIEM, coletor, webhook)", `
+          <label>URL<input class="in" name="http.url" value="${esc(c.http.url)}" placeholder="https://siem.empresa.com/api/ingest" inputmode="url" spellcheck="false"></label>
+          <div class="auth-row"><label>Cabeçalho de autenticação<input class="in" name="http.auth_header" value="${esc(c.http.auth_header)}" placeholder="Authorization" spellcheck="false"></label>
             <label>Valor<input class="in" name="http.auth_value" type="password" autocomplete="new-password" placeholder="${c.http.auth_value_set ? "•••••••• (definido; preencha para trocar)" : "ex.: Bearer token, ApiKey …"}"></label></div>
           ${c.http.auth_value_set ? `<label class="chk-inline"><input type="checkbox" name="http.clear_auth"> remover o valor salvo</label>` : ""}
-          <p class="muted small">POST com um array JSON por lote (até 200 eventos). Até 3 tentativas por lote.</p>
-          <div class="row-btns"><button type="button" class="btn ghost xs" data-test="http">Enviar evento de teste</button></div>${stat("http")}</fieldset>
-        <fieldset class="fwd"><legend><label class="switch"><input type="checkbox" name="syslog.enabled" ${c.syslog.enabled ? "checked" : ""}><span>Syslog (RFC 5424, mensagem em JSON)</span></label></legend>
-          <div class="pp-row"><label>Host<input class="in" name="syslog.host" value="${esc(c.syslog.host)}" placeholder="syslog.empresa.com"></label>
-            <label style="max-width:100px">Porta<input class="in" type="number" name="syslog.port" value="${c.syslog.port}"></label>
-            <label style="max-width:110px">Protocolo<select class="in" name="syslog.proto"><option value="udp" ${c.syslog.proto !== "tcp" ? "selected" : ""}>UDP</option><option value="tcp" ${c.syslog.proto === "tcp" ? "selected" : ""}>TCP</option></select></label>
-            <label style="max-width:120px">Facility<select class="in" name="syslog.facility">${[16, 17, 18, 19, 20, 21, 22, 23, 13, 4, 10].map(f => `<option value="${f}" ${+c.syslog.facility === f ? "selected" : ""}>${f >= 16 ? "local" + (f - 16) : f === 13 ? "log audit" : f === 4 ? "auth" : "authpriv"}</option>`).join("")}</select></label></div>
-          <div class="row-btns"><button type="button" class="btn ghost xs" data-test="syslog">Enviar evento de teste</button></div>${stat("syslog")}</fieldset>
-        <fieldset class="fwd"><legend><label class="switch"><input type="checkbox" name="file.enabled" ${c.file.enabled ? "checked" : ""}><span>Arquivo JSON Lines (para Filebeat, Fluent Bit, agentes)</span></label></legend>
-          <p class="muted small">Um arquivo por dia em <code>${esc(d.logDir)}/audit-AAAA-MM-DD.jsonl</code>, apagado conforme a retenção.</p>
-          <div class="row-btns"><button type="button" class="btn ghost xs" data-test="file">Gravar evento de teste</button></div>${stat("file")}</fieldset>
-        <div class="err" id="lgErr" hidden></div>
-        <div class="create-actions"><button class="btn primary" type="submit">Salvar configuração de logs</button></div></div></form>`;
-    const form = $("#lgForm", el);
+          <p class="muted small">POST com um array JSON por lote (até 200 eventos). Até 3 tentativas por lote.</p>`)}
+        ${dest("syslog", "Syslog (RFC 5424, mensagem em JSON)", `
+          <div class="sys-row"><label class="sys-host">Host<input class="in" name="syslog.host" value="${esc(c.syslog.host)}" placeholder="syslog.empresa.com" spellcheck="false"></label>
+            <label>Porta<input class="in" type="number" name="syslog.port" min="1" max="65535" value="${c.syslog.port}"></label>
+            <label>Protocolo<select class="in" name="syslog.proto"><option value="udp" ${c.syslog.proto !== "tcp" ? "selected" : ""}>UDP</option><option value="tcp" ${c.syslog.proto === "tcp" ? "selected" : ""}>TCP</option></select></label>
+            <label>Facility<select class="in" name="syslog.facility">${[16, 17, 18, 19, 20, 21, 22, 23, 13, 4, 10].map(f => `<option value="${f}" ${+c.syslog.facility === f ? "selected" : ""}>${f >= 16 ? "local" + (f - 16) : f === 13 ? "log audit" : f === 4 ? "auth" : "authpriv"}</option>`).join("")}</select></label></div>`)}
+        ${dest("file", "Arquivo JSON Lines (para Filebeat, Fluent Bit, agentes)", `
+          <p class="muted small">Um arquivo por dia em <code>${esc(d.logDir)}/audit-AAAA-MM-DD.jsonl</code>, apagado conforme a retenção.</p>`)}
+        <div class="err" id="lgErr" role="alert" hidden></div>
+        <div class="create-actions"><span class="ap-dirty" id="lgDirty" hidden>Alterações não salvas</span><button class="btn primary" type="submit">Salvar configuração de logs</button></div></section></form>`;
+    const form = $("#lgForm", el), err = $("#lgErr", el);
     const collect = () => {
       const o = { http: {}, syslog: {}, file: {} };
       form.querySelectorAll("[name]").forEach(i => {
@@ -1266,97 +1586,152 @@ const Admin = (() => {
       });
       return o;
     };
+    const base = JSON.stringify(collect());
+    const changed = () => JSON.stringify(collect()) !== base;
+    Unsaved.check = () => form.isConnected && changed();
+    form.addEventListener("input", () => { $("#lgDirty", el).hidden = !changed(); });
+    form.querySelectorAll("[name$='.enabled']").forEach(cb => cb.addEventListener("change", () => { const b = $(`#fwd-${cb.name.split(".")[0]}`, el); b.hidden = !cb.checked; b.closest("fieldset").classList.toggle("off", !cb.checked); }));
+    /* erro do servidor: a mensagem fica perto do Salvar e o campo culpado é marcado e recebe o foco */
+    const FIELD = [[/URL/i, "http.url"], [/cabeçalho/i, "http.auth_header"], [/porta/i, "syslog.port"], [/host/i, "syslog.host"], [/reten/i, "retention_days"]];
+    const fail = x => {
+      err.textContent = x.message; err.hidden = false;
+      form.querySelectorAll("[aria-invalid]").forEach(i => { i.removeAttribute("aria-invalid"); i.removeAttribute("aria-errormessage"); });
+      const hit = FIELD.find(([re]) => re.test(x.message)), i = hit && form.elements[hit[1]];
+      if (i && i.offsetParent) { i.setAttribute("aria-invalid", "true"); i.setAttribute("aria-errormessage", "lgErr"); i.focus(); } else err.scrollIntoView({ block: "nearest" });
+    };
     form.onsubmit = async e => {
       e.preventDefault();
-      try { await api("PUT", "api/logs", collect()); toast("Configuração de logs salva"); logs(el); }
-      catch (x) { $("#lgErr", el).textContent = x.message; $("#lgErr", el).hidden = false; }
+      const o = collect(), days = Math.round(+o.retention_days), lost = [];
+      let erases = false;
+      if (days >= 1 && days < c.retention_days) {
+        let p; try { p = await api("GET", `api/logs/retention-preview?days=${days}`); } catch (x) { return fail(x); }
+        if (p.events || p.files) {
+          erases = true;
+          lost.push(`a retenção cai de ${c.retention_days} para ${days} dias e ${n(p.events, "evento", "eventos")} de auditoria${p.files ? ` e ${n(p.files, "arquivo", "arquivos")} de log` : ""} ${p.events + p.files === 1 ? "é apagado" : "são apagados"} agora;`);
+        }
+      }
+      [["http", "HTTP"], ["syslog", "Syslog"], ["file", "Arquivo JSON Lines"]].forEach(([k, l]) => { if (c[k].enabled && !o[k].enabled) lost.push(`o envio para ${l} é desligado;`); });
+      if (lost.length && !(await ask(`Ao salvar:\n${lost.map(x => "• " + x).join("\n")}${erases ? "\n\nO que for apagado não volta. Se precisar desses eventos, baixe a auditoria antes." : ""}`,
+        { title: "Confirmar configuração de logs", ok: erases ? "Apagar e salvar" : "Salvar", danger: erases }))) return;
+      try { await api("PUT", "api/logs", o); Unsaved.check = null; toast("Configuração de logs salva"); logs(el); }
+      catch (x) { fail(x); }
     };
     form.querySelectorAll("[data-test]").forEach(b => b.onclick = async () => {
+      const label = b.textContent;
       b.disabled = true; b.textContent = "Enviando…";
       try { const r = await api("POST", "api/logs/test", { dest: b.dataset.test, config: collect() }); toast(r.ok ? r.message : `Falhou: ${r.message}`, r.ok ? "ok" : "err"); }
       catch (x) { toast(x.message, "err"); }
-      b.disabled = false; b.textContent = b.dataset.test === "file" ? "Gravar evento de teste" : "Enviar evento de teste";
+      b.disabled = false; b.textContent = label;
     });
   }
 
-  /* ── SSO (OpenID Connect) ── */
+  /* ── SSO (OpenID Connect). Os campos seguem a ordem do cadastro no provedor; ligar o SSO fica no fim, junto do
+     Salvar, e salvar com ele ligado (ou restringindo o login por senha) mostra antes quem entra e como. ── */
   async function ssoAdmin(el) {
     let d;
-    try { d = await api("GET", "api/sso/config"); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
-    const c = d.config;
-    el.innerHTML = `<form id="ssoForm" class="admin-grid sso-grid">
-      <div class="ecard"><div class="ecard-h"><b>Login único (SSO) por OpenID Connect</b>
-          <label class="switch"><input type="checkbox" name="enabled" ${c.enabled ? "checked" : ""}><span>${c.enabled ? "Ativo" : "Desativado"}</span></label></div>
-        <p class="muted small" style="margin-top:0">Opcional. Funciona com Microsoft Entra ID, Okta, Keycloak, Google, Auth0, Authentik, ADFS e outros provedores OIDC. Fluxo authorization code + PKCE; o token é validado pela assinatura (RS256), emissor, audiência, validade e nonce.</p>
-        <label>Emissor (issuer)<div class="inline-in"><input class="in" name="issuer" value="${esc(c.issuer)}" placeholder="https://login.microsoftonline.com/&lt;tenant&gt;/v2.0"><button type="button" class="btn ghost sm" id="ssoTest">Testar</button></div></label>
-        <div id="ssoDisc"></div>
-        <div class="pp-row"><label>Client ID<input class="in" name="client_id" value="${esc(c.client_id)}"></label>
+    try { d = await api("GET", "api/sso/config"); } catch (e) { el.innerHTML = `<div class="err" role="alert">${esc(e.message)}</div>`; return; }
+    const c = d.config, roleName = k => (d.roles.find(r => r.key === k) || { name: k }).name;
+    const ph = k => k === "admin" ? "sec-admins" : k === "editor" ? "csirt, soc-n2" : k === "viewer" ? "soc-n1" : "grupo-do-provedor";
+    el.innerHTML = `<form id="ssoForm" class="admin-grid sso-grid" novalidate>
+      <section class="ecard"><div class="ecard-h"><h2>Provedor (OpenID Connect)</h2><span class="tag ${c.enabled ? "ok" : ""}">${c.enabled ? "SSO ligado" : "SSO desligado"}</span></div>
+        <p class="muted small" style="margin-top:0">Opcional. Funciona com Microsoft Entra ID, Okta, Keycloak, Google, Auth0, Authentik, ADFS e outros provedores OIDC.</p>
+        <details class="sso-tech"><summary>Detalhes técnicos</summary><p class="muted small">Fluxo authorization code + PKCE; o token é validado pela assinatura (RS256), emissor, audiência, validade e nonce.</p></details>
+        <label>Emissor (issuer)<div class="inline-in"><input class="in" name="issuer" value="${esc(c.issuer)}" placeholder="https://login.microsoftonline.com/&lt;tenant&gt;/v2.0" spellcheck="false"><button type="button" class="btn ghost sm" id="ssoTest">Verificar emissor</button></div></label>
+        <div id="ssoDisc" role="status" aria-live="polite"></div>
+        <div class="pp-row"><label>Client ID<input class="in" name="client_id" value="${esc(c.client_id)}" spellcheck="false"></label>
           <label>Client secret<input class="in" name="client_secret" type="password" autocomplete="new-password" placeholder="${c.client_secret_set ? "•••••••• (definido; preencha para trocar)" : "segredo do aplicativo"}"></label></div>
-        <label>URL pública da aplicação<input class="in" name="public_url" value="${esc(c.public_url)}" placeholder="https://playbooks.empresa.com"></label>
+        ${c.client_secret_set ? `<label class="chk-inline"><input type="checkbox" name="clear_secret"> remover o client secret salvo</label>` : ""}
+        <label>URL pública da aplicação<input class="in" name="public_url" value="${esc(c.public_url)}" placeholder="https://playbooks.empresa.com" spellcheck="false"></label>
         <div class="notice small">Cadastre no provedor esta <b>URL de redirecionamento</b>: <code id="ssoRedir">${esc(d.redirectUri || "(informe a URL pública)")}</code></div>
-        <div class="pp-row"><label>Escopos<input class="in" name="scopes" value="${esc(c.scopes)}"></label>
-          <label>Texto do botão<input class="in" name="label" value="${esc(c.label)}" maxlength="60"></label></div></div>
-      <div class="ecard"><div class="ecard-h"><b>Usuários e roles</b></div>
-        <div class="pp-row"><label>Claim do login<input class="in" name="login_claim" value="${esc(c.login_claim)}" placeholder="preferred_username"></label>
-          <label>Claim do nome<input class="in" name="name_claim" value="${esc(c.name_claim)}"></label>
-          <label>Claim do e-mail<input class="in" name="email_claim" value="${esc(c.email_claim)}"></label></div>
-        <label>Domínios de e-mail permitidos <small>(vírgula; vazio = qualquer)</small><input class="in" name="allowed_domains" value="${esc(c.allowed_domains)}" placeholder="empresa.com, empresa.com.br"></label>
-        <label>Claim de grupos/roles<input class="in" name="role_claim" value="${esc(c.role_claim)}" placeholder="groups, roles ou realm_access.roles"></label>
-        <div class="pp-lbl">Grupos do provedor → role <small class="muted">(valores separados por vírgula; verificado a cada login, da role de maior prioridade para a de menor)</small></div>
-        ${d.roles.map(r => `<label>${esc(r.name)}<input class="in" name="role_map.${esc(r.key)}" value="${esc((c.role_map || {})[r.key] || "")}" placeholder="ex.: ${r.key === "admin" ? "sec-admins" : r.key === "editor" ? "csirt, soc-n2" : r.key === "viewer" ? "soc-n1" : "grupo-do-provedor"}"></label>`).join("")}
+        <div class="pp-row"><label>Escopos<input class="in" name="scopes" value="${esc(c.scopes)}" spellcheck="false"></label>
+          <label>Texto do botão no login<input class="in" name="label" value="${esc(c.label)}" maxlength="60"></label></div></section>
+      <section class="ecard"><div class="ecard-h"><h2>Quem entra e com qual role</h2></div>
+        <div class="pp-row sso-claims"><label>Claim do login<input class="in" name="login_claim" value="${esc(c.login_claim)}" placeholder="preferred_username" spellcheck="false"></label>
+          <label>Claim do nome<input class="in" name="name_claim" value="${esc(c.name_claim)}" spellcheck="false"></label>
+          <label>Claim do e-mail<input class="in" name="email_claim" value="${esc(c.email_claim)}" spellcheck="false"></label></div>
+        <label>Domínios de e-mail permitidos<input class="in" name="allowed_domains" value="${esc(c.allowed_domains)}" placeholder="empresa.com, empresa.com.br" aria-describedby="ssoDomHelp" spellcheck="false"></label>
+        <p class="muted small" id="ssoDomHelp">Separados por vírgula; em branco, qualquer domínio.</p>
+        <label>Claim de grupos ou roles<input class="in" name="role_claim" value="${esc(c.role_claim)}" placeholder="groups, roles ou realm_access.roles" spellcheck="false"></label>
+        <h3 class="pp-lbl">Grupos do provedor → role</h3>
+        <p class="muted small" style="margin-top:0">Grupos separados por vírgula. A cada login, vale a role de maior prioridade entre as que combinam.</p>
+        ${d.roles.map(r => `<label>${esc(r.name)}<input class="in" name="role_map.${esc(r.key)}" value="${esc((c.role_map || {})[r.key] || "")}" placeholder="ex.: ${ph(r.key)}" spellcheck="false"></label>`).join("")}
         <div class="pp-row"><label>Sem grupo correspondente<select class="in" name="default_role">${d.roles.filter(r => r.key !== "admin").map(r => `<option value="${esc(r.key)}" ${c.default_role === r.key ? "selected" : ""}>Entra como ${esc(r.name)}</option>`).join("")}<option value="" ${!c.default_role ? "selected" : ""}>Acesso negado</option></select></label>
           <label>Usuário novo<select class="in" name="auto_create"><option value="1" ${c.auto_create ? "selected" : ""}>Criar no primeiro login</option><option value="" ${!c.auto_create ? "selected" : ""}>Só pré-cadastrados (Usuários → SSO)</option></select></label></div>
         <label>Login por senha<select class="in" name="local_login"><option value="all" ${c.local_login !== "admins" ? "selected" : ""}>Continua disponível para todos</option><option value="admins" ${c.local_login === "admins" ? "selected" : ""}>Só administradores (acesso de emergência)</option></select></label>
         <p class="muted small">Contas locais existentes não são vinculadas automaticamente a uma identidade do SSO: converta-as em <b>Usuários</b> (coluna de autenticação) com o mesmo login enviado pelo provedor.</p>
-        <div class="err" id="ssoErr" hidden></div>
-        <div class="create-actions">${c.client_secret_set ? `<label class="chk-inline" style="margin-right:auto"><input type="checkbox" name="clear_secret"> remover o client secret</label>` : ""}<button class="btn primary" type="submit">Salvar SSO</button></div></div></form>`;
-    const form = $("#ssoForm", el);
-    form.public_url.oninput = () => { $("#ssoRedir", el).textContent = form.public_url.value ? form.public_url.value.replace(/\/+$/, "") + "/api/sso/callback" : "(informe a URL pública)"; };
-    $("#ssoTest", el).onclick = async () => {
-      const box = $("#ssoDisc", el); box.innerHTML = `<div class="muted small">Consultando…</div>`;
-      const r = await api("POST", "api/sso/test", { issuer: form.issuer.value }).catch(x => ({ ok: false, message: x.message }));
-      box.innerHTML = r.ok ? `<div class="notice ok small">Provedor encontrado: <b>${esc(r.issuer)}</b><br>Autorização: ${esc(r.authorization_endpoint)}<br>Token: ${esc(r.token_endpoint)}${r.algs.length ? `<br>Assinaturas: ${esc(r.algs.join(", "))}${r.algs.includes("RS256") ? "" : " · atenção: é preciso RS256"}` : ""}</div>`
-        : `<div class="err">${esc(r.message)}</div>`;
-    };
-    form.onsubmit = async e => {
-      e.preventDefault();
+        <div class="err" id="ssoErr" role="alert" hidden></div>
+        <div class="create-actions sso-actions"><label class="switch sso-on"><input type="checkbox" name="enabled" ${c.enabled ? "checked" : ""}><span id="ssoOnLbl">${c.enabled ? "SSO ligado" : "SSO desligado"}</span></label>
+          <span class="ap-dirty" id="ssoDirty" hidden>Alterações não salvas</span><button class="btn primary" type="submit">Salvar SSO</button></div></section></form>`;
+    const form = $("#ssoForm", el), err = $("#ssoErr", el);
+    const collect = () => {
       const f = new FormData(form), o = { role_map: {} };
       for (const [k, v] of f.entries()) { if (k.startsWith("role_map.")) o.role_map[k.slice(9)] = v; else o[k] = v; }
       o.enabled = form.enabled.checked; o.auto_create = !!form.auto_create.value; o.clear_secret = !!(form.clear_secret && form.clear_secret.checked);
-      try { await api("PUT", "api/sso/config", o); toast("SSO salvo"); ssoAdmin(el); }
-      catch (x) { $("#ssoErr", el).textContent = x.message; $("#ssoErr", el).hidden = false; }
+      return o;
+    };
+    const base = JSON.stringify(collect()), changed = () => JSON.stringify(collect()) !== base;
+    Unsaved.check = () => form.isConnected && changed();
+    const mark = () => { $("#ssoDirty", el).hidden = !changed(); $("#ssoOnLbl", el).textContent = form.enabled.checked ? "SSO ligado" : "SSO desligado"; };
+    form.addEventListener("input", mark); form.addEventListener("change", mark);
+    form.public_url.oninput = () => { $("#ssoRedir", el).textContent = form.public_url.value ? form.public_url.value.replace(/\/+$/, "") + "/api/sso/callback" : "(informe a URL pública)"; };
+    $("#ssoTest", el).onclick = async () => {
+      const box = $("#ssoDisc", el); box.innerHTML = `<div class="muted small">Consultando o emissor…</div>`;
+      const r = await api("POST", "api/sso/test", { issuer: form.issuer.value }).catch(x => ({ ok: false, message: x.message }));
+      box.innerHTML = r.ok ? `<div class="notice ok small">Emissor encontrado: <b>${esc(r.issuer)}</b><br>Autorização: ${esc(r.authorization_endpoint)}<br>Token: ${esc(r.token_endpoint)}${r.algs.length ? `<br>Assinaturas: ${esc(r.algs.join(", "))}${r.algs.includes("RS256") ? "" : " · atenção: é preciso RS256"}` : ""}<br><span class="muted">Isto verifica só o emissor; o login completo é testado entrando pelo botão de SSO numa janela anônima depois de salvar.</span></div>`
+        : `<div class="err">${esc(r.message)}</div>`;
+    };
+    const FIELD = [[/emissor|issuer/i, "issuer"], [/client id/i, "client_id"], [/secret/i, "client_secret"], [/url pública/i, "public_url"], [/escopo/i, "scopes"], [/claim/i, "login_claim"]];
+    const fail = x => {
+      err.textContent = x.message; err.hidden = false;
+      form.querySelectorAll("[aria-invalid]").forEach(i => i.removeAttribute("aria-invalid"));
+      const hit = FIELD.find(([re]) => re.test(x.message)), i = hit && form.elements[hit[1]];
+      if (i) { i.setAttribute("aria-invalid", "true"); i.setAttribute("aria-errormessage", "ssoErr"); i.focus(); } else err.scrollIntoView({ block: "nearest" });
+    };
+    form.onsubmit = async e => {
+      e.preventDefault();
+      const o = collect(), before = JSON.parse(base);
+      /* ligar o SSO, mudar quem entra ou restringir a senha: resumo do efeito antes de salvar */
+      const risky = o.enabled && (!before.enabled || o.local_login !== before.local_login || o.default_role !== before.default_role || o.auto_create !== before.auto_create);
+      if (risky) {
+        const me = App.user.auth === "sso" ? "Você entra pelo SSO: se a configuração estiver errada, use uma conta de administrador com senha local." : "Você (conta local) continua entrando por senha.";
+        const lines = [`Botão "${o.label || "Entrar com SSO"}" no login, para contas do provedor.`,
+          o.default_role ? `Quem não estiver em nenhum grupo mapeado entra como ${roleName(o.default_role)}.` : "Quem não estiver em nenhum grupo mapeado tem o acesso negado.",
+          o.auto_create ? "Contas são criadas no primeiro login." : "Só entram contas pré-cadastradas em Usuários.",
+          o.local_login === "admins" ? "Login por senha: só administradores (os demais com senha local deixam de entrar)." : "Login por senha continua para todos.", me];
+        if (!(await ask(`Ao salvar:\n${lines.map(x => "• " + x).join("\n")}`, { title: before.enabled ? "Confirmar mudanças no SSO" : "Ligar o SSO", ok: before.enabled ? "Salvar" : "Ligar e salvar", danger: o.local_login === "admins" && before.local_login !== "admins" }))) return;
+      } else if (before.enabled && !o.enabled && !(await ask("Desligar o SSO? O botão some do login e as contas do SSO deixam de entrar até ele ser ligado de novo.", { title: "Desligar o SSO", ok: "Desligar", danger: true }))) return;
+      try { await api("PUT", "api/sso/config", o); Unsaved.check = null; toast("SSO salvo"); ssoAdmin(el); }
+      catch (x) { fail(x); }
     };
   }
 
-  /* sub-abas conforme as permissões da role; a Aparência também aparece para quem pode mudar a governança */
+  /* sub-abas conforme as permissões da role */
   const SUBS = [
     ["usuarios", "Usuários", () => can("users.manage")], ["roles", "Roles", () => can("roles.manage")],
-    ["aparencia", "Aparência", () => canAny("branding.edit", "app.reset", "users.manage")], ["auditoria", "Auditoria", () => can("audit.view")],
-    ["logs", "Logs e retenção", () => can("logs.manage")], ["sso", "SSO", () => can("sso.manage")]];
+    ["governanca", "Governança", () => canAny("app.reset", "users.manage")], ["aparencia", "Aparência", () => can("branding.edit")],
+    ["auditoria", "Auditoria", () => can("audit.view")], ["logs", "Logs e retenção", () => can("logs.manage")], ["sso", "SSO", () => can("sso.manage")]];
   function render(root, sub, key) {
     if (sub === "papeis") { location.replace("#/admin/roles" + (key ? "/" + key : "")); return; }   // endereço antigo (3.0)
+    if (sub === "aparencia" && !can("branding.edit")) sub = "governanca";                             // a governança ficava na Aparência até a 3.x
     const subs = SUBS.filter(x => x[2]());
     if (!subs.length) return notFound();
     sub = subs.some(x => x[0] === sub) ? sub : subs[0][0];
-    root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead"><span class="pbid">ADMIN</span><h1>Administração</h1>
-        <div class="pbactions">${can("app.reset") ? `<button class="btn danger sm" id="resetBtn" title="Volta a aplicação ao estado de recém-instalada">Resetar aplicação</button>` : ""}</div></div>
-      <nav class="tabs">${subs.map(([k, l]) => `<a href="#/admin/${k}" class="${sub === k ? "on" : ""}">${l}</a>`).join("")}</nav></div></div>
+    root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead"><h1>Administração</h1></div>
+      <nav class="tabs" aria-label="Seções da administração">${subs.map(([k, l]) => `<a href="#/admin/${k}" class="${sub === k ? "on" : ""}"${sub === k ? ` aria-current="page"` : ""}>${l}</a>`).join("")}</nav></div></div>
       <div class="wrap" id="adminview"><div class="empty">Carregando…</div></div>`;
-    if ($("#resetBtn")) $("#resetBtn").onclick = resetDialog;
-    ({ usuarios: users, roles: el => roles(el, key), aparencia: appearance, auditoria: auditLog, logs, sso: ssoAdmin })[sub]($("#adminview"));
+    const on = $(".tabs a.on", root); if (on) on.scrollIntoView({ block: "nearest", inline: "nearest" });
+    ({ usuarios: users, roles: el => roles(el, key), governanca: governanceTab, aparencia: appearance, auditoria: auditLog, logs, sso: ssoAdmin })[sub]($("#adminview"));
   }
   return { render };
 })();
 
-/* ───────── biblioteca (runbooks e documentos) ─────────
-   À esquerda, a árvore de pastas (role="tree": ↑ ↓ andam, ← → recolhem/expandem, Enter abre, F2 renomeia; o ⋯ ou o
+/* ───────── biblioteca (playbooks, runbooks e documentos) ─────────
+   Nos tipos com pastas (runbooks e documentos), à esquerda, a árvore de pastas (role="tree": ↑ ↓ andam, ← → recolhem/expandem, Enter abre, F2 renomeia; o ⋯ ou o
    botão direito abrem as ações). À direita, busca, filtros gerados pelos campos do template (com contagens) e a lista.
    Documentos e pastas podem ser arrastados para outra pasta. Em telas estreitas a árvore vira um painel recolhível. */
 const LibraryPage = (() => {
-  const st = {};                                  // por tipo: { q, facet: {campo: valor}, closed: Set(ids), limit, panel }
-  const S = t => st[t] || (st[t] = { q: "", facet: {}, closed: new Set(), limit: 100 });
-  const viewKey = t => `medusa-lib-view:${t}:` + (App.user ? App.user.login : "");
-  const libView = t => { let v = null; try { v = localStorage.getItem(viewKey(t)); } catch { } return v === "list" ? "list" : "cards"; };
+  const st = {};                                  // por tipo: { closed: Set(ids), limit, panel }; os filtros ficam no endereço
+  const S = t => st[t] || (st[t] = { closed: new Set(), limit: 100 });
 
   function treeHtml(t, d, sel) {
     const kids = {}; d.folders.forEach(f => (kids[f.parentId ?? "root"] = kids[f.parentId ?? "root"] || []).push(f));
@@ -1377,57 +1752,82 @@ const LibraryPage = (() => {
       ${(kids.root || []).map(f => node(f, 0)).join("")}</ul>`;
   }
 
-  function listHtml(t, items, mode) {
-    if (!items.length) return can(`${t}.create`) ? `<div class="empty">Nada aqui. <a href="#/${TYPE_ROUTE[t]}/novo">Criar ${typeInfo(t).label.toLowerCase()}</a></div>` : `<div class="empty">Nada aqui.</div>`;
-    const chips = p => Object.values(p.fields || {}).flatMap(v => Array.isArray(v) ? v : [v]).filter(Boolean).slice(0, 4).map(v => `<span class="chip">${esc(v)}</span>`).join("");
-    if (mode === "list") return `<div class="ptable lib-table" role="table"><div class="pt-row pt-head" role="row"><span>ID</span><span>Nome</span><span>Status</span><span>Versão</span><span class="pt-rev">Revisão</span></div>
-      ${items.map(p => `<a class="pt-row" role="row" href="#/${p.slug}/doc" draggable="true" data-doc="${p.id}"><span class="pt-id">${p.id}</span><span class="pt-name">${esc(p.name)} ${chips(p)}</span>
-        <span><span class="pt-st"><i class="dot ${STATUS_CLS[p.status]}"></i>${esc(statusLabel(t, p.status))}</span></span><span class="pt-ver">v${esc(p.version)}</span>
-        <span class="pt-rev">${esc(p.reviewed || "—")}</span></a>`).join("")}</div>`;
-    return `<div class="cards">${items.map(p => `<a class="card st-${STATUS_CLS[p.status]}" href="#/${p.slug}/doc" draggable="true" data-doc="${p.id}">
-        <div class="card-top"><span class="id">${p.id} · v${esc(p.version)}</span>${statusPill(p.status, t)}</div><h3>${esc(p.name)}</h3>
-        <div class="meta">${chips(p)}${p.hasFlow && t !== "doc" ? `<span class="chip">fluxograma</span>` : ""}${p.suggestions && can(`${t}.edit`) ? `<span class="chip sg-chip">${p.suggestions} sugest${p.suggestions > 1 ? "ões" : "ão"}</span>` : ""}</div>
-        <div class="govline">${govLine(p.gov)}</div></a>`).join("")}</div>`;
+  function listHtml(t, items, mode, empty) {
+    if (!items.length) return libEmpty(t, empty);
+    return mode === "lg" ? libLarge(items, t) : mode === "sm" ? libSmall(items, t, typeInfo(t).plural) : libCards(items, t);
   }
 
   async function render(root, t, sel) {
-    const s = S(t), ti = typeInfo(t), seq = ++routeSeq;
-    sel = sel || "";
+    const s = S(t), ti = typeInfo(t), seq = ++routeSeq, folders = !!ti.folders;
+    sel = folders ? sel || "" : "";
+    /* filtros vêm do endereço: status (ou o padrão da role), texto e campos */
+    const hq = hashQuery(), status = libStatus(t), q = (hq.get("q") || "").trim();
+    const facet = {}; for (const [k, v] of hq) if (k.startsWith("fields.") && v) facet[k.slice(7)] = v;
+    /* o status resolvido vai para o endereço, para que Voltar devolva exatamente a visão anterior */
+    if (!hq.get("status")) setHashQuery({ ...Object.fromEntries(hq), status: status || "todos" }, false);
     const qs = new URLSearchParams({ type: t, limit: s.limit });
+    if (status) qs.set("status", status);
     if (sel) { qs.set("folder", sel); if (sel !== "none") qs.set("recursive", "1"); }
-    if (s.q) qs.set("q", s.q);
-    for (const [k, v] of Object.entries(s.facet)) if (v) qs.set("fields." + k, v);
-    let d, tree;
-    try { [d, tree] = await Promise.all([api("GET", "api/library?" + qs), api("GET", `api/folders?type=${t}`), refreshIndex()]); }
-    catch (e) { if (seq === routeSeq && e.status !== 401) root.innerHTML = `<div class="wrap"><div class="err">${esc(e.message)}</div></div>`; return; }
+    if (q) qs.set("q", q);
+    for (const [k, v] of Object.entries(facet)) qs.set("fields." + k, v);
+    let d, tree = null;
+    try { [d, tree] = await Promise.all([api("GET", "api/library?" + qs), folders ? api("GET", `api/folders?type=${t}`) : null, refreshIndex()]); }
+    catch (e) { if (seq === routeSeq && e.status !== 401) loadError(root, e); return; }
     if (seq !== routeSeq) return;
     renderSide(); Tabs.render();
-    const mode = libView(t), selName = sel === "none" ? "Sem pasta" : sel ? (tree.folders.find(f => String(f.id) === sel) || {}).name : "";
+    document.title = `${ti.plural} · ${$("#brandName").textContent}`;
+    const mode = libView(), selName = !folders ? "" : sel === "none" ? "Sem pasta" : sel ? (tree.folders.find(f => String(f.id) === sel) || {}).name : "";
+    const acts = [];
+    if (can(`${t}.create`) && can(`${t}.import`)) acts.push({ icon: "upload", label: "Importar", hint: ".medusa.md ou .md vira um documento novo", run: () => importDialog(t) });
+    if (can(`${t}.export`)) acts.push({ icon: "download", label: "Exportar tudo", hint: "Baixa um .zip com todos os documentos que você pode ver", href: "api/export" });
+    const statuses = libStatuses(t);
     root.innerHTML = `<div class="wrap">
       <header class="page-head"><h1>${esc(ti.plural)}</h1><span class="count">${d.all}</span>
-        <div class="home-actions">${can(`${t}.create`) && can(`${t}.import`) ? `<button class="btn ghost sm" id="libImp">${ic("upload")}Importar</button>` : ""}
-          ${can(`${t}.create`) ? `<a class="btn primary sm" href="#/${TYPE_ROUTE[t]}/novo${sel && sel !== "none" ? "/" + sel : ""}">${ic("plus")}Novo ${esc(ti.label.toLowerCase())}</a>` : ""}</div></header>
-      <div class="lib">
-        <details class="lib-side" ${!matchMedia("(max-width: 900px)").matches || (s.panel ?? true) ? "open" : ""}><summary>${ic("grid")}Pastas${selName ? `: ${esc(selName)}` : ""}</summary>
-          <div class="lib-tree-h">${tree.canManage ? `<button class="btn ghost xs" id="fNew">${ic("plus")}Pasta</button><button class="btn ghost xs" id="fTpl" title="Cria as pastas sugeridas pelo template (o que já existe não é duplicado)">Estrutura do template…</button>` : ""}</div>
-          <div id="libTree">${treeHtml(t, tree, sel)}</div></details>
+        <div class="home-actions">${acts.length ? `<button class="btn ghost sm" id="libActs" aria-haspopup="menu" aria-expanded="false">${ic("more")}Mais</button>` : ""}
+          ${can(`${t}.create`) ? `<a class="btn primary sm" href="${newHref(t, sel)}">${ic("plus")}Novo ${esc(ti.label.toLowerCase())}</a>` : ""}</div></header>
+      <div class="${folders ? "lib" : "lib lib-solo"}">
+        ${folders ? `<details class="lib-side" ${!matchMedia("(max-width: 900px)").matches || (s.panel ?? false) ? "open" : ""}><summary>${ic("grid")}Pastas${selName ? `: ${esc(selName)}` : ""}</summary>
+          <div class="lib-tree-h">${tree.canManage ? `<button class="btn ghost xs" id="fNew">${ic("plus")}Pasta</button><button class="btn ghost xs" id="fTpl" title="Cria as pastas sugeridas pelo template (o que já existe não é duplicado)">Pastas do template</button>` : ""}</div>
+          <div id="libTree">${treeHtml(t, tree, sel)}</div></details>` : ""}
         <section class="lib-main">
-          <div class="home-bar lib-bar"><input class="in sm" id="libQ" type="search" placeholder="Filtrar por nome ou ID" value="${esc(s.q)}">
+          <div class="home-bar lib-bar">
+            <div class="filters" role="group" aria-label="Filtrar por status">${["", ...statuses].map(v => {
+              const n = v ? d.counts[v] || 0 : d.all, l = v ? statusLabel(t, v) : "Todos";
+              return `<button class="${v === status ? "on" : ""}" data-ls="${esc(v || "todos")}" aria-pressed="${v === status}" aria-label="${esc(l)}, ${n}">${v ? `<i class="dot ${STATUS_CLS[v]}"></i>` : ""}${esc(l)} <span class="cnt" aria-hidden="true">${n}</span></button>`;
+            }).join("")}</div>
+            <input class="in sm" id="libQ" type="search" placeholder="Filtrar por nome ou ID" aria-label="Filtrar por nome ou ID" value="${esc(q)}">
             ${Object.entries(d.facets || {}).map(([k, f]) => `<select class="in sm" data-facet="${esc(k)}" aria-label="${esc(f.label)}"><option value="">${esc(f.label)}: todos</option>
-              ${Object.entries(f.values).sort((a, b) => b[1] - a[1]).map(([v, n]) => `<option value="${esc(v)}" ${s.facet[k] === v ? "selected" : ""}>${esc(v)} (${n})</option>`).join("")}
-              ${s.facet[k] && !(s.facet[k] in f.values) ? `<option value="${esc(s.facet[k])}" selected>${esc(s.facet[k])} (0)</option>` : ""}</select>`).join("")}
-            <div class="view-seg" role="group" aria-label="Visualização">${[["cards", "Cartões", "grid"], ["list", "Lista", "rows"]].map(([k, n, i]) => `<button class="${k === mode ? "on" : ""}" data-lv="${k}" title="${n}" aria-label="${n}" aria-pressed="${k === mode}">${ic(i)}</button>`).join("")}</div></div>
-          ${listHtml(t, d.items, mode)}
+              ${Object.entries(f.values).sort((a, b) => b[1] - a[1]).map(([v, n]) => `<option value="${esc(v)}" ${facet[k] === v ? "selected" : ""}>${esc(v)} (${n})</option>`).join("")}
+              ${facet[k] && !(facet[k] in f.values) ? `<option value="${esc(facet[k])}" selected>${esc(facet[k])} (0)</option>` : ""}</select>`).join("")}
+            <div class="view-seg" role="group" aria-label="Visualização da lista">${LIB_VIEWS.map(([k, n, svg]) => `<button class="${k === mode ? "on" : ""}" data-lv="${k}" title="${n}" aria-label="${n}" aria-pressed="${k === mode}">${svg}</button>`).join("")}</div></div>
+          <div class="lib-list">${listHtml(t, d.items, mode, { status, filtered: !!(q || Object.keys(facet).length), folder: sel })}</div>
           ${d.nextCursor ? `<div class="home-more"><button class="btn ghost sm" id="libMore">Carregar mais <span class="muted">(${d.total - d.items.length})</span></button></div>` : ""}
         </section></div></div>`;
-    const go = f => { location.hash = `#/${TYPE_ROUTE[t]}${f ? "/p/" + f : ""}`; };
-    root.querySelector(".lib-side").ontoggle = e => { s.panel = e.target.open; };      // painel recolhível (telas estreitas) lembra o estado
+    /* refaz a lista com os filtros novos: a lista atual esmaece enquanto carrega e o foco volta ao mesmo controle */
+    const refresh = focusSel => {
+      const box = root.querySelector(".lib-list"); if (box) box.setAttribute("aria-busy", "true");
+      return render(root, t, sel).then(() => {
+        const el = focusSel && root.querySelector(focusSel); if (!el) return;
+        el.focus(); if (el.id === "libQ") el.setSelectionRange(el.value.length, el.value.length);
+      });
+    };
+    const params = over => ({ status: hashQuery().get("status") || "", q: (hashQuery().get("q") || ""), ...Object.fromEntries(Object.entries(facet).map(([k, v]) => ["fields." + k, v])), ...over });
+    const go = f => { const qs = location.hash.split("?")[1]; location.hash = `#/${TYPE_ROUTE[t]}${f ? "/p/" + f : ""}${qs ? "?" + qs : ""}`; };
+    if (folders) root.querySelector(".lib-side").ontoggle = e => { s.panel = e.target.open; };      // painel recolhível (telas estreitas) lembra o estado
+    root.querySelector(".filters").onclick = e => {
+      const b = e.target.closest("[data-ls]"); if (!b) return;
+      try { localStorage.setItem(statusKey(t), b.dataset.ls); } catch { }
+      s.limit = 100; setHashQuery(params({ status: b.dataset.ls }), true); refresh(`[data-ls="${b.dataset.ls}"]`);
+    };
     let qt = 0;
-    $("#libQ").oninput = e => { clearTimeout(qt); qt = setTimeout(() => { s.q = e.target.value.trim(); s.limit = 100; render(root, t, sel).then(() => { const q = $("#libQ"); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }); }, 250); };
-    root.querySelectorAll("[data-facet]").forEach(x => x.onchange = () => { s.facet[x.dataset.facet] = x.value; s.limit = 100; render(root, t, sel); });
-    root.querySelector(".view-seg").onclick = e => { const b = e.target.closest("[data-lv]"); if (!b) return; try { localStorage.setItem(viewKey(t), b.dataset.lv); } catch { } render(root, t, sel); };
-    if ($("#libMore")) $("#libMore").onclick = () => { s.limit += 100; render(root, t, sel); };
-    if ($("#libImp")) $("#libImp").onclick = () => importDialog(t);
+    $("#libQ").oninput = e => { clearTimeout(qt); qt = setTimeout(() => { s.limit = 100; setHashQuery(params({ q: e.target.value.trim() }), false); refresh("#libQ"); }, 250); };
+    root.querySelectorAll("[data-facet]").forEach(x => x.onchange = () => { s.limit = 100; setHashQuery(params({ ["fields." + x.dataset.facet]: x.value }), true); refresh(`[data-facet="${x.dataset.facet}"]`); });
+    root.querySelector(".view-seg").onclick = e => { const b = e.target.closest("[data-lv]"); if (!b) return; setLibView(b.dataset.lv); refresh(`[data-lv="${b.dataset.lv}"]`); };
+    const clear = root.querySelector("[data-clear]");
+    if (clear) clear.onclick = () => { try { localStorage.setItem(statusKey(t), "todos"); } catch { } s.limit = 100; setHashQuery({ status: "todos" }, true); refresh('[data-ls="todos"]'); };
+    if ($("#libMore")) $("#libMore").onclick = () => { s.limit += 100; refresh("#libMore"); };
+    if ($("#libActs")) $("#libActs").onclick = e => actionsMenu(e.currentTarget, acts);
+    if (!folders) return;
     const reload = () => render(root, t, sel);
     if ($("#fNew")) $("#fNew").onclick = () => folderName(t, null, sel && sel !== "none" ? +sel : null, reload);
     if ($("#fTpl")) $("#fTpl").onclick = () => fromTemplate(t, reload);
@@ -1771,12 +2171,12 @@ const Suggest = (() => {
 /* ───────── busca ───────── */
 /* No servidor (/api/search: sem acento, título vale mais que passo/ramo, que vale mais que texto), com espera de
    150 ms entre teclas e cancelamento da busca anterior. Times vêm do cadastro já carregado. ↑ ↓ e Enter navegam. */
-const KIND_NAMES = { documento: "Documento", passo: "Passo", ramo: "Ramo", secao: "Seção", time: "Time" };
+const KIND_NAMES = { documento: "Documento", passo: "Passo", ramo: "Ramo", secao: "Seção", time: "Time", pagina: "Página" };
 let HITS = [], hitSel = 0, searchTimer = 0, searchCtl = null;
 const q = $("#q"), results = $("#results");
 async function doSearch() {
   const v = q.value.trim();
-  if (v.length < 2) { results.hidden = true; HITS = []; return; }
+  if (v.length < 2) { showHits(false); HITS = []; return; }
   if (searchCtl) searchCtl.abort();
   searchCtl = new AbortController();
   let hits = [];
@@ -1785,17 +2185,39 @@ async function doSearch() {
   const nv = norm(v).split(/\s+/);
   const teams = Object.keys(TEAMS).filter(t => { const x = norm(t + " " + (TEAMS[t].summary || "")); return nv.every(w => x.includes(w)); })
     .map(t => ({ kind: "time", title: t, team: t }));
-  HITS = hits.concat(teams).slice(0, 30); hitSel = 0;
+  /* páginas da própria aplicação (Templates, seções da Administração, Ajuda…), conforme as permissões */
+  const pages = PAGES().filter(([title, , words]) => { const x = norm(title + " " + (words || "")); return nv.every(w => x.includes(w)); })
+    .map(([title, href]) => ({ kind: "pagina", title, href }));
+  HITS = pages.concat(hits, teams).slice(0, 30); hitSel = 0;
   paintHits();
 }
+const PAGES = () => [
+  ["Playbooks", "#/", "biblioteca inicio", true], ["Runbooks", "#/runbooks", "biblioteca procedimentos", can("runbook.view")],
+  ["Documentos", "#/documentos", "biblioteca politicas normas", can("doc.view")], ["Novo playbook", "#/novo", "criar", can("playbook.create")],
+  ["Templates", "#/templates", "modelos times tags", can("templates.view")],
+  ["Administração · Usuários", "#/admin/usuarios", "contas senha", can("users.manage")], ["Administração · Roles", "#/admin/roles", "permissoes papeis", can("roles.manage")],
+  ["Administração · Governança", "#/admin/governanca", "aprovador reset", canAny("app.reset", "users.manage")], ["Administração · Aparência", "#/admin/aparencia", "logo nome workspace marca", can("branding.edit")],
+  ["Administração · Auditoria", "#/admin/auditoria", "eventos historico", can("audit.view")], ["Administração · Logs e retenção", "#/admin/logs", "siem syslog encaminhamento", can("logs.manage")],
+  ["Administração · SSO", "#/admin/sso", "openid login provedor", can("sso.manage")], ["Ajuda", "#/ajuda", "documentacao manual", true]].filter(x => x[3]);
+/* busca no padrão combobox: a lista é um listbox, ↑ ↓ mudam a opção ativa (aria-activedescendant) e o leitor de tela
+   ouve quantos resultados vieram */
+function showHits(v) { results.hidden = !v; q.setAttribute("aria-expanded", String(v)); if (!v) q.removeAttribute("aria-activedescendant"); }
 function paintHits() {
-  results.hidden = false;
-  results.innerHTML = HITS.length ? HITS.map((h, i) => `<button data-i="${i}" class="${i === hitSel ? "on" : ""}"><small>${h.pid ? esc(h.pid) + " · " : ""}${h.kind === "documento" ? typeInfo(h.type).label : KIND_NAMES[h.kind] || ""}</small><br>${esc(h.title.length > 110 ? h.title.slice(0, 107) + "…" : h.title)}</button>`).join("")
-    : `<div class="empty">Nada encontrado.</div>`;
-  const on = results.querySelector("button.on"); if (on) on.scrollIntoView({ block: "nearest" });
+  showHits(true);
+  results.innerHTML = HITS.length ? HITS.map((h, i) => `<button data-i="${i}" id="hit-${i}" role="option" tabindex="-1" aria-selected="${i === hitSel}" class="${i === hitSel ? "on" : ""}"><small>${h.pid ? esc(h.pid) + " · " : ""}${h.kind === "documento" ? typeInfo(h.type).label : KIND_NAMES[h.kind] || ""}</small><br>${esc(h.title.length > 110 ? h.title.slice(0, 107) + "…" : h.title)}</button>`).join("")
+    : `<div class="empty" role="presentation">Nada encontrado.</div>`;
+  const on = results.querySelector("button.on"); if (on) { on.scrollIntoView({ block: "nearest" }); q.setAttribute("aria-activedescendant", on.id); } else q.removeAttribute("aria-activedescendant");
+  $("#searchStatus").textContent = HITS.length ? `${HITS.length} resultado${HITS.length > 1 ? "s" : ""}` : "Nada encontrado";
+}
+/* "/" ou o ícone de busca do menu recolhido: abre o menu, se preciso, e foca a busca */
+function openSearch() {
+  if (!narrow.matches && document.body.classList.contains("side-collapsed")) setCollapsed(false);
+  if (narrow.matches && !document.body.classList.contains("side-open")) sideOpen(true);
+  setTimeout(() => q.focus(), narrow.matches ? 260 : 0);
 }
 function goHit(h) {
-  results.hidden = true; q.value = ""; q.blur();
+  showHits(false); q.value = ""; q.blur();
+  if (h.kind === "pagina") { location.hash = h.href; return; }
   if (h.kind === "time") return showTeam(currentPb(), h.team, false);
   const slug = h.pid.toLowerCase();
   if (h.kind === "passo" || h.kind === "ramo") location.hash = `#/${slug}/doc/${encodeURIComponent(h.anchor)}`;
@@ -1816,10 +2238,15 @@ results.addEventListener("click", e => {
 });
 document.addEventListener("keydown", e => {
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName) || document.activeElement.isContentEditable;
-  if (e.key === "/" && !typing && App.user) { e.preventDefault(); q.focus(); }
-  if (e.key === "Escape") { results.hidden = true; if (!drawer.hidden) closeDrawer(); if (document.activeElement === q) q.blur(); }
+  if (e.key === "/" && !typing && App.user) { e.preventDefault(); openSearch(); }
+  if (e.key === "Escape") { showHits(false); if (!drawer.hidden) closeDrawer(); if (document.activeElement === q) q.blur(); }
 });
-document.addEventListener("click", e => { if (!e.target.closest(".search")) results.hidden = true; });
+document.addEventListener("click", e => { if (!e.target.closest(".search")) showHits(false); });
+/* menu recolhido: no lugar do campo, um ícone de busca */
+$(".search").insertAdjacentHTML("beforeend", `<button type="button" class="search-rail" id="searchRail" title="Buscar ( / )" aria-label="Buscar">${ic("search")}</button>`);
+$("#searchRail").onclick = openSearch;
+/* "Pular para o conteúdo": primeiro item do Tab; leva o foco ao título da página sem mexer no endereço (#/…) */
+$("#skipLink").onclick = e => { e.preventDefault(); const t = $("#view h1") || $("#view"); t.setAttribute("tabindex", "-1"); t.focus(); };
 
 /* ───────── início ───────── */
 /* ───────── times e tags ───────── */
@@ -2003,7 +2430,7 @@ const Exporter = (() => {
 
 /* ───────── templates ───────── */
 const TemplatesPage = (() => {
-  let current = null, vars = [], varsDoc = [], kindFilter = "";
+  let current = null, vars = [], varsDoc = [], kindFilter = "", openName = "";
   const KIND_LBL = { playbook: "Playbook", runbook: "Runbook", doc: "Documento" };
   const adapter = v => ({
     saveDoc: (doc, rev) => api("PUT", `api/templates/${v.key}/doc`, { doc, rev }).then(Editor.withSync),
@@ -2016,34 +2443,50 @@ const TemplatesPage = (() => {
     docBar: `<b>Documento modelo</b><span class="muted"> · ${esc(v.name)}</span>`,
     flowBar: `<b>Fluxograma modelo</b><span class="muted"> · ${esc(v.name)}</span>`,
   });
+  /* sub-aba com formulário: marca "Alterações não salvas" e registra a mudança para a navegação perguntar antes de
+     descartar (trocar de sub-aba refazia a tela e perdia o que foi digitado) */
+  function track(el, state) {
+    const base = state(), changed = () => el.isConnected && state() !== base;
+    const mark = () => { const m = $(".ap-dirty", el); if (m) m.hidden = !changed(); };
+    Unsaved.check = changed;
+    el.addEventListener("input", mark); el.addEventListener("change", mark);
+    return mark;
+  }
+  const DIRTY = `<span class="ap-dirty" hidden>Alterações não salvas</span>`;
   const upd = t => t.updated_at ? `atualizado ${new Date(t.updated_at).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}${t.updated_by ? " por " + t.updated_by : ""}` : "";
 
+  const KIND_ORDER = { playbook: 0, runbook: 1, doc: 2 };
   async function list(root) {
-    root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead"><span class="pbid">${ic("templates")}</span><h1>Templates, times e tags</h1>
+    if (openName) { openName = ""; Tabs.render(); }
+    root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead"><h1>Templates</h1>
       <div class="pbactions"><button class="btn primary sm" id="tNew">${ic("plus")}Novo template</button><button class="btn ghost sm" id="tImp">${ic("upload")}Importar template</button></div></div>
-      <p class="muted" style="margin:6px 0 16px">Cada template define o documento modelo, o fluxograma modelo (com os ramos) e os <b>times e tags</b> dos playbooks criados com ele. Os times de um template são gerenciados na aba <b>Times e tags</b> dele. O template <b>Padrão</b> é o inicial da instalação.</p></div></div>
-      <div class="wrap" id="tlist"><div class="empty">Carregando…</div></div>`;
+      <p class="muted tpl-intro">O modelo de documento, fluxograma, times e tags de cada tipo de documento. Quem cria um playbook, runbook ou documento escolhe o template.</p></div></div>
+      <div class="wrap" id="tlist"><div class="empty">Carregando templates…</div></div>`;
     let data;
-    try { data = await api("GET", "api/templates"); } catch (e) { $("#tlist").innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+    try { data = await api("GET", "api/templates"); } catch (e) { return loadError($("#tlist"), e); }
     vars = data.variables; varsDoc = data.variablesDoc || [];
-    const shown = data.templates.filter(t => !kindFilter || t.kind === kindFilter);
-    $("#tlist").innerHTML = `<div class="home-bar"><div class="filters">${[["", "Todos"], ["playbook", "Playbooks"], ["runbook", "Runbooks"], ["doc", "Documentos"]].map(([k, l]) =>
-        `<button class="${k === kindFilter ? "on" : ""}" data-kf="${k}">${l} <span class="cnt">${data.templates.filter(t => !k || t.kind === k).length}</span></button>`).join("")}</div></div>
+    const shown = data.templates.filter(t => !kindFilter || t.kind === kindFilter)
+      .sort((a, b) => (KIND_ORDER[a.kind] ?? 9) - (KIND_ORDER[b.kind] ?? 9) || (b.default ? 1 : 0) - (a.default ? 1 : 0) || a.name.localeCompare(b.name, "pt-BR"));
+    const n = (v, one, many) => `${v} ${v === 1 ? one : many}`;
+    $("#tlist").innerHTML = `<h2 class="sr-only">Lista de templates</h2>
+      <div class="home-bar"><div class="filters" role="group" aria-label="Filtrar por tipo">${[["", "Todos"], ["playbook", "Playbooks"], ["runbook", "Runbooks"], ["doc", "Documentos"]].map(([k, l]) =>
+        `<button class="${k === kindFilter ? "on" : ""}" data-kf="${k}" aria-pressed="${k === kindFilter}">${l} <span class="cnt">${data.templates.filter(t => !k || t.kind === k).length}</span></button>`).join("")}</div></div>
       <div class="cards">${shown.map(t => t.error ? `<div class="card"><h3>${esc(t.name)}</h3><div class="err">${esc(t.error)}</div></div>` : `
-      <div class="card tpl-card"><div class="card-top"><span class="id">${esc(KIND_LBL[t.kind] || "Template").toUpperCase()}</span>${t.default ? `<span class="tag">padrão</span>` : ""}</div>
-        <h3>${esc(t.name)}</h3><p>${esc(t.description || "Sem descrição.")}</p>
-        <div class="meta"><span class="chip">${t.sections} seções</span>${t.hasFlow ? `<span class="chip">${t.nodes} caixas</span><span class="chip">${t.teams.length} times</span>` : ""}${t.usesRamos ? `<span class="chip">usa ramos</span>` : ""}${t.fields.length ? `<span class="chip">${t.fields.length} campos</span>` : ""}${t.folders.length ? `<span class="chip">${t.folders.length} pastas</span>` : ""}</div>
-        <div class="govline">${t.hasFlow ? t.lanes.map(esc).join(" · ") + "<br>" : ""}<span class="muted">${esc(upd(t))}</span></div>
-        <div class="row-btns" style="margin-top:12px"><a class="btn primary xs" href="#/templates/${esc(t.key)}/geral">Abrir</a>
-          <button class="btn ghost xs" data-dup="${esc(t.key)}">Duplicar</button><a class="btn ghost xs" href="api/templates/${esc(t.key)}/export" download>${ic("download")}Exportar</a>
-          ${can("templates.delete") && !t.default ? `<button class="btn danger xs" data-del="${esc(t.key)}">Excluir</button>` : ""}</div></div>`).join("")}</div>`;
+      <article class="card tpl-card"><div class="card-top"><span class="id">${esc(KIND_LBL[t.kind] || "Template").toUpperCase()}</span>${t.default ? `<span class="tag" title="Template inicial deste tipo: vem selecionado na criação e recebe os documentos de um template excluído">padrão</span>` : ""}</div>
+        <h3><a class="tpl-link" href="#/templates/${esc(t.key)}/geral">${esc(t.name)}</a></h3><p>${esc(t.description || "Sem descrição.")}</p>
+        <div class="meta"><span class="chip">${n(t.sections, "seção", "seções")}</span>${t.hasFlow ? `<span class="chip" title="Caixas do fluxograma modelo">${n(t.nodes, "caixa", "caixas")}</span>` : ""}${t.usesRamos ? `<span class="chip" title="Um trecho do documento e uma caixa do fluxograma se repetem para cada ramo informado na criação">usa ramos</span>` : ""}${t.fields.length ? `<span class="chip">${n(t.fields.length, "campo", "campos")}</span>` : ""}${t.folders.length ? `<span class="chip">${n(t.folders.length, "pasta", "pastas")}</span>` : ""}</div>
+        ${t.hasFlow ? `<a class="tpl-teams" href="#/templates/${esc(t.key)}/times">${ic("user")}<span class="tt-n">${n(t.teams.length, "time ou tag", "times e tags")}</span><span class="muted">${t.lanes.length ? " · raias " + t.lanes.map(esc).join(", ") : ""}</span></a>` : ""}
+        <div class="govline"><span class="muted">${esc(upd(t)) || "Sem alterações registradas"}</span></div>
+        <div class="row-btns tpl-acts"><a class="btn ghost xs" href="#/templates/${esc(t.key)}/geral" aria-label="Abrir ${esc(t.name)}">Abrir</a>
+          <button class="btn ghost xs" data-dup="${esc(t.key)}" aria-label="Duplicar ${esc(t.name)}">Duplicar</button><a class="btn ghost xs" href="api/templates/${esc(t.key)}/export" download aria-label="Exportar ${esc(t.name)}">${ic("download")}Exportar</a>
+          ${can("templates.delete") && !t.default ? `<button class="btn danger xs" data-del="${esc(t.key)}" data-name="${esc(t.name)}" aria-label="Excluir ${esc(t.name)}">Excluir</button>` : ""}</div></article>`).join("") || `<div class="lib-empty"><p>Nenhum template deste tipo.</p></div>`}</div>`;
     const reload = () => list(root);
     $("#tlist").querySelector(".filters").onclick = e => { const b = e.target.closest("[data-kf]"); if (b) { kindFilter = b.dataset.kf; reload(); } };
     $("#tNew").onclick = () => newDialog(data.templates, null, reload);
     $("#tImp").onclick = () => importDialog(reload);
     root.querySelectorAll("[data-dup]").forEach(b => b.onclick = () => newDialog(data.templates, b.dataset.dup, reload));
     root.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
-      if (!(await ask("Excluir este template? Ele vai para a lixeira do servidor. Os documentos criados com ele passam para o template padrão do tipo, que recebe os times que eles usam.", { title: "Excluir template", ok: "Excluir", danger: true }))) return;
+      if (!(await ask(`Excluir o template ${b.dataset.name}? Ele vai para a lixeira do servidor. Os documentos criados com ele passam para o template padrão do tipo, que recebe os times que eles usam.`, { title: "Excluir template", ok: "Excluir", danger: true }))) return;
       try { const r = await api("DELETE", `api/templates/${b.dataset.del}`); toast(`Template excluído${r.moved.length ? ` · ${r.moved.join(", ")} agora usa(m) o padrão` : ""}`); refreshData(); } catch (e) { toast(e.message, "err"); }
     });
   }
@@ -2112,7 +2555,7 @@ const TemplatesPage = (() => {
         <div class="row-btns"><button class="btn ghost xs" id="fAdd">${ic("plus")}Campo</button></div>
         <p class="muted small">Use <code>{{campo.chave}}</code> no documento modelo para levar o valor a outros trechos. Mudar a chave de um campo em uso faz os documentos existentes deixarem de mostrar o valor na biblioteca.</p>
         <div class="err" id="fErr" hidden></div>
-        <div class="create-actions"><button class="btn primary" id="fSave">Salvar campos</button></div></div>`;
+        <div class="create-actions"><span class="ap-dirty" ${changed() ? "" : "hidden"}>Alterações não salvas</span><button class="btn primary" id="fSave">Salvar campos</button></div></div>`;
       el.querySelectorAll("tr[data-i]").forEach(tr => {
         const f = fs[+tr.dataset.i];
         tr.querySelectorAll("[data-k]").forEach(inp => inp.oninput = inp.onchange = () => {
@@ -2132,6 +2575,10 @@ const TemplatesPage = (() => {
       };
     };
     fs.forEach(f => { f._saved = true; });
+    const state = () => JSON.stringify(fs.map(({ _keyTouched, _saved, ...f }) => f)), base = state();
+    function changed() { return state() !== base; }
+    Unsaved.check = () => el.isConnected && changed();
+    el.addEventListener("input", () => { const m = $(".ap-dirty", el); if (m) m.hidden = !changed(); });
     paint();
   }
   function foldersTab(el, t) {
@@ -2139,7 +2586,8 @@ const TemplatesPage = (() => {
       <p class="muted small" style="margin-top:0">Um caminho por linha, com <code>/</code> entre os níveis (ex.: <code>Por ferramenta/EDR</code>), até 6 níveis. A estrutura não é aplicada sozinha: na biblioteca, o botão "Criar estrutura de pastas do template" cria o que faltar, sem duplicar.</p>
       <textarea class="in mono" id="flText" rows="10">${esc((t.folders || []).join("\n"))}</textarea>
       <div class="err" id="flErr" hidden></div>
-      <div class="create-actions"><button class="btn primary" id="flSave">Salvar pastas</button></div></div>`;
+      <div class="create-actions">${DIRTY}<button class="btn primary" id="flSave">Salvar pastas</button></div></div>`;
+    track(el, () => $("#flText", el).value);
     $("#flSave", el).onclick = async () => {
       const folders = $("#flText", el).value.split("\n").map(x => x.trim()).filter(Boolean);
       try { current = (await api("PUT", `api/templates/${t.key}/meta`, { rev: t.rev, folders })).template; toast("Pastas salvas"); route(); }
@@ -2154,9 +2602,11 @@ const TemplatesPage = (() => {
           <label>Nome<input class="in" name="name" maxlength="60" value="${esc(t.name)}" required></label>
           <label>Descrição<textarea class="in" name="description" rows="2" maxlength="300">${esc(t.description || "")}</textarea></label>
           <div class="pp-row"><label>Owner padrão<input class="in" name="owner" value="${esc(t.owner || "")}"></label>
-            <label>Fase NIST padrão<input class="in" name="nist" value="${esc(t.nist || "")}"></label></div>
+            <label>Fase NIST padrão<input class="in" name="nist" value="${esc(t.nist || "")}" list="nistPhases" maxlength="200" aria-describedby="nistHelp"></label></div>
+          <datalist id="nistPhases">${["Preparação", "Detecção e Análise", "Contenção", "Erradicação", "Recuperação", "Contenção, Erradicação e Recuperação", "Pós-Incidente", "Detecção e Análise → Pós-Incidente (ciclo completo)"].map(x => `<option value="${x}">`).join("")}</datalist>
+          <p class="muted small" id="nistHelp">Fase do ciclo NIST SP 800-61 em que o playbook atua; escolha uma sugestão ou descreva um intervalo.</p>
           <div class="err" id="tgErr" hidden></div>
-          <div class="create-actions"><a class="btn ghost" href="api/templates/${esc(t.key)}/export" download>${ic("download")}Exportar template</a><button class="btn primary" type="submit">Salvar</button></div></form>
+          <div class="create-actions">${DIRTY}<a class="btn ghost" href="api/templates/${esc(t.key)}/export" download>${ic("download")}Exportar template</a><button class="btn primary" type="submit">Salvar</button></div></form>
         <div class="pp-lbl" style="margin-top:18px">Resumo</div>
         <div class="meta"><span class="chip">${t.sections.length} seções</span><span class="chip">${t.flow.nodes.length} caixas</span>${t.usesRamos ? `<span class="chip">usa ramos</span>` : `<span class="chip">sem ramos</span>`}${t.flow.lanes.map(l => `<span class="chip">${esc(l.label)}</span>`).join("")}</div>
         ${t.hasRamos ? `<p class="muted small">Ramos: a subseção <code>R{{ramo.n}} · {{ramo.nome}}</code> e a caixa <code>R{{ramo.n}}</code> do fluxograma se repetem para cada ramo informado na criação. Ficam sincronizadas: criar, renomear ou excluir de um lado reflete no outro ao salvar.</p>`
@@ -2169,6 +2619,7 @@ const TemplatesPage = (() => {
       try { current = (await api("POST", `api/templates/${t.key}/ramos`, { rev: t.rev })).template; toast("Ramos adicionados ao documento e ao fluxograma do template"); route(); }
       catch (x) { toast(x.message, "err"); }
     };
+    { const form = $("#tgForm", el); track(form, () => JSON.stringify([...new FormData(form)])); }
     $("#tgForm", el).onsubmit = async e => {
       e.preventDefault(); const f = new FormData(e.target);
       try { current = (await api("PUT", `api/templates/${t.key}/meta`, { name: f.get("name"), description: f.get("description"), owner: f.get("owner"), nist: f.get("nist"), rev: t.rev })).template;
@@ -2186,10 +2637,11 @@ const TemplatesPage = (() => {
           <label>Owner padrão<input class="in" name="owner" value="${esc(t.owner || "")}"></label>
           ${t.kind === "runbook" ? `<label class="chk-inline"><input type="checkbox" id="tgFlow" ${t.hasFlow ? "checked" : ""}> Incluir fluxograma modelo (runbooks criados com ele já começam com um fluxograma)</label>` : ""}
           <div class="err" id="tgErr" hidden></div>
-          <div class="create-actions"><a class="btn ghost" href="api/templates/${esc(t.key)}/export" download>${ic("download")}Exportar template</a><button class="btn primary" type="submit">Salvar</button></div></form>
+          <div class="create-actions">${DIRTY}<a class="btn ghost" href="api/templates/${esc(t.key)}/export" download>${ic("download")}Exportar template</a><button class="btn primary" type="submit">Salvar</button></div></form>
         <div class="meta" style="margin-top:14px"><span class="chip">${t.sections.length} seções</span><span class="chip">${(t.fields || []).length} campos</span><span class="chip">${(t.folders || []).length} pastas</span></div></div>
       <div class="ecard"><div class="ecard-h"><b>Variáveis disponíveis</b></div>
         <table class="vars"><tbody>${varsDoc.filter(([k]) => k !== "campo.<chave>").concat(fv).map(([k, d]) => `<tr><td><code>{{${esc(k)}}}</code></td><td>${esc(d)}</td></tr>`).join("")}</tbody></table></div></div>`;
+    { const form = $("#tgForm", el); track(form, () => JSON.stringify([...new FormData(form)])); }
     $("#tgForm", el).onsubmit = async e => {
       e.preventDefault(); const f = new FormData(e.target);
       try { current = (await api("PUT", `api/templates/${t.key}/meta`, { name: f.get("name"), description: f.get("description"), owner: f.get("owner"), rev: t.rev })).template; toast("Template salvo"); route(); }
@@ -2211,14 +2663,14 @@ const TemplatesPage = (() => {
     const used = new Set(t.flow.lanes.map(l => l.team).filter(Boolean).concat(t.flow.nodes.map(n => n.team).filter(Boolean)));
     const other = Object.keys(TEAMS).filter(n => !(n in own)).sort();
     const card = n => { const d = own[n], cat = d.category === "central" ? "central" : "apoio";
-      return `<div class="team-card" style="border-left-color:${esc(d.color)}"><h4><span class="chip team" style="background:${esc(d.color)}">${esc(n)}</span><span class="cat ${cat}">${cat}</span></h4>
+      return `<div class="team-card"><h4><span class="chip team" style="background:${esc(d.color)}">${esc(n)}</span>${cat === "central" ? `<span class="cat central">raia</span>` : ""}</h4>
         <p>${esc(d.summary || "Sem descrição.")}</p>
-        <div class="row"><button class="btn ghost xs" data-edit="${esc(n)}">${ic("edit")}Editar</button>
-          ${used.has(n) ? `<span class="muted small" title="Aparece no fluxograma modelo (raia ou caixa de apoio)">em uso no fluxograma</span>` : `<button class="btn ghost xs" data-rm="${esc(n)}">Tirar do template</button>`}</div></div>`; };
+        <div class="row"><button class="btn ghost xs" data-edit="${esc(n)}" aria-label="Editar ${esc(n)}">${ic("edit")}Editar</button>
+          ${used.has(n) ? `<span class="muted small" title="Aparece no fluxograma modelo (raia ou caixa de apoio); para tirar do template, tire antes do fluxograma">em uso no fluxograma</span>` : `<button class="btn ghost xs" data-rm="${esc(n)}" aria-label="Tirar ${esc(n)} do template">Tirar do template</button>`}</div></div>`; };
     const names = Object.keys(own);
-    el.innerHTML = `<div class="ecard"><div class="ecard-h"><b>Times e tags do template</b></div>
+    el.innerHTML = `<div class="ecard"><div class="ecard-h"><h2>Times e tags do template</h2></div>
       <p class="muted small" style="margin-top:0">Times <b>centrais</b> podem virar raias; <b>apoio e tags</b> aparecem como caixas de apoio e como tags clicáveis nos textos. Valem para este template e para os playbooks criados com ele, e vão junto quando o template é exportado. Um time em uso (no fluxograma do template ou em playbooks dele) não pode ser retirado.</p>
-      ${[["central", "Times centrais (raias)"], ["apoio", "Apoio e tags"]].map(([c, h]) => `<div class="sect-title">${h}</div>
+      ${[["central", "Times centrais (raias)"], ["apoio", "Apoio e tags"]].map(([c, h]) => `<h3 class="sect-title">${h}</h3>
         <div class="teams-grid">${names.filter(n => (own[n].category === "central") === (c === "central")).map(card).join("") || `<div class="empty">Nenhum.</div>`}</div>`).join("")}
       <div class="tt-add"><button class="btn primary sm" id="ttNew">${ic("plus")}Novo time ou tag</button>
         ${other.length ? `<select class="in" id="ttCopy"><option value="">Copiar de outro template…</option>${other.map(n => `<option>${esc(n)}</option>`).join("")}</select>` : ""}</div>
@@ -2238,22 +2690,24 @@ const TemplatesPage = (() => {
     try {
       if (!vars.length) { const d = await api("GET", "api/templates"); vars = d.variables; varsDoc = d.variablesDoc || []; }
       current = (await api("GET", `api/templates/${key}`)).template;
-    } catch (e) { root.innerHTML = `<div class="wrap"><div class="err">${esc(e.message)}</div></div>`; return; }
+    } catch (e) { return loadError(root, e); }
     const t = current, kind = t.kind || "playbook";
     /* abas por tipo: campos e pastas só em runbook e documento; fluxograma e times onde há fluxograma */
     const subs = [["geral", "Geral"], ["documento", "Documento modelo", "edit"]]
       .concat(kind !== "playbook" ? [["campos", "Campos"], ["pastas", "Pastas"]] : [])
       .concat(t.hasFlow ? [["fluxograma", "Fluxograma modelo", "edit"], ["times", "Times e tags"]] : []);
     sub = subs.some(x => x[0] === sub) ? sub : "geral";
-    root.innerHTML = `<div class="pbbar"><div class="wrap"><div class="pbhead tplhead"><a class="pbid" href="#/templates" title="Voltar à lista">${ic("templates")}</a><h1>${esc(t.name)}</h1><span class="tag">${esc(KIND_LBL[kind])}</span><small class="muted">${esc(upd(t))}</small></div>
-      <nav class="tabs">${subs.map(([k, l, i]) =>
-        `<a href="#/templates/${esc(key)}/${k}" class="${k === sub ? "on" : ""}">${i ? ic(i) : ""}${l}</a>`).join("")}</nav></div></div><div class="wrap" id="tplview"></div>`;
-    const tv = $("#tplview");
+    openName = t.name; document.title = `${t.name} · Templates`; Tabs.render();
+    root.innerHTML = `<div class="pbbar"><div class="wrap"><nav class="crumbs" aria-label="Caminho"><a href="#/templates">${ic("left")}Templates</a></nav>
+      <div class="pbhead tplhead"><h1>${esc(t.name)}</h1><span class="tag">${esc(KIND_LBL[kind])}</span><small class="muted">${esc(upd(t))}</small></div>
+      <nav class="tabs" aria-label="Partes do template">${subs.map(([k, l, i]) =>
+        `<a href="#/templates/${esc(key)}/${k}" class="${k === sub ? "on" : ""}"${k === sub ? ` aria-current="page"` : ""}>${i ? ic(i) : ""}${l}</a>`).join("")}</nav></div></div><div class="wrap" id="tplview"></div>`;
+    const tv = $("#tplview"), onTab = $(".tabs a.on", root); if (onTab) onTab.scrollIntoView({ block: "nearest", inline: "nearest" });
     if (sub === "documento") return Editor.docEditor(tv, t, adapter);
     if (sub === "fluxograma") { document.body.classList.add("editing"); return Editor.flowEditor(tv, t, adapter); }
     ({ times: teams, campos: fieldsTab, pastas: foldersTab })[sub] ? ({ times: teams, campos: fieldsTab, pastas: foldersTab })[sub](tv, t) : general(tv, t);
   }
-  return { render: (root, key, sub) => key ? detail(root, key, sub) : list(root) };
+  return { render: (root, key, sub) => key ? detail(root, key, sub) : list(root), tabTitle: () => openName ? `${openName} · Templates` : "Templates" };
 })();
 
 /* ───────── versões (histórico, leitura, comparação, restauração) ───────── */

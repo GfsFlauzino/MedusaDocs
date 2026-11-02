@@ -15,7 +15,9 @@ SHA256_PREFIX = bytes.fromhex("3031300d060960864801650304020105000420")   # Dige
 
 
 class SSOError(ValueError):
-    pass
+    """code: categoria enviada ao navegador em /?sso_error= (o texto detalhado fica só na auditoria)."""
+    def __init__(self, msg, code="tecnico"):
+        super().__init__(msg); self.code = code
 
 
 def b64url_dec(s):

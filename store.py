@@ -496,11 +496,15 @@ class Store:
             return max(0, r["locked_until"] - time.time()) if r else 0
 
     def register_fail(self, key):
+        """Conta a falha e devolve quantas tentativas restam antes do bloqueio (0 = acabou de bloquear)."""
         with self._tx() as c:
             c.execute("""INSERT INTO login_attempts (key, fails, updated) VALUES (?, 1, ?)
                          ON CONFLICT(key) DO UPDATE SET fails = fails + 1, updated = excluded.updated""", (key, time.time()))
-            if c.execute("SELECT fails FROM login_attempts WHERE key = ?", (key,)).fetchone()[0] >= self.max_fails:
+            fails = c.execute("SELECT fails FROM login_attempts WHERE key = ?", (key,)).fetchone()[0]
+            if fails >= self.max_fails:
                 c.execute("UPDATE login_attempts SET fails = 0, locked_until = ? WHERE key = ?", (time.time() + self.lock_seconds, key))
+                return 0
+            return self.max_fails - fails
 
     def clear_fails(self, key):
         with self._db() as c:
@@ -576,6 +580,11 @@ class Store:
     def count_audit(self):
         with self._db() as c:
             return c.execute("SELECT COUNT(*) FROM audit").fetchone()[0]
+
+    def count_audit_older(self, days):
+        cutoff = datetime.fromtimestamp(time.time() - days * 86400).isoformat(timespec="seconds")
+        with self._db() as c:
+            return c.execute("SELECT COUNT(*) FROM audit WHERE ts < ?", (cutoff,)).fetchone()[0]
 
     # ── pastas
     def folders(self, dtype):
@@ -750,12 +759,31 @@ class Store:
             if audit: c.execute("DELETE FROM audit")
         self._forget_sessions()
 
-    def read_audit(self, limit=500, q=""):
-        sql, args = "SELECT * FROM audit", []
-        if q:
-            sql += " WHERE user LIKE ? OR action LIKE ? OR target LIKE ? OR detail LIKE ?"
-            args = [f"%{q}%"] * 4
-        sql += " ORDER BY id DESC LIMIT ?"
+    @staticmethod
+    def _audit_where(q="", days=0, user="", actions=()):
+        """Filtros da tela de auditoria: texto (em quem, ação, alvo e detalhes, inclusive IP), período, usuário e ações."""
+        w, args = [], []
+        if q: w.append("(user LIKE ? OR action LIKE ? OR target LIKE ? OR detail LIKE ?)"); args += [f"%{q}%"] * 4
+        if days: w.append("ts >= ?"); args.append(datetime.fromtimestamp(time.time() - days * 86400).isoformat(timespec="seconds"))
+        if user: w.append("user = ?"); args.append(user)
+        if actions: w.append(f"action IN ({','.join('?' * len(actions))})"); args += list(actions)
+        return (" WHERE " + " AND ".join(w)) if w else "", args
+
+    def count_audit_filtered(self, **f):
+        where, args = self._audit_where(**f)
+        with self._db() as c:
+            return c.execute("SELECT COUNT(*) FROM audit" + where, args).fetchone()[0]
+
+    def audit_filtered(self, **f):
+        where, args = self._audit_where(**f)
+        with self._db() as c:
+            for r in c.execute("SELECT * FROM audit" + where + " ORDER BY id", args):
+                d = dict(r); d["detail"] = json.loads(d["detail"] or "{}")
+                yield d
+
+    def read_audit(self, limit=500, q="", days=0, user="", actions=()):
+        where, args = self._audit_where(q, days, user, actions)
+        sql = "SELECT * FROM audit" + where + " ORDER BY id DESC LIMIT ?"
         with self._db() as c:
             out = []
             for r in c.execute(sql, (*args, int(limit))).fetchall():

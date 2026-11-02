@@ -51,15 +51,15 @@ exibida uma única vez, e precisa trocá-la no primeiro acesso.
 ## Interface
 
 - **Abas:** cada playbook ou página aberta vira uma aba, como num navegador (o X ou o botão do meio fecha; o + abre o início). Ficam salvas no navegador de cada usuário.
-- **Menu lateral:** logo e nome do workspace, busca, Playbooks, Templates e Administração; perfil e tema claro/escuro no rodapé. O botão do menu (ou a tecla `[`) recolhe e expande; a escolha fica salva no navegador. Em telas estreitas vira gaveta (`Esc` fecha).
+- **Menu lateral:** logo e nome do workspace, busca (acha também páginas da aplicação), Playbooks, Runbooks e Documentos; abaixo, Templates, Administração e Ajuda; perfil e tema claro/escuro no rodapé. O botão do menu (ou a tecla `[`) recolhe para uma coluna de ícones e expande; a escolha fica salva no navegador. Em telas estreitas vira gaveta (`Esc` fecha).
 - **Busca** (atalho `/`): feita no servidor, sem acento; acha playbooks, passos, ramos, seções e times. `↑` `↓` e `Enter` navegam.
 - **Menu do perfil** (rodapé da barra lateral): **Ajuda** da plataforma (uso, edição, ramos, templates, administração, operação, filtrada pelo papel; conteúdo em `docs.js`; rota `#/ajuda`, o antigo `#/docs` redireciona), Trocar senha e Sair.
 - **Playbook:** duas visualizações, **Fluxograma** e **Documentação** (fases, passos e ramos ficam na documentação, com índice por seção e subseção), além de **Versões** e dos editores.
 - **Rascunhos:** sair de uma aba de edição sem salvar não perde nada; a aba ganha um ponto e as alterações voltam ao reabrir. Fechar a aba pede confirmação.
 - **Ícones** do [Iconoir](https://iconoir.com) (MIT), embutidos em `icons.js`.
 - **Página inicial** em **cartões**, **lista grande** ou **lista pequena** (escolha salva por usuário).
-- **Aparência** (só administrador): nome do workspace e logo. O visual é fixo e minimalista (fonte Inter, embutida), com tema claro e escuro por usuário. As cores do fluxograma não mudam: fazem parte do modelo dos playbooks.
-- **Resetar aplicação** (só administrador, botão no topo da Administração): volta ao estado de recém-instalada, com confirmação digitando `RESETAR`. Opcionalmente restaura configurações, remove os demais usuários e apaga a auditoria. Tudo vai para `data/lixeira/reset__<data-hora>/`, com cópia do banco e um `LEIA-ME.txt` de como voltar.
+- **Aparência** (só administrador): nome do workspace, contato para acesso e logo. O visual é fixo e minimalista (fonte Inter, embutida), com tema claro e escuro por usuário. As cores do fluxograma não mudam: fazem parte do modelo dos playbooks.
+- **Resetar aplicação** (só administrador, em Administração → Governança → Zona de perigo): volta ao estado de recém-instalada, com confirmação digitando `RESETAR`. Opcionalmente restaura configurações, remove os demais usuários e apaga a auditoria. Tudo vai para `data/lixeira/reset__<data-hora>/`, com cópia do banco e um `LEIA-ME.txt` de como voltar.
 
 ## Documentos
 
@@ -125,7 +125,7 @@ como `viewer`), para que a versão anterior ainda abra o banco num rollback.
 - Playbook novo ou importado começa em Desenvolvimento.
 - Produção exige um **aprovador**: usuário ativo cujo papel pode aprovar e que seja **outra pessoa**, diferente de quem
   está publicando e de quem gravou a última versão de conteúdo (comparação pelo login). A regra é ligada por padrão e
-  fica em **Administração → Aparência → Governança** (quem tem `app.reset` ou `users.manage` pode desligar).
+  fica em **Administração → Governança** (quem tem `app.reset` ou `users.manage` pode desligar).
   Playbooks que já estavam em Produção não mudam; edições Minor/Major em Produção continuam sem nova aprovação.
 - **Último revisor** e **Data de revisão** são preenchidos a cada gravação. Os quatro campos ficam na tabela
   "Propriedades do playbook" do `.md` e aparecem bloqueados (cadeado) no editor.
@@ -188,7 +188,7 @@ informe emissor, client ID, client secret e a URL pública, e ative.
 - **Usuários:** criados no primeiro login ou só pré-cadastrados; domínios de e-mail permitidos; contas locais não são vinculadas automaticamente (convertidas pelo administrador em Usuários).
 - **Login por senha** continua para todos ou só para administradores (acesso de emergência).
 
-## Templates, times e tags
+## Templates (com times e tags)
 
 Barra lateral → **Templates** (editor e admin). O template define o que um playbook recebe:
 

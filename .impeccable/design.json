@@ -1,0 +1,709 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-02T10:02:07-03:00",
+  "title": "Design System: Medusa Docs",
+  "extensions": {
+    "colorMeta": {
+      "signal-blue": {
+        "role": "primary",
+        "displayName": "Azul Sinal",
+        "canonical": "#3B5BDB",
+        "oklch": "oklch(52.6% 0.199 268.0)",
+        "tonalRamp": [
+          "#020230",
+          "#0E1A5F",
+          "#213691",
+          "#3653C7",
+          "#5477EF",
+          "#7C9FFF",
+          "#A7C6FF",
+          "#D4EDFF"
+        ]
+      },
+      "signal-blue-deep": {
+        "role": "primary",
+        "displayName": "Azul Sinal Profundo",
+        "canonical": "#2F4AC0",
+        "oklch": "oklch(46.5% 0.187 268.2)",
+        "tonalRamp": [
+          "#02032E",
+          "#0F1C5B",
+          "#23388D",
+          "#3955C1",
+          "#5779E8",
+          "#7FA0FF",
+          "#A9C6FF",
+          "#D6EDFF"
+        ]
+      },
+      "signal-blue-ink": {
+        "role": "primary",
+        "displayName": "Azul Sinal (texto)",
+        "canonical": "#3451C9",
+        "oklch": "oklch(48.9% 0.189 268.1)",
+        "tonalRamp": [
+          "#02032E",
+          "#0F1C5C",
+          "#22378D",
+          "#3855C2",
+          "#5679E9",
+          "#7EA0FF",
+          "#A9C6FF",
+          "#D6EDFF"
+        ]
+      },
+      "signal-blue-soft": {
+        "role": "primary",
+        "displayName": "Azul Sinal Suave",
+        "canonical": "#EEF2FF",
+        "oklch": "oklch(96.2% 0.018 272.3)",
+        "tonalRamp": [
+          "#0A0B0F",
+          "#23252B",
+          "#3F424A",
+          "#5E616B",
+          "#7F828D",
+          "#A2A5AE",
+          "#C6C9D0",
+          "#ECEEF4"
+        ]
+      },
+      "signal-blue-dark-theme": {
+        "role": "primary",
+        "displayName": "Azul Sinal (tema escuro)",
+        "canonical": "#7C93FF",
+        "oklch": "oklch(69.4% 0.160 272.5)",
+        "tonalRamp": [
+          "#040529",
+          "#171D53",
+          "#2E3982",
+          "#4757B4",
+          "#6579DA",
+          "#8B9FF2",
+          "#B3C6FF",
+          "#DDECFF"
+        ]
+      },
+      "signal-blue-ink-dark-theme": {
+        "role": "primary",
+        "displayName": "Azul Sinal texto (tema escuro)",
+        "canonical": "#9DB0FF",
+        "oklch": "oklch(77.3% 0.115 273.1)",
+        "tonalRamp": [
+          "#050821",
+          "#1A2147",
+          "#333D70",
+          "#4E5B9D",
+          "#6E7DC2",
+          "#93A2DD",
+          "#BAC7F8",
+          "#E2EDFF"
+        ]
+      },
+      "signal-blue-soft-dark-theme": {
+        "role": "primary",
+        "displayName": "Azul Sinal Suave (tema escuro)",
+        "canonical": "#1B2140",
+        "oklch": "oklch(26.0% 0.059 273.4)",
+        "tonalRamp": [
+          "#080A16",
+          "#1F2437",
+          "#3A405A",
+          "#575F80",
+          "#7881A3",
+          "#9CA4C2",
+          "#C1C8E1",
+          "#E8EEFF"
+        ]
+      },
+      "graphite": {
+        "role": "neutral",
+        "displayName": "Grafite",
+        "canonical": "#18181B",
+        "oklch": "oklch(21.0% 0.006 285.9)",
+        "tonalRamp": [
+          "#0B0B0C",
+          "#252527",
+          "#424244",
+          "#616164",
+          "#828285",
+          "#A5A5A8",
+          "#C9C9CB",
+          "#EEEEF0"
+        ]
+      },
+      "graphite-hover": {
+        "role": "neutral",
+        "displayName": "Grafite (hover)",
+        "canonical": "#2E2E33",
+        "oklch": "oklch(30.3% 0.009 285.9)",
+        "tonalRamp": [
+          "#0B0B0D",
+          "#252528",
+          "#414146",
+          "#616166",
+          "#828287",
+          "#A4A4A9",
+          "#C9C9CD",
+          "#EEEEF1"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Papel",
+        "canonical": "#FFFFFF",
+        "oklch": "oklch(100.0% 0.000 89.9)",
+        "tonalRamp": [
+          "#0B0B0B",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#A5A5A5",
+          "#C9C9C9",
+          "#EEEEEE"
+        ]
+      },
+      "sidebar-mist": {
+        "role": "neutral",
+        "displayName": "Névoa da Lateral",
+        "canonical": "#F7F7F8",
+        "oklch": "oklch(97.6% 0.001 286.4)",
+        "tonalRamp": [
+          "#0B0B0B",
+          "#252525",
+          "#424242",
+          "#616162",
+          "#828283",
+          "#A5A5A5",
+          "#C9C9C9",
+          "#EEEEEF"
+        ]
+      },
+      "surface-sunk": {
+        "role": "neutral",
+        "displayName": "Superfície Rebaixada",
+        "canonical": "#F4F4F5",
+        "oklch": "oklch(96.7% 0.001 286.4)",
+        "tonalRamp": [
+          "#0B0B0B",
+          "#252525",
+          "#424242",
+          "#616162",
+          "#828283",
+          "#A5A5A5",
+          "#C9C9C9",
+          "#EEEEEF"
+        ]
+      },
+      "hover-wash": {
+        "role": "neutral",
+        "displayName": "Lavagem de Hover",
+        "canonical": "#F0F0F2",
+        "oklch": "oklch(95.6% 0.003 286.3)",
+        "tonalRamp": [
+          "#0B0B0C",
+          "#252526",
+          "#424243",
+          "#616162",
+          "#828284",
+          "#A5A5A6",
+          "#C9C9CA",
+          "#EEEEEF"
+        ]
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "Linha Fina",
+        "canonical": "#E8E8EB",
+        "oklch": "oklch(93.2% 0.004 286.3)",
+        "tonalRamp": [
+          "#0B0B0C",
+          "#252526",
+          "#424244",
+          "#616163",
+          "#828284",
+          "#A5A5A7",
+          "#C9C9CB",
+          "#EEEEF0"
+        ]
+      },
+      "hairline-strong": {
+        "role": "neutral",
+        "displayName": "Linha Firme",
+        "canonical": "#DCDCE0",
+        "oklch": "oklch(89.6% 0.005 286.3)",
+        "tonalRamp": [
+          "#0B0B0C",
+          "#252527",
+          "#424244",
+          "#616164",
+          "#828285",
+          "#A5A5A7",
+          "#C9C9CB",
+          "#EEEEF0"
+        ]
+      },
+      "text-muted": {
+        "role": "neutral",
+        "displayName": "Texto Apagado",
+        "canonical": "#71717A",
+        "oklch": "oklch(55.2% 0.014 285.9)",
+        "tonalRamp": [
+          "#0B0B0E",
+          "#252429",
+          "#414148",
+          "#606068",
+          "#81818A",
+          "#A4A4AC",
+          "#C8C8CE",
+          "#EEEEF3"
+        ]
+      },
+      "text-faint": {
+        "role": "neutral",
+        "displayName": "Texto Discreto",
+        "canonical": "#A1A1AA",
+        "oklch": "oklch(71.2% 0.013 286.1)",
+        "tonalRamp": [
+          "#0B0B0E",
+          "#252529",
+          "#414147",
+          "#606068",
+          "#818189",
+          "#A4A4AB",
+          "#C8C8CE",
+          "#EEEEF2"
+        ]
+      },
+      "night": {
+        "role": "neutral",
+        "displayName": "Noite",
+        "canonical": "#0F0F11",
+        "oklch": "oklch(16.9% 0.004 286.0)",
+        "tonalRamp": [
+          "#0B0B0C",
+          "#252526",
+          "#424244",
+          "#616163",
+          "#828284",
+          "#A5A5A7",
+          "#C9C9CB",
+          "#EEEEF0"
+        ]
+      },
+      "night-sidebar": {
+        "role": "neutral",
+        "displayName": "Noite da Lateral",
+        "canonical": "#131316",
+        "oklch": "oklch(18.8% 0.006 285.8)",
+        "tonalRamp": [
+          "#0B0B0C",
+          "#252527",
+          "#424244",
+          "#616164",
+          "#828286",
+          "#A5A5A8",
+          "#C9C9CB",
+          "#EEEEF0"
+        ]
+      },
+      "night-surface": {
+        "role": "neutral",
+        "displayName": "Noite Superfície",
+        "canonical": "#161619",
+        "oklch": "oklch(20.2% 0.006 285.9)",
+        "tonalRamp": [
+          "#0B0B0C",
+          "#252527",
+          "#424244",
+          "#616164",
+          "#828285",
+          "#A5A5A8",
+          "#C9C9CB",
+          "#EEEEF0"
+        ]
+      },
+      "night-surface-sunk": {
+        "role": "neutral",
+        "displayName": "Noite Rebaixada",
+        "canonical": "#1E1E22",
+        "oklch": "oklch(23.7% 0.008 285.8)",
+        "tonalRamp": [
+          "#0B0B0D",
+          "#252527",
+          "#424245",
+          "#616165",
+          "#828286",
+          "#A4A4A9",
+          "#C9C9CC",
+          "#EEEEF1"
+        ]
+      },
+      "night-hairline": {
+        "role": "neutral",
+        "displayName": "Noite Linha",
+        "canonical": "#27272C",
+        "oklch": "oklch(27.5% 0.009 285.8)",
+        "tonalRamp": [
+          "#0B0B0D",
+          "#252528",
+          "#414146",
+          "#616166",
+          "#828287",
+          "#A4A4A9",
+          "#C9C9CD",
+          "#EEEEF1"
+        ]
+      },
+      "night-text": {
+        "role": "neutral",
+        "displayName": "Noite Texto",
+        "canonical": "#EDEDEF",
+        "oklch": "oklch(94.7% 0.003 286.3)",
+        "tonalRamp": [
+          "#0B0B0C",
+          "#252526",
+          "#424243",
+          "#616162",
+          "#828284",
+          "#A5A5A6",
+          "#C9C9CA",
+          "#EEEEEF"
+        ]
+      },
+      "night-muted": {
+        "role": "neutral",
+        "displayName": "Noite Texto Apagado",
+        "canonical": "#9B9BA4",
+        "oklch": "oklch(69.2% 0.013 286.1)",
+        "tonalRamp": [
+          "#0B0B0E",
+          "#252529",
+          "#414147",
+          "#606068",
+          "#818189",
+          "#A4A4AB",
+          "#C8C8CE",
+          "#EEEEF2"
+        ]
+      },
+      "status-review": {
+        "role": "tertiary",
+        "displayName": "Âmbar de Homologação",
+        "canonical": "#B45309",
+        "oklch": "oklch(55.5% 0.146 49.0)",
+        "tonalRamp": [
+          "#1F0100",
+          "#451200",
+          "#6E2A00",
+          "#9B4400",
+          "#C1662F",
+          "#DE8F64",
+          "#F9B896",
+          "#FFE2C8"
+        ]
+      },
+      "status-review-base": {
+        "role": "tertiary",
+        "displayName": "Âmbar de Homologação (base)",
+        "canonical": "#F59E0B",
+        "oklch": "oklch(76.9% 0.165 70.1)",
+        "tonalRamp": [
+          "#1D0200",
+          "#421700",
+          "#6A3000",
+          "#954C00",
+          "#BA6E00",
+          "#D79642",
+          "#F3BE7F",
+          "#FFE7B8"
+        ]
+      },
+      "status-production": {
+        "role": "tertiary",
+        "displayName": "Verde de Produção",
+        "canonical": "#15803D",
+        "oklch": "oklch(52.7% 0.137 150.1)",
+        "tonalRamp": [
+          "#001100",
+          "#002F0C",
+          "#005121",
+          "#157438",
+          "#409758",
+          "#73B882",
+          "#A2D9AD",
+          "#D2FBD9"
+        ]
+      },
+      "status-production-base": {
+        "role": "tertiary",
+        "displayName": "Verde de Produção (base)",
+        "canonical": "#22C55E",
+        "oklch": "oklch(72.3% 0.192 149.6)",
+        "tonalRamp": [
+          "#001300",
+          "#003300",
+          "#005507",
+          "#007A1C",
+          "#009E41",
+          "#57BE71",
+          "#90DFA0",
+          "#C6FFCF"
+        ]
+      },
+      "danger": {
+        "role": "tertiary",
+        "displayName": "Perigo",
+        "canonical": "#DC2626",
+        "oklch": "oklch(57.7% 0.215 27.3)",
+        "tonalRamp": [
+          "#280000",
+          "#540000",
+          "#840000",
+          "#B70612",
+          "#E04039",
+          "#FB766A",
+          "#FFA79A",
+          "#FFD6CB"
+        ]
+      },
+      "danger-soft": {
+        "role": "tertiary",
+        "displayName": "Perigo Suave",
+        "canonical": "#FEF2F2",
+        "oklch": "oklch(97.1% 0.013 17.4)",
+        "tonalRamp": [
+          "#0E0A0A",
+          "#292424",
+          "#474040",
+          "#685F5F",
+          "#898080",
+          "#ABA3A3",
+          "#CEC7C7",
+          "#F2EDED"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Título do documento aberto na documentação."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Título de página e do cabeçalho do playbook."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Títulos de cartão, seção do documento e modal."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Texto corrido e interface."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Rótulos de campo, metadados e IDs."
+      },
+      "overline": {
+        "displayName": "Overline",
+        "purpose": "Títulos de grupo em maiúsculas."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Código inline e blocos de código."
+      }
+    },
+    "shadows": [
+      {
+        "name": "outline",
+        "value": "0 1px 2px rgba(15,15,20,.05)",
+        "purpose": "Hover de cartões, item ativo do menu e de controles segmentados."
+      },
+      {
+        "name": "float",
+        "value": "0 12px 32px rgba(15,15,20,.10), 0 2px 6px rgba(15,15,20,.04)",
+        "purpose": "Busca, modais, menus e avisos rápidos."
+      },
+      {
+        "name": "float-dark",
+        "value": "0 12px 32px rgba(0,0,0,.55), 0 2px 6px rgba(0,0,0,.3)",
+        "purpose": "Flutuante no tema escuro."
+      },
+      {
+        "name": "focus-ring",
+        "value": "0 0 0 3px color-mix(in srgb, #3B5BDB 16%, transparent)",
+        "purpose": "Foco de campos e busca, com borda em Azul Sinal."
+      }
+    ],
+    "motion": [
+      {
+        "name": "hover",
+        "value": "0.12s",
+        "purpose": "Fundo, borda e cor de botões, cartões, campos."
+      },
+      {
+        "name": "sidebar",
+        "value": "0.18s ease",
+        "purpose": "Recolher e expandir o menu lateral; desligado com prefers-reduced-motion."
+      },
+      {
+        "name": "modal-fade",
+        "value": "0.15s",
+        "purpose": "Entrada do véu dos modais."
+      },
+      {
+        "name": "toast",
+        "value": "0.4s",
+        "purpose": "Entrada e saída dos avisos rápidos."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "drawer",
+        "value": "900px"
+      },
+      {
+        "name": "single-column",
+        "value": "1000px"
+      },
+      {
+        "name": "wide-collapse",
+        "value": "1180px"
+      },
+      {
+        "name": "list-compact",
+        "value": "760px"
+      },
+      {
+        "name": "list-minimal",
+        "value": "560px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Botão primário",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "A ação principal da tela, em Grafite; uma por contexto.",
+      "html": "<button class=\"ds-btn-primary\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"><path d=\"M12 5v14M5 12h14\"/></svg>Novo playbook</button>",
+      "css": ".ds-btn-primary{display:inline-flex;align-items:center;gap:7px;border-radius:var(--radius-sm,7px);padding:7px 14px;font:500 13.5px/1.2 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;border:1px solid transparent;cursor:pointer;transition:background .12s,border-color .12s,color .12s;white-space:nowrap;background:var(--primary,#18181B);color:var(--on-primary,#FFFFFF);border-color:var(--primary,#18181B)} .ds-btn-primary:hover{background:var(--primary-hover,#2E2E33);border-color:var(--primary-hover,#2E2E33)} .ds-btn-primary:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--brand,#3B5BDB) 18%,transparent);}"
+    },
+    {
+      "name": "Botão fantasma",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Ação secundária padrão: Papel com linha firme.",
+      "html": "<button class=\"ds-btn-ghost\">Exportar</button>",
+      "css": ".ds-btn-ghost{display:inline-flex;align-items:center;gap:7px;border-radius:var(--radius-sm,7px);padding:7px 14px;font:500 13.5px/1.2 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;border:1px solid transparent;cursor:pointer;transition:background .12s,border-color .12s,color .12s;white-space:nowrap;background:var(--surface,#FFFFFF);color:var(--text,#18181B);border-color:var(--line2,#DCDCE0)} .ds-btn-ghost:hover{background:var(--hover,#F0F0F2)} .ds-btn-ghost:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--brand,#3B5BDB) 18%,transparent);}"
+    },
+    {
+      "name": "Botão de perigo",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Só para ações destrutivas; enche de vermelho no hover.",
+      "html": "<button class=\"ds-btn-danger\">Excluir</button>",
+      "css": ".ds-btn-danger{display:inline-flex;align-items:center;gap:7px;border-radius:var(--radius-sm,7px);padding:7px 14px;font:500 13.5px/1.2 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;border:1px solid transparent;cursor:pointer;transition:background .12s,border-color .12s,color .12s;white-space:nowrap;background:var(--surface,#FFFFFF);color:var(--danger,#DC2626);border-color:color-mix(in srgb,var(--danger,#DC2626) 35%,var(--line,#E8E8EB))} .ds-btn-danger:hover{background:var(--danger,#DC2626);border-color:var(--danger,#DC2626);color:#fff} .ds-btn-danger:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--brand,#3B5BDB) 18%,transparent);}"
+    },
+    {
+      "name": "Campo",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Campo com rótulo acima; foco em Azul Sinal com anel de 3px.",
+      "html": "<label class=\"ds-label\">Nome do playbook<input class=\"ds-input\" value=\"Phishing de credenciais\"></label>",
+      "css": ".ds-label{display:block;font:500 12.5px Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:var(--muted,#71717A)} .ds-input{display:block;width:100%;margin-top:4px;padding:7px 10px;border:1px solid var(--line2,#DCDCE0);border-radius:var(--radius-sm,7px);background:var(--surface,#FFFFFF);color:var(--text,#18181B);font:400 13.5px Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;transition:border-color .12s,box-shadow .12s} .ds-input:hover{border-color:var(--faint,#A1A1AA)} .ds-input:focus{outline:none;border-color:var(--brand,#3B5BDB);box-shadow:0 0 0 3px color-mix(in srgb,var(--brand,#3B5BDB) 16%,transparent)}"
+    },
+    {
+      "name": "Busca",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Busca do menu lateral, com atalho / indicado.",
+      "html": "<div class=\"ds-search\"><span class=\"ds-search-ic\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\"><circle cx=\"11\" cy=\"11\" r=\"7\"/><path d=\"m20 20-3.5-3.5\"/></svg></span><input class=\"ds-search-in\" type=\"search\" placeholder=\"Buscar\"><kbd class=\"ds-kbd\">/</kbd></div>",
+      "css": ".ds-search{position:relative;display:flex;align-items:center;width:212px} .ds-search-ic{position:absolute;left:10px;display:flex;color:var(--faint,#A1A1AA)} .ds-search-in{width:100%;height:34px;padding:0 30px 0 32px;border:1px solid var(--line,#E8E8EB);border-radius:var(--radius-sm,7px);background:var(--surface,#FFFFFF);color:var(--text,#18181B);font:400 13.5px Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif} .ds-search-in:focus{outline:none;border-color:var(--brand,#3B5BDB);box-shadow:0 0 0 3px color-mix(in srgb,var(--brand,#3B5BDB) 18%,transparent)} .ds-search:focus-within .ds-kbd{display:none} .ds-kbd{position:absolute;right:8px;font:11px Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;border:1px solid var(--line2,#DCDCE0);border-radius:5px;padding:0 5px;color:var(--muted,#71717A);background:var(--surface,#FFFFFF)}"
+    },
+    {
+      "name": "Status do ciclo de vida",
+      "kind": "chip",
+      "refersTo": "status-production",
+      "description": "Ponto e texto em pílula tingida: Desenvolvimento, Homologação, Produção.",
+      "html": "<span class=\"ds-status ds-dev\">Desenvolvimento</span> <span class=\"ds-status ds-hml\">Homologação</span> <span class=\"ds-status ds-prd\">Produção</span>",
+      "css": ".ds-status{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:999px;font:500 12px Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;white-space:nowrap;border:1px solid transparent} .ds-status::before{content:'';width:7px;height:7px;border-radius:50%;background:currentColor} .ds-dev{background:var(--surface2,#F4F4F5);color:var(--muted,#71717A);border-color:var(--line,#E8E8EB)} .ds-dev::before{background:var(--faint,#A1A1AA)} .ds-hml{background:color-mix(in srgb,#F59E0B 10%,var(--surface,#FFFFFF));color:#B45309;border-color:color-mix(in srgb,#F59E0B 30%,var(--line,#E8E8EB))} .ds-prd{background:color-mix(in srgb,#22C55E 10%,var(--surface,#FFFFFF));color:#15803D;border-color:color-mix(in srgb,#22C55E 30%,var(--line,#E8E8EB))}"
+    },
+    {
+      "name": "Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Tag, time ou campo, em pílula rebaixada.",
+      "html": "<span class=\"ds-chip\">SOC N1</span> <button class=\"ds-chip ds-chip-btn\">EDR</button>",
+      "css": ".ds-chip{display:inline-flex;align-items:center;gap:5px;padding:1px 9px;border-radius:999px;font:500 12px Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:var(--surface2,#F4F4F5);border:1px solid var(--line,#E8E8EB);color:var(--text,#18181B)} .ds-chip-btn{cursor:pointer} .ds-chip-btn:hover{border-color:var(--line2,#DCDCE0)} .ds-chip-btn:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--brand,#3B5BDB) 18%,transparent);}"
+    },
+    {
+      "name": "Cartão de documento",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Cartão da biblioteca: plano, ganha linha firme e contorno no hover.",
+      "html": "<a class=\"ds-card\" href=\"#\"><div class=\"ds-card-top\"><span class=\"ds-id\">PB-01</span><span class=\"ds-status ds-prd\">Produção</span></div><h3>Phishing de credenciais</h3><p>Triagem, contenção e comunicação para e-mails de phishing com coleta de credenciais.</p></a>",
+      "css": ".ds-card{display:block;max-width:340px;text-decoration:none;color:var(--text,#18181B);background:var(--surface,#FFFFFF);border:1px solid var(--line,#E8E8EB);border-radius:var(--radius,10px);padding:16px 18px;font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;transition:border-color .12s,box-shadow .12s} .ds-card:hover{border-color:var(--line2,#DCDCE0);box-shadow:0 1px 2px rgba(15,15,20,.05)} .ds-card:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--brand,#3B5BDB) 18%,transparent);} .ds-card-top{display:flex;justify-content:space-between;align-items:center;gap:8px} .ds-id{font-weight:600;color:var(--muted,#71717A);font-size:12.5px;font-variant-numeric:tabular-nums} .ds-card h3{margin:6px 0 4px;font-size:16px;font-weight:600;letter-spacing:-.015em} .ds-card p{margin:0;color:var(--muted,#71717A);font-size:13px;line-height:1.55} .ds-status{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:500;border:1px solid transparent} .ds-status::before{content:'';width:7px;height:7px;border-radius:50%;background:currentColor} .ds-prd{background:color-mix(in srgb,#22C55E 10%,var(--surface,#FFFFFF));color:#15803D;border-color:color-mix(in srgb,#22C55E 30%,var(--line,#E8E8EB))}"
+    },
+    {
+      "name": "Item do menu lateral",
+      "kind": "nav",
+      "refersTo": "nav-item-active",
+      "description": "Navegação da lateral: o ativo levanta do plano em Papel com contorno.",
+      "html": "<nav class=\"ds-nav\"><a href=\"#\" class=\"ds-nav-a on\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 19V5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2Z\"/><path d=\"M19 19v2H6\"/></svg><span>Playbooks</span><small>12</small></a><a href=\"#\" class=\"ds-nav-a\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 19V5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2Z\"/><path d=\"M19 19v2H6\"/></svg><span>Runbooks</span><small>5</small></a></nav>",
+      "css": ".ds-nav{display:flex;flex-direction:column;gap:1px;width:212px;padding:8px;background:var(--side,#F7F7F8);font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif} .ds-nav-a{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:var(--radius-sm,7px);color:var(--muted,#71717A);text-decoration:none;font-weight:500;font-size:14px} .ds-nav-a span{flex:1} .ds-nav-a small{font-size:12px;color:var(--faint,#A1A1AA);font-variant-numeric:tabular-nums} .ds-nav-a:hover{background:var(--hover,#F0F0F2);color:var(--text,#18181B)} .ds-nav-a:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--brand,#3B5BDB) 18%,transparent);} .ds-nav-a.on{background:var(--surface,#FFFFFF);color:var(--text,#18181B);box-shadow:0 1px 2px rgba(15,15,20,.05),0 0 0 1px var(--line,#E8E8EB)}"
+    }
+  ],
+  "narrative": {
+    "northStar": "O Manual de Campo",
+    "overview": "O Medusa Docs é uma ferramenta de trabalho para quem responde a incidentes. Como um bom manual de campo, ele tem de ser legível sob pressão, sem enfeite, com tudo no lugar esperado, e esconder a profundidade até o momento em que ela é necessária. O analista abre o playbook certo, segue o fluxograma do seu time e chega ao passo em segundos; o mesmo material, fora do incidente, aguenta horas de leitura e revisão.\n\nO sistema é minimalista por função, não por moda: uma família tipográfica (Inter), uma paleta neutra levemente fria, um único acento (Azul Sinal) e ação principal monocromática em Grafite. Superfícies são planas e separadas por linhas finas; a sombra existe para o que flutua (menus, modais, avisos), não para o que está em repouso. A densidade é de aplicação: texto base de 14px, controles compactos, muitas informações por tela sem aperto. O produto é white label, então a moldura recua: nome e logo do workspace são do cliente, e nada no visual pode depender da marca padrão para parecer completo. As cores das raias, formas e setas do fluxograma pertencem ao modelo do playbook e ficam fora deste sistema.\n\nRejeitados explicitamente: painel \"hacker\" neon (fundo preto com verde ou ciano, estética de terminal), SaaS colorido (gradientes, ilustrações, vários acentos, cartões com sombra forte) e intranet corporativa antiga (tabelas densas, bordas pesadas, ícones datados).",
+    "keyCharacteristics": [
+      "Uma fonte, uma tinta, um acento: Inter, Grafite e Azul Sinal.",
+      "Plano com borda: linhas de 1px organizam; sombra só no que flutua ou responde ao hover.",
+      "Componentes firmes e diretos: a ação principal tem o maior contraste da tela e um alvo claro.",
+      "Status do ciclo de vida (Desenvolvimento, Homologação, Produção) é o único lugar com cor semântica constante.",
+      "Tema claro e escuro por usuário, com os mesmos papéis de cor nos dois."
+    ],
+    "rules": [
+      {
+        "name": "The One Signal Rule",
+        "body": "O Azul Sinal marca foco, seleção e o que é clicável; nunca vira fundo de botão primário, faixa decorativa ou ilustração. A ação principal é Grafite.",
+        "section": "colors"
+      },
+      {
+        "name": "The Earned Color Rule",
+        "body": "Fora do Azul Sinal, cor só aparece com significado: status do ciclo de vida, perigo ou as cores do fluxograma que vêm do modelo. Nenhuma cor nova sem um significado novo.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tabular ID Rule",
+        "body": "IDs (PB-01, RB-03, DOC-02), contagens e versões usam números tabulares, para que listas alinhem e o olho ache o documento pelo ID.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat-At-Rest Rule",
+        "body": "Nada tem sombra em repouso, exceto o que flutua. Se um cartão precisa se destacar, use a linha firme ou o conteúdo, não uma sombra.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do use Grafite (`graphite`) na ação principal de cada tela e só nela.",
+      "Do reserve o Azul Sinal para foco, seleção, links e escolha marcada.",
+      "Do separe superfícies com linhas de 1px (`hairline`, `hairline-strong`) e deixe a sombra para hover e para o que flutua.",
+      "Do mostre o status do ciclo de vida sempre com ponto e texto, nas três cores semânticas.",
+      "Do use números tabulares em IDs, contagens e versões.",
+      "Do desenhe cada tela nos dois temas, com os mesmos papéis de cor.",
+      "Do deixe a moldura funcionar com qualquer nome e logo de workspace, inclusive sem logo."
+    ],
+    "donts": [
+      "Don't pareça um painel \"hacker\" neon: nada de fundo preto com verde ou ciano, fontes de terminal na interface ou brilhos.",
+      "Don't pareça um SaaS colorido: sem gradientes, ilustrações, vários acentos ou cartões com sombra forte.",
+      "Don't pareça uma intranet corporativa antiga: sem bordas pesadas, tabelas apertadas ou ícones datados.",
+      "Don't introduza uma segunda família tipográfica além da mono para código.",
+      "Don't altere as cores das raias, formas e setas do fluxograma: elas pertencem ao modelo do playbook.",
+      "Don't use o Azul Sinal como fundo de botão primário ou como decoração."
+    ]
+  }
+}

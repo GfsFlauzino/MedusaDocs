@@ -1,5 +1,5 @@
 "use strict";
-/* Ajuda da plataforma (menu do perfil → Ajuda; rota #/ajuda, antes #/docs). Cada seção indica o perfil mínimo que a enxerga:
+/* Ajuda da plataforma (menu lateral → Ajuda; rota #/ajuda, antes #/docs). Cada seção indica o perfil mínimo que a enxerga:
    o visualizador lê o guia de leitura; editores veem edição, templates e ramos; administradores, tudo. */
 const Docs = (() => {
   const K = s => `<kbd>${s}</kbd>`;
@@ -9,7 +9,7 @@ const Docs = (() => {
       <ul><li><b>Fonte da verdade:</b> cada playbook é um par de arquivos <code>.md</code> + <code>.drawio</code> na pasta <code>playbooks/PB-xx-…/</code>, que podem ir para o Confluence, Git ou draw.io. A ferramenta lê e grava esses arquivos.</li>
         <li><b>Abas:</b> cada playbook ou página aberta vira uma aba no topo, como num navegador. ${K(ic("close"))} fecha; clique do meio também. As abas ficam guardadas no seu navegador. Se você sair de uma aba de edição sem salvar, nada se perde: a aba ganha um ponto e as alterações voltam quando você retorna a ela (só fechar a aba ou descartar apagam o rascunho).</li>
         <li><b>Busca:</b> ${K("/")} foca a busca; encontra playbooks, passos (T0, A3…), ramos, seções e times em todos os playbooks que você pode ver, sem precisar de acento. ${K("↑")} ${K("↓")} escolhem o resultado e ${K("Enter")} abre.</li>
-        <li><b>Menu lateral:</b> logo e nome do workspace, busca, <b>Playbooks</b>, <b>Templates</b> (editores) e <b>Administração</b> (administradores). O ${ic("menu")} no canto da barra de abas (ou a tecla ${K("[")}) recolhe e expande o menu; a escolha fica guardada no navegador. Em telas estreitas o menu vira uma gaveta: ${K("Esc")} ou o ${ic("close")} fecham.</li>
+        <li><b>Menu lateral:</b> logo e nome do workspace, busca, <b>Playbooks</b>, <b>Runbooks</b> e <b>Documentos</b>; abaixo, <b>Templates</b> (editores), <b>Administração</b> (administradores) e <b>Ajuda</b>. O ${ic("menu")} no canto da barra de abas (ou a tecla ${K("[")}) recolhe o menu para uma coluna de ícones e o expande de novo; a escolha fica guardada no navegador. A busca também acha páginas da aplicação (ex.: "logs", "usuários"). O primeiro ${K("Tab")} da página oferece "Pular para o conteúdo". Em telas estreitas o menu vira uma gaveta: ${K("Esc")} ou o ${ic("close")} fecham.</li>
         <li><b>Menu do perfil</b> (seu nome, no rodapé da barra lateral): documentação, troca de senha e sair.</li>
         <li><b>Tema:</b> o botão ${ic("sun")}/${ic("moon")}, ao lado do perfil, alterna claro e escuro (vale para você, neste navegador). As cores do fluxograma seguem o modelo e não mudam com o tema.</li>
         <li><b>Página inicial:</b> os botões ao lado de "Novo playbook" alternam a lista entre <b>cartões</b>, <b>lista grande</b> (com template, revisão, ramos e passos) e <b>lista pequena</b> (uma linha por playbook, boa para muitos playbooks). A escolha fica guardada no seu navegador.</li></ul>` },
@@ -94,7 +94,7 @@ const Docs = (() => {
       <p><b>Desenvolvimento → Homologação → Produção</b>, pelo botão <b>${ic("swap")}Alterar status</b> do playbook.</p>
       <ul><li>Playbook criado ou importado começa em Desenvolvimento (visível só para editores).</li>
         <li>Homologação: validação com o time; visualizadores já leem.</li>
-        <li>Produção exige um <b>aprovador</b>: usuário ativo cuja role pode aprovar e que seja <b>outra pessoa</b>, diferente de quem está publicando e de quem fez a última alteração do conteúdo. A lista do diálogo já mostra só quem vale, e diz quem ficou de fora. A regra fica em <b>Administração → Aparência → Governança</b> (ligada por padrão). Playbooks que já estavam em Produção não mudam.</li>
+        <li>Produção exige um <b>aprovador</b>: usuário ativo cuja role pode aprovar e que seja <b>outra pessoa</b>, diferente de quem está publicando e de quem fez a última alteração do conteúdo. A lista do diálogo já mostra só quem vale, e diz quem ficou de fora. A regra fica em <b>Administração → Governança</b> (ligada por padrão). Playbooks que já estavam em Produção não mudam.</li>
         <li><b>Último revisor</b> e <b>data de revisão</b> são preenchidos a cada gravação. Os quatro campos ficam na tabela "Propriedades do playbook" e aparecem bloqueados (${ic("lock")}) no editor.</li>
         <li>Editar algo em Produção mostra um aviso: a alteração fica visível para todos na hora. Ao salvar, escolha <b>Minor</b> (ajuste: 2.3 → 2.4) ou <b>Major</b> (mudança de operação: 2.3 → 3.0) e descreva o que mudou. Para revisões maiores, volte antes para Homologação.</li></ul>` },
     { id: "criar", role: "editor", title: "Criar playbook", html: `
@@ -152,7 +152,7 @@ const Docs = (() => {
         O que contém <code>{{ramo.n}}</code>, <code>{{ramo.nome}}</code> ou <code>{{ramo.pergunta}}</code> (subseção, linha de tabela, item, parágrafo ou caixa) é repetido por ramo.</p>
       <p>Excluir template é exclusivo do administrador (vai para a lixeira). Os playbooks criados com ele passam para o template Padrão, que recebe os times que eles usam.</p>` },
     { id: "times", role: "editor", title: "Times e tags", html: `
-      <p>Times e tags pertencem aos <b>templates</b>: cada template tem os seus, gerenciados na aba <b>Times e tags</b> do template (menu do perfil → Templates, times e tags).</p>
+      <p>Times e tags pertencem aos <b>templates</b>: cada template tem os seus, gerenciados na aba <b>Times e tags</b> do template (menu lateral → Templates → o template; o cartão mostra quantos times e tags ele tem e leva direto à aba).</p>
       <ul><li><i>Central</i> pode virar raia; <i>apoio/tag</i> vira caixa de apoio e tag clicável nos textos. Cada time tem cor, resumo, responsabilidades e o que não faz.</li>
         <li>Um playbook usa os times do template com que foi criado (ou importado). Em <b>${ic("edit")}Editar time</b> (ao clicar num time dentro do playbook), a alteração vale para o template e todos os playbooks dele.</li>
         <li>Template novo começa com SOC N1, SOC N2 e CSIRT. Dá para criar times, copiar de outro template ou tirar os que não usa.</li>
@@ -189,22 +189,22 @@ const Docs = (() => {
         <tr><td>HTTP / HTTPS</td><td>POST de um array JSON por lote (até 200 eventos), com cabeçalho de autenticação opcional (ex.: <code>Authorization: Bearer …</code>). Até 3 tentativas</td></tr>
         <tr><td>Syslog</td><td>RFC 5424 por UDP ou TCP, com o JSON na mensagem</td></tr>
         <tr><td>Arquivo JSON Lines</td><td><code>data/logs/audit-AAAA-MM-DD.jsonl</code>, para Filebeat, Fluent Bit e outros agentes</td></tr></tbody></table>
-      <p>O envio é em segundo plano e não atrasa a aplicação. Cada destino tem <b>Enviar evento de teste</b> e mostra enviados, falhas e o último erro. <b>Baixar auditoria</b> exporta o período em JSON Lines. Segredos (valor do cabeçalho) nunca voltam para a tela.</p>
+      <p>O envio é em segundo plano e não atrasa a aplicação. Cada destino tem <b>Enviar evento de teste</b> e mostra enviados, falhas e o último erro. <b>Baixar auditoria</b> exporta o período em JSON Lines. Em <b>Administração → Auditoria</b> dá para filtrar por período, tipo de ação, usuário e texto (inclusive IP e detalhes) e exportar só o recorte; os horários são do servidor, com segundos. Segredos (valor do cabeçalho) nunca voltam para a tela.</p>
       <p>Atrás de proxy reverso, defina <code>MEDUSA_TRUST_PROXY=1</code> para registrar o IP real do usuário (do cabeçalho <code>X-Forwarded-For</code>).</p>` },
     { id: "sso", role: "admin", title: "Login único (SSO)", html: `
       <p><b>${ic("settings")}Administração → SSO</b>, opcional, por <b>OpenID Connect</b> (Microsoft Entra ID, Okta, Keycloak, Google, Auth0, Authentik, ADFS…).</p>
       <ol><li>No provedor, crie um aplicativo web (cliente confidencial) com a <b>URL de redirecionamento</b> mostrada na tela: <code>https://SEU-ENDERECO/api/sso/callback</code>.</li>
-        <li>Na ferramenta, informe o <b>emissor</b> (issuer), clique em <b>Testar</b>, preencha client ID, client secret e a <b>URL pública</b>, e ative.</li>
+        <li>Na ferramenta, informe o <b>emissor</b> (issuer), clique em <b>Verificar emissor</b>, preencha client ID, client secret e a <b>URL pública</b>, e ligue o SSO no fim da página, junto do <b>Salvar SSO</b>: antes de salvar, a tela resume quem entra e como (role padrão, criação de contas, login por senha). Teste o login completo numa janela anônima.</li>
         <li>Opcional: indique a claim de grupos (<code>groups</code>, <code>roles</code>, <code>realm_access.roles</code>) e quais grupos viram cada role (inclusive os criados). Se o usuário estiver em grupos de mais de uma role, vale a de maior prioridade. A role é reaplicada a cada login.</li></ol>
       <ul><li><b>Usuário novo:</b> criado no primeiro login, ou só pré-cadastrados (Usuários → Autenticação: SSO, com o login igual ao enviado pelo provedor).</li>
         <li><b>Contas locais</b> não são vinculadas automaticamente a uma identidade do SSO (evita tomada de conta): converta em <b>Usuários</b>.</li>
         <li><b>Login por senha</b> pode continuar para todos ou ficar só para administradores (acesso de emergência).</li>
         <li><b>Segurança:</b> authorization code + PKCE, state amarrado ao navegador, nonce, e o ID token validado pela assinatura RS256 (chaves do provedor), emissor, audiência e validade. Falhas ficam na auditoria (<code>sso_falhou</code>).</li></ul>` },
     { id: "aparencia", role: "admin", title: "Aparência", html: `
-      <p><b>${ic("settings")}Administração → Aparência</b>: o <b>nome do workspace</b> (barra lateral, login e aba do navegador) e a <b>logo</b> (PNG, SVG sem script, JPG ou WEBP até 512 KB; prefira fundo transparente: a prévia mostra os temas claro e escuro). O restante do visual é fixo; cada usuário escolhe o tema claro ou escuro. As cores do fluxograma seguem o modelo dos playbooks.</p>` },
+      <p><b>${ic("settings")}Administração → Aparência</b>: o <b>nome do workspace</b> (barra lateral, login e aba do navegador), o <b>contato para acesso</b> (mostrado no login) e a <b>logo</b> (PNG, SVG sem script, JPG ou WEBP até 512 KB; prefira fundo transparente: a prévia mostra os temas claro e escuro). O restante do visual é fixo; cada usuário escolhe o tema claro ou escuro. As cores do fluxograma seguem o modelo dos playbooks.</p>` },
     { id: "reset", role: "admin", title: "Resetar a aplicação", html: `
-      <p><b>${ic("settings")}Administração → Resetar aplicação</b> (botão no topo da página) volta a instalação ao estado de recém-configurada: saem todos os playbooks, templates e o histórico de versões, e o template <b>Padrão</b> é recriado. Opcionalmente também:</p>
-      <ul><li><b>Configurações:</b> aparência, logs e SSO voltam ao padrão (indisponível para quem entrou pelo SSO, que seria desligado);</li>
+      <p><b>${ic("settings")}Administração → Governança → Zona de perigo → Resetar aplicação</b> volta a instalação ao estado de recém-configurada: saem todos os playbooks, runbooks, documentos, templates e o histórico de versões, e o template <b>Padrão</b> é recriado. Opcionalmente também:</p>
+      <ul><li><b>Configurações:</b> aparência, governança, logs e SSO voltam ao padrão (indisponível para quem entrou pelo SSO, que seria desligado);</li>
         <li><b>Usuários:</b> exclui todos os outros usuários; fica só quem fez o reset;</li>
         <li><b>Auditoria:</b> apaga os eventos e os arquivos de log (o próprio reset fica registrado).</li></ul>
       <p>A confirmação é igual à da exclusão de playbook: digite <b>RESETAR</b>. Nada é apagado de vez: playbooks, templates, vínculos, backups e uma <b>cópia do banco</b> vão para <code>data/lixeira/reset__&lt;data-hora&gt;/</code>, com um <code>LEIA-ME.txt</code> explicando como voltar (pare o servidor, copie os itens de volta, <code>playbooks.db</code> em <code>data/</code>, e inicie).</p>` },

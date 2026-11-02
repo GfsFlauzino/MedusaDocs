@@ -63,7 +63,7 @@ TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=u
          ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".ico": "image/x-icon", ".woff2": "font/woff2"}
 
 LOGO_BGS = ("white", "transparent")       # fundo atrás da logo no topo: branco (legível em qualquer cor) ou transparente
-DEFAULT_BRAND = {"name": "Medusa Docs", "color": "#3B5BDB", "logoBg": "white", "homeTitle": "Playbooks de resposta a incidentes",
+DEFAULT_BRAND = {"name": "Medusa Docs", "color": "#3B5BDB", "logoBg": "white", "contact": "", "homeTitle": "Playbooks de resposta a incidentes",
                  "homeSubtitle": "Base interativa dos playbooks do time de segurança. Escolha um playbook, navegue pelo fluxograma e clique "
                                  "em qualquer caixa, ramo (R1…), passo (T0, A3…) ou time para ler o trecho da documentação."}
 LOGO_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/svg+xml": ".svg", "image/webp": ".webp"}
@@ -526,16 +526,21 @@ def r_login(h, **_):
     login, pw = str(b.get("login", "")).strip().lower()[:80], str(b.get("password", ""))
     ip = h.client_ip(); key = f"{login}|{ip}"
     wait = db.locked_for(key)
-    if wait: raise HttpError(429, f"Muitas tentativas. Tente de novo em {int(wait // 60) + 1} min.")
+    if wait: raise HttpError(429, f"Acesso bloqueado por segurança após várias tentativas. Tente de novo em {int(wait // 60) + 1} min.")
     u = db.get_user(login)
     if not (check_password(pw, u["hash"] if u else DUMMY_HASH) and u and u["active"]):
-        db.register_fail(key)
+        left = db.register_fail(key)
         audit(login or "?", "login_falhou", ip=ip)
-        raise HttpError(401, "Usuário ou senha inválidos" + (". Contas do SSO entram pelo botão de SSO." if u and u.get("auth") == "sso" else ""))
+        msg = "Usuário ou senha incorretos." + (" Contas do SSO entram pelo botão de SSO." if u and u.get("auth") == "sso" else "")
+        lock_min = db.lock_seconds // 60
+        # o aviso vem antes do bloqueio, para quem está digitando sob pressão (Caps Lock, teclado trocado) não ser pego de surpresa
+        if not left: raise HttpError(429, f"{msg} Por segurança, o acesso foi bloqueado por {lock_min} min.")
+        if left <= 2: msg += f" Mais {left} tentativa{'s' if left > 1 else ''} errada{'s' if left > 1 else ''} e o acesso fica bloqueado por {lock_min} min."
+        raise HttpError(401, msg)
     cfg = sso_cfg()
     if cfg["enabled"] and cfg.get("local_login") == "admins" and u["role_id"] != "admin":
         audit(login, "login_falhou", ip=ip, motivo="login local restrito a administradores")
-        raise HttpError(403, "O login por senha está desativado: use o SSO")
+        raise HttpError(403, "O login por senha está desativado. Use o botão de SSO.")
     db.clear_fails(key)
     token = db.create_session(login, ip, h.headers.get("User-Agent"))
     audit(login, "login", ip=ip)
@@ -1509,10 +1514,11 @@ def r_brand_put(h, **_):
     title = " ".join(str(b.get("homeTitle") or cur["homeTitle"]).split())[:120] or DEFAULT_BRAND["homeTitle"]
     sub = " ".join(str(b.get("homeSubtitle", cur["homeSubtitle"]) or "").split())[:600]
     if b.get("homeReset"): title, sub = DEFAULT_BRAND["homeTitle"], DEFAULT_BRAND["homeSubtitle"]
+    contact = " ".join(str(b.get("contact", cur["contact"]) or "").split())[:120]   # mostrado no login: a quem recorrer quando não dá para entrar
     logo_bg = str(b.get("logoBg", cur["logoBg"]))
     if logo_bg not in LOGO_BGS: raise HttpError(400, "Fundo da logo inválido: use branco ou transparente")
-    open_db().set_setting("branding", {"name": name, "color": color, "logoBg": logo_bg, "homeTitle": title, "homeSubtitle": sub}, by=u["login"])
-    audit(u["login"], "marca_alterada", nome=name, cor=color, fundo_logo=logo_bg, titulo_inicio=title)
+    open_db().set_setting("branding", {"name": name, "color": color, "logoBg": logo_bg, "homeTitle": title, "homeSubtitle": sub, "contact": contact}, by=u["login"])
+    audit(u["login"], "marca_alterada", nome=name, cor=color, fundo_logo=logo_bg, titulo_inicio=title, contato=contact)
     r_brand_get(h)
 
 def r_logo_put(h, **_):
@@ -1774,7 +1780,7 @@ def r_users(h, **_):
     db = open_db()
     roles = db.list_roles()
     h.send_json({"users": [public_user(x) for x in db.list_users()], "roles": {r["key"]: r["name"] for r in roles},
-                 "roleList": [{"key": r["key"], "name": r["name"], "system": r["system"]} for r in roles]})
+                 "roleList": [{"key": r["key"], "name": r["name"], "system": r["system"], "priority": r["priority"]} for r in roles]})
 
 def r_user_create(h, **_):
     u = h.require("users.manage"); b = h.body()
@@ -2031,10 +2037,20 @@ def r_governance_put(h, **_):
     audit(u["login"], "governanca_alterada", aprovador_diferente="sim" if g["require_distinct_approver"] else "não")
     h.send_json({"governance": g})
 
+def audit_filters(q, default_days=0):
+    """Filtros da auditoria vindos da URL (tela e exportação): q, days (0 = todo o período), user e actions."""
+    try: days = max(0, min(3650, int(q.get("days", default_days) or 0)))
+    except ValueError: raise HttpError(400, "Período inválido")
+    actions = [a for a in str(q.get("actions", "")).split(",") if re.fullmatch(r"[a-z_]{1,40}", a)][:80]
+    return {"q": str(q.get("q", "")).strip()[:120], "days": days, "user": str(q.get("user", "")).strip().lower()[:80], "actions": actions}
+
 def r_audit(h, **_):
     h.require("audit.view")
     q = h.query()
-    h.send_json({"entries": open_db().read_audit(limit=min(int(q.get("limit", 500) or 500), 5000), q=q.get("q", ""))})
+    try: limit = max(1, min(int(q.get("limit", 500) or 500), 5000))
+    except ValueError: raise HttpError(400, "Limite inválido")
+    f, db = audit_filters(q), open_db()
+    h.send_json({"entries": db.read_audit(limit=limit, **f), "total": db.count_audit_filtered(**f), "limit": limit})
 
 # ───────────────────────── rotas: logs (encaminhamento e retenção) ─────────────────────────
 
@@ -2086,6 +2102,13 @@ def r_logs_put(h, **_):
     threading.Thread(target=lambda: (open_db().purge(c["retention_days"]), FWD.purge_files(c["retention_days"])), daemon=True).start()
     r_logs_get(h)
 
+def r_logs_retention_preview(h, **_):
+    """Quanto a retenção indicada apagaria agora (a tela confirma antes de reduzir a retenção)."""
+    h.require("logs.manage")
+    try: days = max(1, min(3650, int(h.query().get("days", ""))))
+    except ValueError: raise HttpError(400, "Informe os dias de retenção")
+    h.send_json({"days": days, "events": open_db().count_audit_older(days), "files": FWD.count_files_older(days)})
+
 def r_logs_test(h, **_):
     u = h.require("logs.manage"); b = h.body()
     dest = b.get("dest")
@@ -2101,14 +2124,15 @@ def r_logs_test(h, **_):
 def r_audit_export(h, **_):
     """Auditoria em JSON Lines (mesmo formato do encaminhamento), dos últimos N dias."""
     u = h.require("audit.view")
-    try: days = max(1, min(3650, int(h.query().get("days", 30))))
-    except ValueError: raise HttpError(400, "dias inválidos")
+    f = audit_filters(h.query(), default_days=30)
+    days = f["days"]
     name, lines = brand()["name"], []
-    for r in open_db().audit_since(days):
+    for r in open_db().audit_filtered(**f):
         d = r["detail"]; ip = d.pop("ip", None)
         lines.append(json.dumps(logfwd.make_event(datetime.fromisoformat(r["ts"]), r["user"], r["action"], r["target"], d, ip, name, APP_VERSION),
                                 ensure_ascii=False))
-    audit(u["login"], "auditoria_exportada", dias=days, eventos=len(lines))
+    audit(u["login"], "auditoria_exportada", dias=days or "todos", eventos=len(lines), **({"filtro": f["q"]} if f["q"] else {}),
+          **({"usuario": f["user"]} if f["user"] else {}), **({"acoes": len(f["actions"])} if f["actions"] else {}))
     h.send_bytes(("\n".join(lines) + "\n").encode("utf-8"), "application/x-ndjson; charset=utf-8", f"auditoria-{date.today().isoformat()}.jsonl")
 
 # ───────────────────────── rotas: SSO (OpenID Connect) ─────────────────────────
@@ -2177,12 +2201,12 @@ def _sso_cookie(h, value, max_age=600):
 
 def r_sso_login(h, **_):
     c = sso_cfg()
-    if not c["enabled"]: return h.send_redirect("/?sso_error=" + urllib.parse.quote("SSO desativado"))
+    if not c["enabled"]: return h.send_redirect("/?sso_error=desativado")
     try:
         url, state, nonce, verifier = sso.start(c)
     except sso.SSOError as e:
         audit("?", "sso_falhou", motivo=str(e))
-        return h.send_redirect("/?sso_error=" + urllib.parse.quote("Provedor de SSO indisponível"))
+        return h.send_redirect("/?sso_error=indisponivel")
     open_db().put_sso_state(state, nonce, verifier)
     h.send_redirect(url, [_sso_cookie(h, state)])
 
@@ -2195,30 +2219,30 @@ def sso_user(c, claims):
     login = re.sub(r"[^a-z0-9._@-]", "", raw)[:80]
     name = str(sso.claim(claims, c["name_claim"]) or raw or login).strip()[:80]
     domains = [d.strip().lstrip("@") for d in c["allowed_domains"].split(",") if d.strip()]
-    if domains and not any(email.endswith("@" + d) for d in domains): raise sso.SSOError(f"Domínio de e-mail não autorizado ({email or 'sem e-mail'})")
+    if domains and not any(email.endswith("@" + d) for d in domains): raise sso.SSOError(f"Domínio de e-mail não autorizado ({email or 'sem e-mail'})", "conta")
     roles = db.roles()
     mapped = sso.map_role(claims, c, roles) if c["role_claim"] else None
     if c["default_role"] and c["default_role"] not in roles: c["default_role"] = "viewer"
     has_rules = bool(c["role_claim"]) and any(str(v).strip() for v in c["role_map"].values())
     u = db.user_by_subject(subject)
     if not u:
-        if not LOGIN_RE.fullmatch(login or ""): raise sso.SSOError("O provedor não enviou um login válido (ajuste a claim de login)")
+        if not LOGIN_RE.fullmatch(login or ""): raise sso.SSOError("O provedor não enviou um login válido (ajuste a claim de login)", "conta")
         u = db.get_user(login)
         if u and u.get("auth") != "sso":
-            raise sso.SSOError(f"Já existe uma conta local \"{login}\". Peça a um administrador para convertê-la em conta SSO")
-        if u and u.get("sso_subject") and u["sso_subject"] != subject: raise sso.SSOError("Esta conta já está vinculada a outra identidade do provedor")
+            raise sso.SSOError(f"Já existe uma conta local \"{login}\". Peça a um administrador para convertê-la em conta SSO", "conta")
+        if u and u.get("sso_subject") and u["sso_subject"] != subject: raise sso.SSOError("Esta conta já está vinculada a outra identidade do provedor", "conta")
         if u:
             db.bind_subject(login, subject, name); u = db.get_user(login)
         else:
             role = mapped or (c["default_role"] if not has_rules or c["default_role"] else None)
-            if not c["auto_create"]: raise sso.SSOError("Usuário não cadastrado. Peça acesso a um administrador")
-            if not role: raise sso.SSOError("Seu usuário não pertence a nenhum grupo autorizado")
+            if not c["auto_create"]: raise sso.SSOError("Usuário não cadastrado. Peça acesso a um administrador", "conta")
+            if not role: raise sso.SSOError("Seu usuário não pertence a nenhum grupo autorizado", "conta")
             u = db.create_user(login, name, role, NO_PASSWORD, must_change=False, auth="sso", sso_subject=subject)
             audit("sistema", "usuario_criado", login, papel=role, autenticacao="sso")
-    if not u["active"]: raise sso.SSOError("Usuário desativado")
+    if not u["active"]: raise sso.SSOError("Usuário desativado", "inativo")
     if has_rules:
         role = mapped or c["default_role"]
-        if not role: raise sso.SSOError("Seu usuário não pertence a nenhum grupo autorizado")
+        if not role: raise sso.SSOError("Seu usuário não pertence a nenhum grupo autorizado", "conta")
         if role != u["role_id"]:
             try:
                 db.update_user(u["login"], role=role); audit("sistema", "usuario_alterado", u["login"], papel=role, origem="grupos do SSO")
@@ -2228,22 +2252,25 @@ def sso_user(c, claims):
 
 def r_sso_callback(h, **_):
     c, q = sso_cfg(), h.query()
-    fail = lambda msg, internal=None: (audit("?", "sso_falhou", motivo=internal or msg),
-                                       h.send_redirect("/?sso_error=" + urllib.parse.quote(msg), [_sso_cookie(h, "", 0)]))
-    if not c["enabled"]: return fail("SSO desativado")
-    if q.get("error"): return fail("O provedor recusou o login", f"{q.get('error')}: {q.get('error_description', '')[:200]}")
+    # o navegador recebe só um código (o texto mostrado é fixo, em app.js); o motivo detalhado vai para a auditoria
+    fail = lambda code, internal: (audit("?", "sso_falhou", motivo=internal),
+                                   h.send_redirect("/?sso_error=" + code, [_sso_cookie(h, "", 0)]))
+    if not c["enabled"]: return fail("desativado", "SSO desativado")
+    if q.get("error"): return fail("recusado", f"{q.get('error')}: {q.get('error_description', '')[:200]}")
     st = q.get("state", "")
     ck = SimpleCookie(h.headers.get("Cookie", ""))
-    if not st or "pbsso" not in ck or not hmac.compare_digest(ck["pbsso"].value, st): return fail("Sessão de login expirada; tente de novo", "state ausente ou diferente do cookie")
+    if not st or "pbsso" not in ck or not hmac.compare_digest(ck["pbsso"].value, st): return fail("expirado", "state ausente ou diferente do cookie")
     saved = open_db().pop_sso_state(st)
-    if not saved or not q.get("code"): return fail("Sessão de login expirada; tente de novo", "state desconhecido ou vencido")
+    if not saved or not q.get("code"): return fail("expirado", "state desconhecido ou vencido")
     try:
         tok, d = sso.exchange(c, q["code"], saved["verifier"])
         claims = sso.validate_id_token(tok["id_token"], d, c["client_id"], saved["nonce"])
         claims = {**sso.userinfo(d, tok.get("access_token"), claims["sub"]), **claims}
         u = sso_user(c, claims)
-    except (sso.SSOError, StoreError) as e:
-        return fail(str(e))
+    except sso.SSOError as e:
+        return fail(e.code, str(e))
+    except StoreError as e:
+        return fail("tecnico", str(e))
     db = open_db()
     token = db.create_session(u["login"], h.client_ip(), h.headers.get("User-Agent"))
     audit(u["login"], "login", metodo="sso")
@@ -2381,7 +2408,7 @@ ROUTES = {
     ("PUT", "/api/users/{u}"): r_user_update, ("DELETE", "/api/users/{u}"): r_user_delete,
     ("POST", "/api/users/{u}/reset"): r_user_reset, ("POST", "/api/users/{u}/logout"): r_user_logout,
     ("GET", "/api/audit"): r_audit, ("GET", "/api/audit/export"): r_audit_export,
-    ("GET", "/api/logs"): r_logs_get, ("PUT", "/api/logs"): r_logs_put, ("POST", "/api/logs/test"): r_logs_test,
+    ("GET", "/api/logs"): r_logs_get, ("PUT", "/api/logs"): r_logs_put, ("POST", "/api/logs/test"): r_logs_test, ("GET", "/api/logs/retention-preview"): r_logs_retention_preview,
     ("GET", "/api/sso/status"): r_sso_status, ("GET", "/api/sso/login"): r_sso_login, ("GET", "/api/sso/callback"): r_sso_callback,
     ("GET", "/api/sso/config"): r_sso_get, ("PUT", "/api/sso/config"): r_sso_put, ("POST", "/api/sso/test"): r_sso_test,
     ("GET", "/api/templates"): r_tpl_list, ("POST", "/api/templates"): r_tpl_create, ("POST", "/api/templates/import"): r_tpl_import,

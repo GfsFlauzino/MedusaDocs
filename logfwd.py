@@ -146,6 +146,11 @@ class Forwarder:
         except Exception as e:
             return {"ok": False, "message": f"{type(e).__name__}: {str(e)[:200]}"}
 
+    def count_files_older(self, days):
+        if not self.log_dir.exists(): return 0
+        cutoff = time.time() - days * 86400
+        return sum(1 for f in self.log_dir.glob("audit-*.jsonl") if f.stat().st_mtime < cutoff)
+
     def purge_files(self, days):
         if not self.log_dir.exists(): return 0
         cutoff, n = time.time() - days * 86400, 0
