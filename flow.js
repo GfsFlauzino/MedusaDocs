@@ -156,7 +156,11 @@ const Flow = (() => {
       const a = lay.abs[n.id], t = CAT.nodeTypes[n.type] || CAT.nodeTypes.action;
       const inset = t.shape === "rhombus" ? a.w * .2 : 0;
       const sel = (opts.sel && opts.sel.kind === "node" && opts.sel.id === n.id) || (opts.multi && opts.multi.has(n.id));
-      s += `<g class="node ${opts.nodeClass ? opts.nodeClass(n) : ""} ${sel ? "sel" : ""}" data-node="${escH(n.id)}" ${n.team ? `data-team="${escH(n.team)}"` : ""}>${shape(n, a)}`;
+      const nc = opts.nodeClass ? opts.nodeClass(n) : "";
+      /* leitura: caixa com vínculo é operável por teclado e anunciada pelo nome */
+      const kb = opts.nodeClass && !opts.editor && !/\bstatic\b/.test(nc);
+      const nm = (n.lines || []).map(l => l.t).join(" ").trim();
+      s += `<g class="node ${nc} ${sel ? "sel" : ""}" data-node="${escH(n.id)}" ${n.team ? `data-team="${escH(n.team)}"` : ""}${kb ? ` tabindex="0" role="button" aria-label="${escH(nm || n.id)}${opts.badges && opts.badges[n.id] ? `, passo ${escH(opts.badges[n.id])}` : ""}"` : ""}>${shape(n, a)}`;
       s += opts.plainText ? plainLabel(n, a, t, inset)
         : `<foreignObject x="${a.x + inset}" y="${a.y}" width="${Math.max(10, a.w - inset * 2)}" height="${a.h}"><div xmlns="http://www.w3.org/1999/xhtml" class="nodetxt" ${t.fc ? `style="color:${t.fc}"` : ""}><div>${labelHtml(n.lines)}</div></div></foreignObject>`;
       const b = opts.badges && opts.badges[n.id];

@@ -848,9 +848,11 @@ function renderPb(pb, tab, extra, rest) {
         ${canAny(`${T}.suggest`, `${T}.edit`) ? `<button class="btn ghost sm" id="sgBtn" title="Sugestões de alteração">${ic("edit")}Sugestões<span class="sg-n">${(PBS.find(p => p.id === pb.id) || {}).suggestions ? " " + PBS.find(p => p.id === pb.id).suggestions : ""}</span></button>` : ""}
         ${ti.folders && can(`${T}.edit`) ? `<button class="btn ghost sm" id="mvBtn">${ic("swap")}Mover</button>` : ""}
         ${can(`${T}.status`) ? `<button class="btn ghost sm" id="stBtn">${ic("swap")}Alterar status</button>` : ""}${can(`${T}.delete`) ? `<button class="btn danger sm" id="delBtn" title="Excluir">${ic("trash")}Excluir</button>` : ""}</div></div>
-    ${fieldChips(pb)}${govHtml(pb)}
+    ${fieldChips(pb)}${govHtml(pb)}<button type="button" class="gov-more" id="govMore" aria-expanded="false">Ver detalhes do documento</button>
     <nav class="tabs">${all.map(([k, l]) => `<a href="#/${pb.slug}/${k}" class="${k === tab ? "on" : ""} ${k.startsWith("editar") ? "edit" : ""}">${k.startsWith("editar") ? ic("edit") : ""}${l}${Editor.hasDraft(pb.id.toLowerCase() + (k === "editar" ? ":doc" : ":flow")) && k.startsWith("editar") ? `<i class="draft-dot" title="Alterações não salvas"></i>` : ""}</a>`).join("")}</nav></div></div>
     <div class="wrap" id="tabview"></div>`;
+  $("#govMore").onclick = e => { const g = $(".pbbar .gov"), on = g.classList.toggle("open"); e.currentTarget.setAttribute("aria-expanded", on); e.currentTarget.textContent = on ? "Ocultar detalhes" : "Ver detalhes do documento"; };
+  ctxBar(pb);
   if ($("#stBtn")) $("#stBtn").onclick = () => statusDialog(currentPb());
   $("#expBtn").onclick = e => { e.stopPropagation(); $("#expMenu").hidden = !$("#expMenu").hidden; };
   $("#expMenu").onclick = e => { const b = e.target.closest("[data-exp]"); $("#expMenu").hidden = true; if (b) Exporter[b.dataset.exp](currentPb()); };
@@ -870,6 +872,24 @@ function renderPb(pb, tab, extra, rest) {
   else { ({ fluxo: tabFlow, doc: tabDoc })[tab](pb, tv, extra); linkify(tv, pb); }
   const pend = [["editar", "Editar documento", ":doc"], ["editar-fluxo", "Editar fluxograma", ":flow"]].filter(([, , k]) => Editor.hasDraft(pb.id.toLowerCase() + k));
   if (pend.length) tv.insertAdjacentHTML("afterbegin", `<div class="notice draft-note">${ic("warn")}<span>Alterações não salvas em ${pend.map(([k, l]) => `<a href="#/${pb.slug}/${k}">${l}</a>`).join(" e ")}. Elas ficam guardadas enquanto a aba estiver aberta.</span></div>`);
+}
+
+/* faixa fina que aparece quando o título sai da tela: ID, nome e a seção em que o leitor está */
+let ctxObs = null, ctxSec = null;
+function ctxBar(pb) {
+  if (ctxObs) ctxObs.disconnect();
+  if (ctxSec) document.removeEventListener("medusa:section", ctxSec);
+  document.getElementById("ctxbar")?.remove();
+  const head = $(".pbbar .pbhead"); if (!head || !("IntersectionObserver" in window)) return;
+  const bar = document.createElement("div"); bar.id = "ctxbar"; bar.className = "ctxbar"; bar.hidden = true;
+  bar.innerHTML = `<span class="pbid">${esc(pb.id)}</span><b>${esc(pb.name)}</b><span class="ctx-sec muted"></span>`;
+  document.body.appendChild(bar);
+  const sec = bar.querySelector(".ctx-sec");
+  ctxSec = e => { sec.textContent = e.detail ? "· " + e.detail : ""; };
+  document.addEventListener("medusa:section", ctxSec);
+  ctxObs = new IntersectionObserver(([en]) => { bar.hidden = en.isIntersecting || !document.contains(head); }, { rootMargin: "-56px 0px 0px 0px" });
+  ctxObs.observe(head);
+  window.addEventListener("hashchange", () => bar.remove(), { once: true });
 }
 
 /* campos do template (runbook e documento) como chips abaixo do título */
@@ -1026,31 +1046,109 @@ function tabFlow(pb, el) {
     const zb = e.target.closest("[data-z]"); if (!zb) return; const z = zb.dataset.z;
     if (z === "0") fit(); else { zoom = Math.max(.4, Math.min(2.5, zoom * (z === "1" ? 1.2 : 1 / 1.2))); apply(); }
   };
-  svgEl.addEventListener("click", e => {
-    const node = e.target.closest(".node");
-    if (!node || node.classList.contains("static")) return;
+  const openNode = node => {
     svgEl.querySelectorAll(".node.sel").forEach(n => n.classList.remove("sel"));
     node.classList.add("sel");
     if (node.dataset.team) return showTeam(pb, node.dataset.team);
     const n = pb.flow.nodes.find(x => x.id === node.dataset.node);
-    const label = (n.lines || []).map(l => l.t).join(" ");
-    showRefs(pb, pb.refs[n.id], esc(label), false);
+    showRefs(pb, pb.refs[n.id], esc((n.lines || []).map(l => l.t).join(" ")), false);
+  };
+  svgEl.addEventListener("click", e => {
+    const node = e.target.closest(".node");
+    if (!node || node.classList.contains("static")) return;
+    openNode(node);
   });
+  /* teclado: Enter/Espaço abre o trecho; setas vão à caixa mais próxima naquela direção */
+  svgEl.addEventListener("keydown", e => {
+    const node = e.target.closest && e.target.closest(".node[tabindex]"); if (!node) return;
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); return openNode(node); }
+    const dir = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowDown: [0, 1], ArrowUp: [0, -1] }[e.key]; if (!dir) return;
+    const c = r => [r.left + r.width / 2, r.top + r.height / 2], me = c(node.getBoundingClientRect());
+    let best = null, bd = Infinity;
+    for (const o of svgEl.querySelectorAll(".node[tabindex]")) {
+      if (o === node) continue;
+      const q = c(o.getBoundingClientRect()), dx = q[0] - me[0], dy = q[1] - me[1], along = dx * dir[0] + dy * dir[1];
+      if (along <= 4) continue;
+      const d = along + Math.abs(dir[0] ? dy : dx) * 2; if (d < bd) { bd = d; best = o; }
+    }
+    if (best) { e.preventDefault(); best.focus(); best.scrollIntoView({ block: "nearest", inline: "nearest" }); }
+  });
+  flowList(pb, el, openNode, svgEl);
+}
+/* o mesmo fluxo como lista por raia: alternativa para leitor de tela, teclado e telas estreitas */
+function flowList(pb, el, openNode, svgEl) {
+  const live = n => (pb.refs[n.id] || []).length || n.team;
+  const lanes = (pb.flow.lanes || []).map(l => ({ l, ns: pb.flow.nodes.filter(n => n.lane === l.key && live(n)) })).filter(x => x.ns.length);
+  if (!lanes.length) return;
+  const bd = badgesFor(pb);
+  const d = document.createElement("details"); d.className = "flowlist";
+  d.open = window.matchMedia("(max-width:640px)").matches;
+  d.innerHTML = `<summary>Ver o fluxo como lista, por time</summary>${lanes.map(({ l, ns }) => `<section class="fl-lane"><h3>${esc(l.label || l.key)}</h3><ul>${ns.map(n => `<li><button type="button" class="fl-node" data-n="${esc(n.id)}">${bd[n.id] ? `<b class="fl-b">${esc(bd[n.id])}</b>` : ""}<span>${esc((n.lines || []).map(x => x.t).join(" ") || n.id)}</span></button></li>`).join("")}</ul></section>`).join("")}`;
+  d.onclick = e => { const b = e.target.closest("[data-n]"); if (!b) return; const node = svgEl.querySelector(`.node[data-node="${CSS.escape(b.dataset.n)}"]`); if (node) openNode(node); };
+  el.appendChild(d);
 }
 
 /* ── documento completo ── */
+/* leitura: linhas e tabelas sem nenhum texto não viram ruído; a seção sem nada vira uma linha discreta */
+function pruneEmpty(root) {
+  root.querySelectorAll("tbody tr").forEach(tr => { if (![...tr.cells].some(c => c.textContent.trim() || c.querySelector("img,.codeblock"))) tr.remove(); });
+  root.querySelectorAll("table").forEach(t => { if (!t.querySelector("tbody tr")) t.remove(); });
+  root.querySelectorAll("section.md:not(.intro):not(.props)").forEach(sec => {
+    if ([...sec.children].some(c => !/^H[23]$/.test(c.tagName) && (c.textContent.trim() || c.querySelector("img,.codeblock")))) return;
+    sec.classList.add("blank");
+    sec.insertAdjacentHTML("beforeend", `<p class="muted small blank-note">Ainda sem conteúdo.</p>`);
+  });
+}
+/* "marcar como feito": só neste navegador e nesta sessão, para quem executa o procedimento */
+function stepChecks(pb, root) {
+  const key = `done:${pb.id}`; let done = new Set();
+  try { done = new Set(JSON.parse(sessionStorage.getItem(key) || "[]")); } catch {}
+  root.querySelectorAll(".doc tbody tr").forEach(tr => {
+    const c = tr.cells[0]; const id = c && c.textContent.trim().split(/\s/)[0];
+    if (!id || !/^[A-Z]{1,2}\d{1,2}$/.test(id) || c.querySelector(".stepdone")) return;
+    const b = document.createElement("button"); b.type = "button"; b.className = "stepdone";
+    const sync = () => { const on = done.has(id); b.setAttribute("aria-pressed", on); b.setAttribute("aria-label", `Marcar ${id} como feito`); b.title = on ? "Feito (desmarcar)" : "Marcar como feito"; tr.classList.toggle("is-done", on); };
+    b.onclick = () => { done.has(id) ? done.delete(id) : done.add(id); try { sessionStorage.setItem(key, JSON.stringify([...done])); } catch {} sync(); };
+    c.prepend(b); sync();
+  });
+}
 function tabDoc(pb, el, focus) {
   const secs = pb.sections.filter(s => !/^Fluxograma/.test(s.title));
-  el.innerHTML = `<div class="docgrid"><nav class="toc">${secs.map(s => `<a href="#" data-go="${s.id}">${esc(s.title)}</a>
-      ${s.subs.length && s.subs.length <= 24 ? `<div class="toc-subs">${s.subs.map(x => `<a href="#" data-sub="${x.id}">${esc(x.title)}</a>`).join("")}</div>` : ""}`).join("")}</nav>
-    <div class="doc">${pb.intro ? `<section class="md intro">${pb.intro}</section>` : ""}${secs.map(s => `<section id="sec-${s.id}" class="md"><h2>${esc(s.title)}</h2>${s.html}${s.subs.map(x => `<h3 id="sub-${x.id}">${esc(x.title)}</h3>${x.html}`).join("")}</section>`).join("")}</div></div>`;
-  el.querySelector(".toc").onclick = e => {
+  const isProps = s => /^Propriedades/i.test(s.title);
+  const sec = s => isProps(s)
+    ? `<section id="sec-${s.id}" class="md props"><details><summary><h2>${esc(s.title)}</h2></summary>${s.html}${s.subs.map(x => `<h3 id="sub-${x.id}">${esc(x.title)}</h3>${x.html}`).join("")}</details></section>`
+    : `<section id="sec-${s.id}" class="md"><h2>${esc(s.title)}</h2>${s.html}${s.subs.map(x => `<h3 id="sub-${x.id}">${esc(x.title)}</h3>${x.html}`).join("")}</section>`;
+  const tail = (secs.concat([])).filter(isProps), main = secs.filter(s => !isProps(s));
+  el.innerHTML = `<div class="docgrid"><nav class="toc" aria-label="Neste documento">${main.concat(tail).map(s => `<a href="#" data-go="${s.id}">${esc(s.title)}</a>
+      ${s.subs.length && s.subs.length <= 24 && !isProps(s) ? `<div class="toc-subs">${s.subs.map(x => `<a href="#" data-sub="${x.id}">${esc(x.title)}</a>`).join("")}</div>` : ""}`).join("")}</nav>
+    <div class="doc">${pb.intro ? `<section class="md intro">${pb.intro}</section>` : ""}${main.concat(tail).map(sec).join("")}</div></div>`;
+  const toc = el.querySelector(".toc");
+  toc.onclick = e => {
     const a = e.target.closest("[data-go], [data-sub]"); if (!a) return;
-    e.preventDefault(); document.getElementById(a.dataset.go ? "sec-" + a.dataset.go : "sub-" + a.dataset.sub).scrollIntoView();
+    e.preventDefault();
+    const t = document.getElementById(a.dataset.go ? "sec-" + a.dataset.go : "sub-" + a.dataset.sub);
+    const d = t.querySelector("details"); if (d) d.open = true;
+    t.scrollIntoView();
   };
+  pruneEmpty(el.querySelector(".doc")); stepChecks(pb, el);
+  spyToc(el);
   if (focus) setTimeout(() => focusInDoc(el, pb, decodeURIComponent(focus)), 30);
   citations(pb, el.querySelector(".doc"));
   Suggest.bindDoc(pb, el);
+}
+/* destaca no índice a seção que está sob o topo da janela e informa o nome dela à faixa de contexto */
+function spyToc(el) {
+  const links = [...el.querySelectorAll(".toc a[data-go]")], secs = links.map(a => document.getElementById("sec-" + a.dataset.go)).filter(Boolean);
+  if (!secs.length) return;
+  let last = null;
+  const upd = () => {
+    if (!document.contains(el)) return window.removeEventListener("scroll", upd);
+    let cur = secs[0]; for (const sc of secs) if (sc.getBoundingClientRect().top <= 120) cur = sc;
+    if (cur === last) return; last = cur;
+    links.forEach(a => { const on = "sec-" + a.dataset.go === cur.id; a.classList.toggle("on", on); on ? a.setAttribute("aria-current", "location") : a.removeAttribute("aria-current"); });
+    const h = cur.querySelector("h2"); document.dispatchEvent(new CustomEvent("medusa:section", { detail: h ? h.textContent : "" }));
+  };
+  window.addEventListener("scroll", upd, { passive: true }); upd();
 }
 /* "Referenciado por" e "Cita": documentos ligados a este pelo ID no texto (só os que você pode ver) */
 async function citations(pb, box) {
@@ -2246,7 +2344,7 @@ document.addEventListener("click", e => { if (!e.target.closest(".search")) show
 $(".search").insertAdjacentHTML("beforeend", `<button type="button" class="search-rail" id="searchRail" title="Buscar ( / )" aria-label="Buscar">${ic("search")}</button>`);
 $("#searchRail").onclick = openSearch;
 /* "Pular para o conteúdo": primeiro item do Tab; leva o foco ao título da página sem mexer no endereço (#/…) */
-$("#skipLink").onclick = e => { e.preventDefault(); const t = $("#view h1") || $("#view"); t.setAttribute("tabindex", "-1"); t.focus(); };
+$("#skipLink").onclick = e => { e.preventDefault(); const t = $("#tabview") || $("#view h1") || $("#view"); t.setAttribute("tabindex", "-1"); t.focus(); };
 
 /* ───────── início ───────── */
 /* ───────── times e tags ───────── */
