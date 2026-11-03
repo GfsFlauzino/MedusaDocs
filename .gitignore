@@ -9,3 +9,6 @@ __pycache__/
 *.pyc
 .DS_Store
 .env
+
+# artefatos do impeccable (críticas, sessões live, design.json)
+.impeccable/
